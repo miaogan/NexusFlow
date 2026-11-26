@@ -82,7 +82,7 @@ export default function Layout() {
       <div className="flex flex-1 flex-col overflow-hidden">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-white/5 px-6">
           <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">
-            {user ? `${user.tenant_id} · ${user.username}` : me ? `${me.tenant_id} · ${me.user_id}` : "未连接"}
+            {user ? `${user.tenant_id} · ${user.username}` : me ? `${me.tenant_id} · ${me.username ?? me.user_id}` : "未连接"}
           </p>
           <div className="flex items-center gap-2">
             <span

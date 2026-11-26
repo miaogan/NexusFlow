@@ -35,6 +35,9 @@ type Config struct {
 	RedisAddr   string
 	MetricsAddr string
 
+	// IdentityDriver selects the user/role store: memory | redis.
+	IdentityDriver string
+
 	ObjectStoreDir  string
 	ObjectStoreBase string
 
@@ -90,9 +93,10 @@ func Load() Config {
 		RerankURL:       env("RERANK_URL", ""),
 		RerankModel:     env("RERANK_MODEL", "bge-reranker-v2-m3"),
 
-		StateDriver: env("STATE_DRIVER", "memory"),
-		RedisAddr:   env("REDIS_ADDR", "127.0.0.1:6379"),
-		MetricsAddr: env("METRICS_ADDR", ""),
+		StateDriver:    env("STATE_DRIVER", "memory"),
+		RedisAddr:      env("REDIS_ADDR", "127.0.0.1:6379"),
+		MetricsAddr:    env("METRICS_ADDR", ""),
+		IdentityDriver: env("IDENTITY_DRIVER", "memory"),
 
 		ObjectStoreDir:  env("OBJECT_STORE_DIR", "/tmp/nexusflow-objects"),
 		ObjectStoreBase: env("OBJECT_STORE_BASE", "http://127.0.0.1:9000/nexusflow"),

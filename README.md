@@ -190,7 +190,9 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 - **Auth Service（:9096）**：`Register` / `Login` / `Refresh` / `Logout` / `Validate`，负责密码校验与 JWT 签发。
 - **User Service（:9097）**：租户隔离的用户 CRUD，以及全局角色、权限点的管理。
 
-**令牌模型**：HS256 JWT，claims 携带 `tenant_id` / `user_id` / `roles` / `permissions` / `token_type`。access token 默认 15 分钟（`ACCESS_TOKEN_TTL`），refresh token 默认 168 小时（`REFRESH_TOKEN_TTL`）；`token_type` 区分用途，refresh token 不能当 access 用。权限点在登录时由角色展开并写入 token，网关据此零开销判定，无需每次回调鉴权服务。
+**令牌模型**：HS256 JWT，claims 携带 `tenant_id` / `user_id` / `roles` / `permissions` / `token_type`。access token 默认 15 分钟（`ACCESS_TOKEN_TTL`），refresh token 默认 168 小时（`REFRESH_TOKEN_TTL`）；`token_type` 区分用途，refresh token 不能当 access 用。权限点在登录时由角色展开并写入 token，网关据此零开销判定，无需每次回调鉴权服务。控制台在 access token 过期（401）时用 refresh token 自动换新并重试原请求，刷新失败则清理登录态并回到 `/login`。
+
+**存储**：`IDENTITY_DRIVER=memory`（默认，dev-all 单进程）或 `redis`（独立部署时 Auth / User 服务共享同一份用户与角色数据）。
 
 **权限模型**：固定权限点目录（`user:read`、`file:write`、`sandbox:execute`、`trace:read` 等 14 个 + 通配 `*`）→ 角色组合 → 用户绑定角色。内置三个角色：
 
@@ -264,5 +266,5 @@ make up / down     # 容器编排启停
 - LlamaIndex Service 的切块、索引与检索依赖 Qdrant 与 Embedding API Key；未配置时相关接口返回 503。
 - K8s HPA 使用自定义指标 `nexusflow_queue_length`，需部署 prometheus-adapter 将指标转换为 Custom Metrics API。
 - 设计文档中的 LightRAG、NL2SQL、长期记忆章节属于目标架构，当前代码骨架预留了对应扩展位，尚未实现端到端链路。（可观测性 / Langfuse 导出与 dev trace viewer 已实现，见上节。）
-- 用户与角色当前使用进程内存储（`identity.MemoryStore`）：dev-all 单进程内 Auth / User 共享同一实例；以独立进程部署 Auth / User 时二者内存不互通，需将 `identity.Store` 切换为 Redis / PostgreSQL 等共享后端。
+- 用户与角色支持两种存储：`memory`（dev-all 单进程默认）与 `redis`（`IDENTITY_DRIVER=redis`，供独立部署的 Auth / User 服务跨进程共享）。PostgreSQL 存储尚未实现，可扩展 `identity.Store` 接口接入。
 - 登出为无状态实现（不吊销已签发的 JWT），refresh token 到期自然失效；生产环境如需即时失效需引入令牌吊销名单。

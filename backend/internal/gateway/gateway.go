@@ -542,11 +542,20 @@ func (g *Gateway) executeSandbox(c *gin.Context) {
 }
 
 func (g *Gateway) me(c *gin.Context) {
-	_, p := g.callerContext(c)
-	c.JSON(http.StatusOK, gin.H{
+	ctx, p := g.callerContext(c)
+	resp := gin.H{
 		"tenant_id":   p.TenantID,
 		"user_id":     p.UserID,
 		"roles":       p.Roles,
 		"departments": p.Departments,
-	})
+	}
+	// Enrich with profile fields when the caller is a real (non-anonymous) user.
+	if g.users != nil && p.UserID != "" && p.UserID != "anonymous" {
+		if u, err := g.users.GetUser(ctx, &pb.GetUserRequest{Id: p.UserID}); err == nil && u.GetUser() != nil {
+			resp["username"] = u.User.Username
+			resp["email"] = u.User.Email
+			resp["status"] = u.User.Status
+		}
+	}
+	c.JSON(http.StatusOK, resp)
 }

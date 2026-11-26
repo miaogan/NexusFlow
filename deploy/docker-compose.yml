@@ -61,10 +61,37 @@ services:
       INGESTION_TARGET: "ingestion:9095"
       QUERY_TARGET: "query-service:9094"
       SANDBOX_TARGET: "sandbox-execution:9093"
+      AUTH_TARGET: "auth-service:9096"
+      USER_TARGET: "user-service:9097"
       METRICS_ADDR: ""
-    depends_on: [ingestion, query-service, sandbox-execution]
+    depends_on: [ingestion, query-service, sandbox-execution, auth-service, user-service]
     volumes: ["objects:/data/objects"]
     ports: ["8080:8080"]
+
+  auth-service:
+    build:
+      context: ../backend
+      args:
+        SERVICE: auth-service
+    environment:
+      <<: *app-env
+      AUTH_GRPC_ADDR: ":9096"
+      # Users/roles are shared with user-service through Redis.
+      IDENTITY_DRIVER: redis
+    depends_on: [redis]
+    ports: ["9096:9096"]
+
+  user-service:
+    build:
+      context: ../backend
+      args:
+        SERVICE: user-service
+    environment:
+      <<: *app-env
+      USER_GRPC_ADDR: ":9097"
+      IDENTITY_DRIVER: redis
+    depends_on: [redis]
+    ports: ["9097:9097"]
 
   ingestion:
     build:

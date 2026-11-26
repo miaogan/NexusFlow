@@ -22,7 +22,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	store := identity.NewMemoryStore()
+	store, err := identity.NewStore(cfg.IdentityDriver, cfg.RedisAddr)
+	if err != nil {
+		logger.Error("init identity store", "error", err)
+		os.Exit(1)
+	}
 	if err := store.Seed(identity.SeedOptions{
 		TenantID:      cfg.SeedTenantID,
 		AdminUsername: cfg.SeedAdminUsername,

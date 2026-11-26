@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
 .PHONY: proto build test test-go test-py vet fmt web-install web-dev web-build \
-	run-dev-all run-gateway run-workflow up down
+	run-dev-all run-gateway run-workflow run-auth-service run-user-service up down
 
 proto:
 	protoc -I proto \
@@ -43,6 +43,12 @@ run-gateway:
 
 run-workflow:
 	cd backend && go run ./cmd/workflow-engine
+
+run-auth-service:
+	cd backend && go run ./cmd/auth-service
+
+run-user-service:
+	cd backend && go run ./cmd/user-service
 
 up:
 	docker compose -f deploy/docker-compose.yml up --build

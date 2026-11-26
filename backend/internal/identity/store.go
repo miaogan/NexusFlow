@@ -14,6 +14,8 @@ import (
 // in-process implementation used by dev-all and tests; a shared backend
 // (Redis/PostgreSQL) can be swapped in for multi-process deployments.
 type Store interface {
+	Seed(opts SeedOptions) error
+
 	CreateUser(ctx context.Context, u User) (User, error)
 	GetUser(ctx context.Context, tenantID, id string) (User, bool, error)
 	GetUserByUsername(ctx context.Context, tenantID, username string) (User, bool, error)

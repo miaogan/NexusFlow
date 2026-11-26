@@ -114,9 +114,58 @@ async function parse<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
+// Endpoints that must not trigger a refresh/retry loop.
+const NO_REFRESH = ["/v1/auth/login", "/v1/auth/register", "/v1/auth/refresh"];
+
+let refreshing: Promise<boolean> | null = null;
+
+// tryRefresh exchanges the stored refresh token for a new pair. Concurrent
+// callers share one in-flight refresh. On failure it clears auth and redirects.
+async function tryRefresh(): Promise<boolean> {
+  const rt = getRefreshToken();
+  if (!rt) return false;
+  if (refreshing) return refreshing;
+
+  const p = (async () => {
+    try {
+      const res = await fetch(`${GATEWAY_BASE}/v1/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: rt }),
+      });
+      if (!res.ok) {
+        clearAuth();
+        if (!window.location.pathname.startsWith("/login")) window.location.assign("/login");
+        return false;
+      }
+      setAuth((await res.json()) as LoginResponse);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  refreshing = p;
+  try {
+    return await p;
+  } finally {
+    if (refreshing === p) refreshing = null;
+  }
+}
+
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers({ ...authHeaders(), ...(init.headers as Record<string, string>) });
-  const response = await fetch(url, { ...init, headers });
+  const send = () =>
+    fetch(url, {
+      ...init,
+      headers: new Headers({ ...authHeaders(), ...(init.headers as Record<string, string>) }),
+    });
+
+  let response = await send();
+  if (response.status === 401 && !NO_REFRESH.some((p) => url.includes(p))) {
+    if (await tryRefresh()) {
+      response = await send();
+    }
+  }
   return parse<T>(response);
 }
 

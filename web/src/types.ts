@@ -119,6 +119,9 @@ export interface MeInfo {
   user_id: string;
   roles: string[];
   departments?: string[];
+  username?: string;
+  email?: string;
+  status?: string;
 }
 
 // ---------- Observability / tracing ----------
