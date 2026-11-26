@@ -7,6 +7,7 @@ from app.graph import ChatGraph
 from app.services.chat import ChatService
 from app.services.intent import HttpIntentClassifier
 from app.services.llm import AnswerGenerator
+from app.services.memory import HttpMemoryClient
 from app.services.retrieval import GatewayRetriever
 from app.services.store import (
     ConversationStore,
@@ -55,6 +56,16 @@ def get_summarizer() -> HttpSummarizer:
 
 
 @lru_cache
+def get_memory_client() -> HttpMemoryClient:
+    settings = get_settings()
+    return HttpMemoryClient(
+        settings.memory_url,
+        settings.memory_timeout_seconds,
+        settings.memory_top_k,
+    )
+
+
+@lru_cache
 def get_service() -> ChatService:
     return ChatService(
         get_store(),
@@ -62,4 +73,5 @@ def get_service() -> ChatService:
         get_settings(),
         get_intent_classifier(),
         get_summarizer(),
+        get_memory_client(),
     )

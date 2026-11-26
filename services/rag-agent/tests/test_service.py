@@ -48,14 +48,16 @@ class FakeStreamGraph:
             for c in chunks
         ]
 
-    async def stream_answer(self, query, history, chunks, summary=""):
+    async def stream_answer(self, query, history, chunks, summary="", memories=None):
         for piece in ("hello ", "world"):
             yield piece
 
-    def generate_intent(self, intent, message, history, summary=""):
+    def generate_intent(self, intent, message, history, summary="", memories=None):
         return f"{intent} answer"
 
-    async def stream_intent_answer(self, intent, message, history, summary=""):
+    async def stream_intent_answer(
+        self, intent, message, history, summary="", memories=None
+    ):
         for piece in ("chat ", "reply"):
             yield piece
 
@@ -295,3 +297,52 @@ def test_chat_stream_compacts_history() -> None:
     detail = store.get("t1", "u1", conv_id)
     assert detail["summary"] == "流式摘要"
     assert detail["summary_count"] == 4
+
+
+class FakeMemory:
+    def __init__(self, recalled: list[str] | None = None) -> None:
+        self.recalled = list(recalled or [])
+        self.recall_calls: list[dict[str, Any]] = []
+        self.extract_calls: list[dict[str, Any]] = []
+
+    def recall(self, tenant_id, user_id, query, top_k=None):
+        self.recall_calls.append(
+            {"tenant": tenant_id, "user": user_id, "query": query, "top_k": top_k}
+        )
+        return self.recalled
+
+    def extract_async(self, tenant_id, user_id, messages):
+        self.extract_calls.append(
+            {"tenant": tenant_id, "user": user_id, "messages": messages}
+        )
+
+
+def test_chat_injects_memories_and_extracts_turn() -> None:
+    store = InMemoryConversationStore()
+    graph = FakeGraph()
+    memory = FakeMemory(["用户偏好简洁回答"])
+    service = ChatService(store, graph, Settings(_env_file=None), memory=memory)
+
+    service.chat(ChatRequest(message="怎么部署？"), "t1", "u1", None)
+
+    assert graph.calls[0]["memories"] == ["用户偏好简洁回答"]
+    assert memory.recall_calls[0]["tenant"] == "t1"
+    assert memory.recall_calls[0]["query"] == "怎么部署？"
+    assert len(memory.extract_calls) == 1
+    turn = memory.extract_calls[0]["messages"]
+    assert turn[0] == {"role": "user", "content": "怎么部署？"}
+    assert turn[1]["role"] == "assistant"
+
+
+def test_chat_stream_injects_memories_and_extracts_turn() -> None:
+    store = InMemoryConversationStore()
+    graph = FakeStreamGraph()
+    memory = FakeMemory(["用户在做后端开发"])
+    service = ChatService(store, graph, Settings(_env_file=None), memory=memory)
+
+    events = _collect_stream(service, ChatRequest(message="hi"), "t1", "u1")
+
+    assert events[-1]["type"] == "done"
+    assert memory.recall_calls[0]["query"] == "hi"
+    assert len(memory.extract_calls) == 1
+    assert memory.extract_calls[0]["messages"][0]["content"] == "hi"

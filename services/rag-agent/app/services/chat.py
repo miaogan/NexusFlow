@@ -15,6 +15,7 @@ from app.schemas import (
     MessageOut,
 )
 from app.services.intent import HttpIntentClassifier, IntentClassifier
+from app.services.memory import ConversationMemory, HttpMemoryClient
 from app.services.retrieval import RetrievalUnavailable
 from app.services.store import ConversationNotFound, ConversationStore
 from app.services.summary import ConversationSummarizer, HttpSummarizer
@@ -30,6 +31,7 @@ class ChatService:
         settings: Settings,
         intent: IntentClassifier | None = None,
         summarizer: ConversationSummarizer | None = None,
+        memory: ConversationMemory | None = None,
     ) -> None:
         self._store = store
         self._graph = graph
@@ -38,6 +40,8 @@ class ChatService:
         self._intent: IntentClassifier = intent or HttpIntentClassifier("")
         # Default summarizer is a no-op without a configured URL.
         self._summarizer: ConversationSummarizer = summarizer or HttpSummarizer("")
+        # Default memory client is a no-op without a configured URL.
+        self._memory: ConversationMemory = memory or HttpMemoryClient("")
 
     def _prepare_history(
         self, conv: dict[str, Any]
@@ -76,6 +80,19 @@ class ChatService:
         ]
         return history, summary
 
+    def _remember(
+        self, tenant_id: str, user_id: str, message: str, answer: str
+    ) -> None:
+        """Fires cross-session memory extraction without blocking the reply."""
+        self._memory.extract_async(
+            tenant_id,
+            user_id,
+            [
+                {"role": "user", "content": message},
+                {"role": "assistant", "content": answer},
+            ],
+        )
+
     def chat(
         self,
         req: ChatRequest,
@@ -92,6 +109,9 @@ class ChatService:
             conv = self._store.create(tenant_id, user_id, message[:40])
 
         history, summary = self._prepare_history(conv)
+        memories = self._memory.recall(
+            tenant_id, user_id, message, self._settings.memory_top_k
+        )
 
         # Persist the user turn before generation so a failed generation still
         # leaves the question visible for a retry.
@@ -108,6 +128,7 @@ class ChatService:
                 query=message,
                 history=history,
                 summary=summary,
+                memories=memories,
                 top_k=top_k,
                 kb_id=req.kb_id,
                 filters=req.filters,
@@ -118,12 +139,17 @@ class ChatService:
             trace_id = state.get("trace_id")
         else:
             answer = self._graph.generate_intent_answer(
-                str(intent.get("intent") or "clarify"), message, history, summary=summary
+                str(intent.get("intent") or "clarify"),
+                message,
+                history,
+                summary=summary,
+                memories=memories,
             )
             citations = []
             trace_id = None
 
         msg = self._store.append(conv["id"], "assistant", answer, citations)
+        self._remember(tenant_id, user_id, message, answer)
 
         return ChatResponse(
             conversation_id=conv["id"],
@@ -160,6 +186,13 @@ class ChatService:
             )
 
         history, summary = await run_in_threadpool(self._prepare_history, conv)
+        memories = await run_in_threadpool(
+            self._memory.recall,
+            tenant_id,
+            user_id,
+            message,
+            self._settings.memory_top_k,
+        )
         await run_in_threadpool(self._store.append, conv["id"], "user", message, [])
 
         top_k = req.top_k or self._settings.default_top_k
@@ -180,6 +213,7 @@ class ChatService:
                     message,
                     history,
                     summary=summary,
+                    memories=memories,
                 ):
                     intent_parts.append(piece)
                     yield {"type": "token", "content": piece}
@@ -191,6 +225,7 @@ class ChatService:
             msg = await run_in_threadpool(
                 self._store.append, conv["id"], "assistant", answer, []
             )
+            self._remember(tenant_id, user_id, message, answer)
             yield {
                 "type": "done",
                 "conversation_id": conv["id"],
@@ -231,7 +266,7 @@ class ChatService:
         parts: list[str] = []
         try:
             async for piece in self._graph.stream_answer(
-                message, history, chunks, summary=summary
+                message, history, chunks, summary=summary, memories=memories
             ):
                 parts.append(piece)
                 yield {"type": "token", "content": piece}
@@ -243,6 +278,7 @@ class ChatService:
         msg = await run_in_threadpool(
             self._store.append, conv["id"], "assistant", answer, citations
         )
+        self._remember(tenant_id, user_id, message, answer)
         yield {
             "type": "done",
             "conversation_id": conv["id"],

@@ -34,10 +34,12 @@ class FakeGenerator:
     def __init__(self) -> None:
         self.seen: tuple[str, list[dict[str, str]], list[dict[str, Any]]] | None = None
         self.summary = ""
+        self.memories: list[str] | None = None
 
-    def generate(self, query, history, chunks, summary=""):
+    def generate(self, query, history, chunks, summary="", memories=None):
         self.seen = (query, history, chunks)
         self.summary = summary
+        self.memories = memories
         return "Answer citing [1] and [2]."
 
 

@@ -37,7 +37,8 @@ services:
       retries: 5
 
   postgres:
-    image: postgres:16-alpine
+    # pgvector image so memory-agent can store embeddings (CREATE EXTENSION vector).
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: nexusflow
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexusflow}
@@ -217,6 +218,24 @@ services:
       SUMMARY_BUDGET_CHARS: ${SUMMARY_BUDGET_CHARS:-1200}
     ports: ["8003:8003"]
 
+  memory-agent:
+    build:
+      context: ../services/memory-agent
+    environment:
+      MEMORY_APP_ENV: prod
+      MEMORY_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
+      # Empty LLM key -> rule-based extraction; empty embedding key -> lexical recall.
+      MEMORY_LLM_BASE_URL: ${MEMORY_LLM_BASE_URL:-}
+      MEMORY_LLM_API_KEY: ${MEMORY_LLM_API_KEY:-}
+      MEMORY_LLM_MODEL: ${MEMORY_LLM_MODEL:-deepseek-chat}
+      MEMORY_EMBEDDING_BASE_URL: ${MEMORY_EMBEDDING_BASE_URL:-}
+      MEMORY_EMBEDDING_API_KEY: ${MEMORY_EMBEDDING_API_KEY:-}
+      MEMORY_EMBEDDING_MODEL: ${MEMORY_EMBEDDING_MODEL:-text-embedding-3-small}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports: ["8004:8004"]
+
   rag-agent:
     build:
       context: ../services/rag-agent
@@ -231,6 +250,8 @@ services:
       RAG_INTENT_URL: http://intent-agent:8002
       # Independent summary agent for context compaction; empty -> no compaction.
       RAG_SUMMARY_URL: http://summary-agent:8003
+      # Independent memory agent for long-term recall/extraction.
+      RAG_MEMORY_URL: http://memory-agent:8004
       RAG_LLM_BASE_URL: ${RAG_LLM_BASE_URL:-}
       RAG_LLM_API_KEY: ${RAG_LLM_API_KEY:-}
       RAG_LLM_MODEL: ${RAG_LLM_MODEL:-gpt-4o-mini}
@@ -241,6 +262,8 @@ services:
       intent-agent:
         condition: service_started
       summary-agent:
+        condition: service_started
+      memory-agent:
         condition: service_started
     ports: ["8001:8001"]
 

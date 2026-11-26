@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     # Messages kept verbatim after older turns are folded into the summary.
     summary_recent_messages: int = 6
 
+    # Independent memory agent for long-term recall / extraction. Empty or
+    # unreachable -> chat works without cross-session memory.
+    memory_url: str = "http://127.0.0.1:8004"
+    memory_timeout_seconds: float = 5.0
+    memory_top_k: int = 3
+
     # Conversation persistence. Empty -> in-memory (dev); set to a Postgres DSN
     # to persist conversations and messages.
     database_url: str = ""
