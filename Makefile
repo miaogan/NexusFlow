@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 .PHONY: proto build test test-go test-py vet fmt web-install web-dev web-build \
 	run-dev-all run-gateway run-workflow run-auth-service run-user-service up down \
-	eval-rag eval-rag-chat
+	eval-rag eval-rag-chat analyze-feedback test-eval
 
 proto:
 	protoc -I proto \
@@ -63,3 +63,11 @@ eval-rag:
 
 eval-rag-chat:
 	python3 eval/rag_eval.py --base-url http://127.0.0.1:8080 --k 2 --with-chat
+
+# Attribute negative feedback and export a replayable regression set.
+analyze-feedback:
+	python3 eval/analyze_feedback.py --base-url http://127.0.0.1:8080 --limit 200
+
+# Unit tests for the offline eval scripts (stdlib unittest, no deps).
+test-eval:
+	python3 -m unittest discover -s eval -p 'test_*.py' -v

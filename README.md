@@ -297,7 +297,8 @@ P2/P3 约定：
 - **检索页反馈**：保留赞/踩，落库的同时旁路写入 trace score（Langfuse 可用时）。
 - **持久化**：`FEEDBACK_DRIVER=memory|postgres`。Postgres 启动时自动建 `rag_feedback` 表，按 `tenant_id + user_id + subject_id + name` 覆盖更新，同一消息只保留最新评分；生产 compose 默认 `postgres`，即使 tracing 为 Noop 也不会丢数据。
 - **评审查询**：`GET /v1/feedback?rating=-1&limit=20`（需 `user:read`，按租户隔离），返回 query/answer/引用/纠正答案等字段。
-- **尚未完成**：离线 golden set 与 `Recall@k / nDCG / faithfulness` 指标、低分自动归因、反馈驱动 rerank/prompt 的闭环（见多智能体路线 P2/P3）。
+- **低分归因**：`eval/analyze_feedback.py` 拉取负反馈，按 `generation_wrong / retrieval_miss / citation_missing / citation_out_of_range / unclassified` 归因，输出 `eval/feedback_report.json` 与可回放的 `eval/regressions.jsonl`。
+- **尚未完成**：LLM-as-judge（faithfulness / relevancy）与在线降权 / 灰度回灌（P3）尚未接入。
 
 ## RAG 离线评测
 
@@ -327,6 +328,26 @@ make eval-rag-chat
 ```
 
 `relevant_ids` 可匹配 `chunk_id` 或 `meta.doc_id / document_id / file_name`。真实语料库建议 `--k 5` 并同步调整阈值；报告写入 `eval/report.json`（已忽略提交）。当前生成侧只做规则校验，LLM-as-judge 的 faithfulness/relevancy 尚未接入。
+
+## 反馈归因与回归集
+
+`eval/analyze_feedback.py` 只读调用 `GET /v1/feedback?rating=-1`，把每条负反馈归因到最可能的失败环节，并导出可回放的回归样本；仅依赖标准库。
+
+| 归因 | 触发条件（按优先级判断） |
+| --- | --- |
+| `generation_wrong` | 用户提交了 `corrected_answer` |
+| `retrieval_miss` | 无引用，或答案包含“未在知识库 / 资料不足 / 没有找到 / 无法回答 / 没有相关内容” |
+| `citation_missing` | 有引用但正文没有 `[n]` 角标 |
+| `citation_out_of_range` | 角标最大序号超过引用条数 |
+| `unclassified` | 以上都不命中（如有引用且角标合法仍被踩） |
+
+```bash
+# 先启动 dev-all 并积累若干负反馈
+make analyze-feedback   # 默认 limit=200，写 eval/feedback_report.json 与 eval/regressions.jsonl
+make test-eval          # 归因与输出的标准库单测
+```
+
+报告按 `attribution` 与 `intent`（取自反馈 `meta.intent`）聚合；`regressions.jsonl` 每行含 query / answer / 引用 / 归因 / 纠正答案等字段，可作为策略变更后的回放集。无负反馈时输出空文件并正常退出（exit 0）。
 
 ## 安全与可靠性加固
 

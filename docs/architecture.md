@@ -604,7 +604,7 @@ message FeedbackEvent {
 | 离线检索评测 | 已实现 | `eval/rag_eval.py`：Recall@k / MRR / nDCG@k |
 | 引用规则校验 | 已实现 | `--with-chat`：citation_validity / hit_rate / inline_marker_rate |
 | 阈值门禁 | 已实现 | `eval/thresholds.json` + `make eval-rag`，低于阈值退出码 1 |
-| 低分归因 / 回归集导出 | 规划中 | P2 |
+| 低分归因 / 回归集导出 | 已实现 | `eval/analyze_feedback.py`：五类归因 + `eval/regressions.jsonl` |
 | RAGAS / LLM-as-judge | 未接入 | 需配置 LLM Key |
 | 在线降权 / 灰度回灌 | 规划中 | P3 |
 

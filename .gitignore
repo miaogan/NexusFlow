@@ -26,3 +26,5 @@ web/dist/
 
 # RAG offline evaluation output
 /eval/report.json
+/eval/feedback_report.json
+/eval/regressions.jsonl
