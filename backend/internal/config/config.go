@@ -41,6 +41,11 @@ type Config struct {
 	// IdentityDriver selects the user/role store: memory | redis.
 	IdentityDriver string
 
+	// Feedback persistence: memory | postgres. Postgres keeps user ratings
+	// and implicit signals across restarts.
+	FeedbackDriver      string
+	FeedbackDatabaseURL string
+
 	ObjectStoreDir  string
 	ObjectStoreBase string
 	// ObjectStoreAllowedHosts restricts presigned upload URLs to trusted hosts
@@ -104,6 +109,9 @@ func Load() Config {
 		RedisAddr:      env("REDIS_ADDR", "127.0.0.1:6379"),
 		MetricsAddr:    env("METRICS_ADDR", ""),
 		IdentityDriver: env("IDENTITY_DRIVER", "memory"),
+
+		FeedbackDriver:      env("FEEDBACK_DRIVER", "memory"),
+		FeedbackDatabaseURL: env("FEEDBACK_DATABASE_URL", ""),
 
 		ObjectStoreDir:          env("OBJECT_STORE_DIR", "/tmp/nexusflow-objects"),
 		ObjectStoreBase:         env("OBJECT_STORE_BASE", "http://127.0.0.1:9000/nexusflow"),

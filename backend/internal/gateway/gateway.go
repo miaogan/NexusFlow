@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/nexusflow/nexusflow/backend/internal/feedback"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/metrics"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/tracing"
 	"github.com/nexusflow/nexusflow/backend/internal/store"
@@ -44,6 +45,8 @@ type Gateway struct {
 	secret    string
 	allowAnon bool
 	tracer    tracing.Tracer
+	// feedbackStore persists user ratings independently of tracing.
+	feedbackStore feedback.Store
 	// rag proxies chat/conversation calls to the Python RAG agent.
 	rag *ragProxy
 	// allowedUploadHosts restricts presigned upload URLs; empty disables the check.
@@ -86,6 +89,15 @@ func WithIdentity(auth pb.AuthServiceClient, users pb.UserServiceClient) Option 
 	}
 }
 
+// WithFeedbackStore persists ratings and implicit feedback for review.
+func WithFeedbackStore(s feedback.Store) Option {
+	return func(g *Gateway) {
+		if s != nil {
+			g.feedbackStore = s
+		}
+	}
+}
+
 func New(
 	ingestion pb.IngestionServiceClient,
 	query pb.QueryServiceClient,
@@ -97,14 +109,15 @@ func New(
 	opts ...Option,
 ) *Gateway {
 	g := &Gateway{
-		ingestion: ingestion,
-		query:     query,
-		sandbox:   sandbox,
-		objects:   objects,
-		logger:    logger,
-		secret:    secret,
-		allowAnon: allowAnon,
-		tracer:    tracing.NoopTracer{},
+		ingestion:     ingestion,
+		query:         query,
+		sandbox:       sandbox,
+		objects:       objects,
+		logger:        logger,
+		secret:        secret,
+		allowAnon:     allowAnon,
+		tracer:        tracing.NoopTracer{},
+		feedbackStore: feedback.NewMemoryStore(),
 	}
 	for _, o := range opts {
 		o(g)
@@ -142,6 +155,7 @@ func (g *Gateway) Router() *gin.Engine {
 	v1.GET("/conversations", RequirePermission("search:use"), g.listConversations)
 	v1.GET("/conversations/:id", RequirePermission("search:use"), g.getConversation)
 	v1.POST("/feedback", g.submitFeedback)
+	v1.GET("/feedback", RequirePermission("user:read"), g.listFeedback)
 	v1.GET("/traces", g.listTraces)
 	v1.GET("/traces/:id", g.getTrace)
 	v1.POST("/sandbox/execute", g.executeSandbox)
@@ -536,31 +550,124 @@ func (g *Gateway) memoryTracer() (*tracing.MemoryTracer, bool) {
 }
 
 type feedbackReq struct {
-	TraceID string  `json:"trace_id" binding:"required"`
-	Name    string  `json:"name"`
-	Value   float64 `json:"value" binding:"required"`
-	Comment string  `json:"comment"`
+	TraceID         string            `json:"trace_id"`
+	MessageID       string            `json:"message_id"`
+	ConversationID  string            `json:"conversation_id"`
+	Name            string            `json:"name"`
+	Value           *float64          `json:"value"`
+	Comment         string            `json:"comment"`
+	CorrectedAnswer string            `json:"corrected_answer"`
+	Query           string            `json:"query"`
+	Answer          string            `json:"answer"`
+	CitedChunkIDs   []string          `json:"cited_chunk_ids"`
+	Meta            map[string]string `json:"meta"`
 }
 
-// submitFeedback records a user evaluation (赞/踩, or any numeric score) onto
-// a trace. With MemoryTracer it is visible in the trace viewer; with
-// LangfuseTracer it is exported as a score observation.
+// submitFeedback persists a user evaluation (rating or implicit signal) and,
+// as a best-effort side channel, exports it as a trace score. Persistence is
+// independent from tracing so feedback survives when tracing is a no-op.
 func (g *Gateway) submitFeedback(c *gin.Context) {
 	var body feedbackReq
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	name := body.Name
+	if body.TraceID == "" && body.MessageID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "trace_id or message_id is required"})
+		return
+	}
+	name := strings.TrimSpace(body.Name)
 	if name == "" {
 		name = "user.rating"
 	}
-	ctx, _ := g.callerContext(c)
-	if err := g.tracer.AddScore(ctx, body.TraceID, name, body.Value, body.Comment); err != nil {
+	value := 1.0
+	if body.Value != nil {
+		value = *body.Value
+	} else if name == "user.rating" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "value is required for user.rating"})
+		return
+	}
+
+	subject := body.MessageID
+	if subject == "" {
+		subject = body.TraceID
+	}
+	p, _ := tenant.From(c.Request.Context())
+
+	entry := feedback.Entry{
+		TenantID:        p.TenantID,
+		UserID:          p.UserID,
+		SubjectID:       subject,
+		TraceID:         body.TraceID,
+		ConversationID:  body.ConversationID,
+		MessageID:       body.MessageID,
+		Name:            name,
+		Rating:          value,
+		Comment:         body.Comment,
+		CorrectedAnswer: body.CorrectedAnswer,
+		Query:           body.Query,
+		Answer:          body.Answer,
+		CitedChunkIDs:   body.CitedChunkIDs,
+		Meta:            body.Meta,
+	}
+	saved, err := g.feedbackStore.Upsert(c.Request.Context(), entry)
+	if err != nil {
+		g.logger.Error("persist feedback failed", "tenant", p.TenantID, "error", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+
+	if body.TraceID != "" {
+		ctx, _ := g.callerContext(c)
+		if err := g.tracer.AddScore(ctx, body.TraceID, name, value, body.Comment); err != nil {
+			g.logger.Warn("export feedback score failed", "trace", body.TraceID, "error", err)
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":         true,
+		"id":         saved.ID,
+		"subject_id": saved.SubjectID,
+		"updated_at": saved.UpdatedAt,
+	})
+}
+
+// listFeedback returns tenant-scoped feedback for review, e.g.
+// GET /v1/feedback?rating=-1&limit=20.
+func (g *Gateway) listFeedback(c *gin.Context) {
+	p, _ := tenant.From(c.Request.Context())
+	filter := feedback.Filter{TenantID: p.TenantID}
+	if raw := c.Query("rating"); raw != "" {
+		v, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid rating"})
+			return
+		}
+		filter.Rating = &v
+	}
+	if raw := c.Query("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit"})
+			return
+		}
+		filter.Limit = n
+	}
+	if raw := c.Query("offset"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid offset"})
+			return
+		}
+		filter.Offset = n
+	}
+
+	items, err := g.feedbackStore.List(c.Request.Context(), filter)
+	if err != nil {
+		g.logger.Error("list feedback failed", "tenant", p.TenantID, "error", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"feedback": items, "count": len(items)})
 }
 
 func (g *Gateway) listTraces(c *gin.Context) {

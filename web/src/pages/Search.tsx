@@ -67,7 +67,7 @@ export default function Search() {
     setRating(value);
     setSubmittingRating(true);
     try {
-      await submitFeedback(result.trace_id, value);
+      await submitFeedback({ trace_id: result.trace_id, value });
     } catch (e) {
       setRating(prev);
       setError(e instanceof Error ? e.message : String(e));

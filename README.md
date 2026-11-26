@@ -291,6 +291,14 @@ P2/P3 约定：
 - 记忆表 `rag_memories` 使用 pgvector（镜像切换为 `pgvector/pgvector:pg16` 并启用 `CREATE EXTENSION vector`），按 `tenant_id + user_id` 隔离；对话开始召回 top-k 注入，轮次结束异步抽取。
 - 所有 agent 统一使用 OpenAI 兼容配置（`RAG_LLM_*` / `INTENT_LLM_*`），DeepSeek 可直接接入。
 
+## 反馈与评审
+
+- **问答页反馈**：每条回答支持「有帮助 / 没帮助」，提交时携带 `trace_id`、`conversation_id`、`message_id`、query、answer、引用 chunk 与意图标签；点击正文 `[n]` 引用同时上报 `user.citation_click` 隐式正反馈。
+- **检索页反馈**：保留赞/踩，落库的同时旁路写入 trace score（Langfuse 可用时）。
+- **持久化**：`FEEDBACK_DRIVER=memory|postgres`。Postgres 启动时自动建 `rag_feedback` 表，按 `tenant_id + user_id + subject_id + name` 覆盖更新，同一消息只保留最新评分；生产 compose 默认 `postgres`，即使 tracing 为 Noop 也不会丢数据。
+- **评审查询**：`GET /v1/feedback?rating=-1&limit=20`（需 `user:read`，按租户隔离），返回 query/answer/引用/纠正答案等字段。
+- **尚未完成**：离线 golden set 与 `Recall@k / nDCG / faithfulness` 指标、低分自动归因、反馈驱动 rerank/prompt 的闭环（见多智能体路线 P2/P3）。
+
 ## 安全与可靠性加固
 
 - **上传**：仅接受 pdf/docx/txt/md/html；空文件与超限（100 MiB → 413）前置拒绝；`object_key`/`file_url`/`content_hash` 等保留元数据由服务端写入，客户端表单/JSON 无法伪造；内容去重命中时删除刚落盘的孤儿对象。

@@ -78,8 +78,25 @@ services:
       AUTH_TARGET: "auth-service:9096"
       USER_TARGET: "user-service:9097"
       RAG_AGENT_URL: "http://rag-agent:8001"
+      # Persist ratings/implicit feedback even when tracing is a no-op.
+      FEEDBACK_DRIVER: postgres
+      FEEDBACK_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
       METRICS_ADDR: ""
-    depends_on: [ingestion, query-service, sandbox-execution, auth-service, user-service, rag-agent]
+    depends_on:
+      ingestion:
+        condition: service_started
+      query-service:
+        condition: service_started
+      sandbox-execution:
+        condition: service_started
+      auth-service:
+        condition: service_started
+      user-service:
+        condition: service_started
+      rag-agent:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     volumes: ["objects:/data/objects"]
     ports: ["8080:8080"]
 

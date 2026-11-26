@@ -372,16 +372,27 @@ export async function getConversation(id: string): Promise<ConversationDetail> {
 
 // ---------- Observability APIs ----------
 
+export interface FeedbackInput {
+  trace_id?: string;
+  message_id?: string;
+  conversation_id?: string;
+  value?: number;
+  name?: string;
+  comment?: string;
+  corrected_answer?: string;
+  query?: string;
+  answer?: string;
+  cited_chunk_ids?: string[];
+  meta?: Record<string, string>;
+}
+
 export async function submitFeedback(
-  traceID: string,
-  value: number,
-  comment?: string,
-  name = "user.rating",
-): Promise<{ ok: boolean }> {
-  return request<{ ok: boolean }>(`${GATEWAY_BASE}/v1/feedback`, {
+  input: FeedbackInput,
+): Promise<{ ok: boolean; id?: string }> {
+  return request<{ ok: boolean; id?: string }>(`${GATEWAY_BASE}/v1/feedback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ trace_id: traceID, value, comment, name }),
+    body: JSON.stringify(input),
   });
 }
 

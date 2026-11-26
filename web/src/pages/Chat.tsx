@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { chatStream, getConversation, listConversations } from "../api/client";
+import { chatStream, getConversation, listConversations, submitFeedback } from "../api/client";
 import type { ChatMessage, Citation, ConversationSummary, IntentInfo } from "../types";
 import { Button, EmptyState, PageHeader, Spinner } from "../components/ui";
 
@@ -77,6 +77,7 @@ export default function Chat() {
   const [intentInfo, setIntentInfo] = useState<IntentInfo | null>(null);
   const [stageMessageId, setStageMessageId] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -103,12 +104,51 @@ export default function Chat() {
     setStageMessageId(null);
   };
 
-  const jumpTo = (anchor: string) => {
+  const jumpTo = (anchor: string, msg: ChatMessage) => {
     const el = document.getElementById(anchor);
     if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     setHighlight(anchor);
     window.setTimeout(() => setHighlight((cur) => (cur === anchor ? null : cur)), 1800);
+    if (!msg.id.startsWith("local-") && !msg.id.startsWith(STREAMING_ID)) {
+      void submitFeedback({
+        trace_id: msg.trace_id,
+        message_id: msg.id,
+        conversation_id: activeId ?? undefined,
+        name: "user.citation_click",
+        value: 1,
+        meta: { anchor },
+      }).catch(() => {
+        // Implicit signals are best-effort.
+      });
+    }
+  };
+
+  const rate = async (msg: ChatMessage, value: number) => {
+    if (feedback[msg.id] === value) return;
+    const prev = feedback[msg.id];
+    setFeedback((cur) => ({ ...cur, [msg.id]: value }));
+    try {
+      await submitFeedback({
+        trace_id: msg.trace_id,
+        message_id: msg.id,
+        conversation_id: activeId ?? undefined,
+        name: "user.rating",
+        value,
+        query: msg.query,
+        answer: msg.content,
+        cited_chunk_ids: msg.citations?.map((c) => c.chunk_id) ?? [],
+        meta: msg.intent ? { intent: msg.intent } : undefined,
+      });
+    } catch (e) {
+      setFeedback((cur) => {
+        const next = { ...cur };
+        if (prev === undefined) delete next[msg.id];
+        else next[msg.id] = prev;
+        return next;
+      });
+      setError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const openConversation = async (id: string) => {
@@ -119,7 +159,14 @@ export default function Chat() {
     setLoading(true);
     try {
       const detail = await getConversation(id);
-      setMessages(detail.messages);
+      // Enrich assistant turns with their question so feedback keeps the query
+      // even when the rating is submitted from history.
+      const enriched = detail.messages.map((m, i) => {
+        if (m.role !== "assistant" || i === 0) return m;
+        const prev = detail.messages[i - 1];
+        return prev.role === "user" ? { ...m, query: prev.content } : m;
+      });
+      setMessages(enriched);
     } catch (e) {
       setMessages([]);
       setError(e instanceof Error ? e.message : String(e));
@@ -151,13 +198,22 @@ export default function Chat() {
     setMessages((prev) => [
       ...prev,
       { id: userId, role: "user", content: text, created_at: now },
-      { id: streamId, role: "assistant", content: "", citations: [], created_at: now },
+      {
+        id: streamId,
+        role: "assistant",
+        content: "",
+        citations: [],
+        query: text,
+        created_at: now,
+      },
     ]);
 
     let answer = "";
+    let intentLabel = "";
     try {
       await chatStream(text, activeId ?? undefined, {
         onIntent: (info) => {
+          intentLabel = info.intent;
           setIntentInfo(info);
           setPhase(info.need_retrieval ? "retrieve" : "generate");
         },
@@ -186,6 +242,8 @@ export default function Chat() {
                     id: res.message_id,
                     content: res.answer,
                     citations: res.citations,
+                    trace_id: res.trace_id,
+                    intent: intentLabel,
                     created_at: res.created_at,
                   }
                 : m,
@@ -326,7 +384,9 @@ export default function Chat() {
 
                       {isAssistant ? (
                         <div className="whitespace-pre-wrap">
-                          {renderInlineCitations(msg.content, msg.citations, msg.id, jumpTo)}
+                          {renderInlineCitations(msg.content, msg.citations, msg.id, (anchor) =>
+                            jumpTo(anchor, msg),
+                          )}
                           {sending && msg.id === stageMessageId && !msg.content && (
                             <span className="text-slate-500">正在生成…</span>
                           )}
@@ -361,7 +421,7 @@ export default function Chat() {
                                       className="truncate text-[9px] text-slate-400"
                                       title={c.meta.file_name}
                                     >
-                                      📄 {c.meta.file_name}
+                                      文件：{c.meta.file_name}
                                     </span>
                                   )}
                                   <span className="ml-auto text-[9px] font-mono text-slate-500">
@@ -374,6 +434,36 @@ export default function Chat() {
                               </div>
                             );
                           })}
+                        </div>
+                      )}
+                      {isAssistant && !sending && msg.content && !msg.id.startsWith(STREAMING_ID) && (
+                        <div className="mt-2 flex items-center gap-2 border-t border-white/5 pt-2">
+                          <span className="text-[9px] text-slate-500">这个回答：</span>
+                          <button
+                            type="button"
+                            onClick={() => void rate(msg, 1)}
+                            className={`rounded-full border px-2 py-0.5 text-[9px] transition ${
+                              feedback[msg.id] === 1
+                                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                                : "border-white/10 text-slate-400 hover:bg-white/5"
+                            }`}
+                          >
+                            有帮助
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void rate(msg, -1)}
+                            className={`rounded-full border px-2 py-0.5 text-[9px] transition ${
+                              feedback[msg.id] === -1
+                                ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+                                : "border-white/10 text-slate-400 hover:bg-white/5"
+                            }`}
+                          >
+                            没帮助
+                          </button>
+                          {feedback[msg.id] !== undefined && (
+                            <span className="text-[9px] text-slate-500">已记录</span>
+                          )}
                         </div>
                       )}
                     </div>

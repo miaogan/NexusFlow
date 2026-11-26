@@ -213,6 +213,9 @@ export interface ChatMessage {
   role: "user" | "assistant" | string;
   content: string;
   citations?: Citation[];
+  trace_id?: string;
+  intent?: string;
+  query?: string;
   created_at: string;
 }
 

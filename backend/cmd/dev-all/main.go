@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nexusflow/nexusflow/backend/internal/config"
+	"github.com/nexusflow/nexusflow/backend/internal/feedback"
 	"github.com/nexusflow/nexusflow/backend/internal/gateway"
 	"github.com/nexusflow/nexusflow/backend/internal/identity"
 	"github.com/nexusflow/nexusflow/backend/internal/indexing"
@@ -55,6 +56,13 @@ func main() {
 
 	tracer := tracing.NewFromEnv(logger)
 	defer func() { _ = tracer.Shutdown(context.Background()) }()
+
+	feedbackStore, err := feedback.NewStore(cfg.FeedbackDriver, cfg.FeedbackDatabaseURL)
+	if err != nil {
+		logger.Error("init feedback store", "error", err)
+		os.Exit(1)
+	}
+	defer feedbackStore.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -228,6 +236,7 @@ func main() {
 			pb.NewUserServiceClient(userConn),
 		),
 		gateway.WithRAGAgent(cfg.RAGAgentURL),
+		gateway.WithFeedbackStore(feedbackStore),
 	)
 	srv := &http.Server{
 		Addr:              cfg.GatewayHTTPAddr,
