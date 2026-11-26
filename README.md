@@ -299,6 +299,35 @@ P2/P3 约定：
 - **评审查询**：`GET /v1/feedback?rating=-1&limit=20`（需 `user:read`，按租户隔离），返回 query/answer/引用/纠正答案等字段。
 - **尚未完成**：离线 golden set 与 `Recall@k / nDCG / faithfulness` 指标、低分自动归因、反馈驱动 rerank/prompt 的闭环（见多智能体路线 P2/P3）。
 
+## RAG 离线评测
+
+`eval/rag_eval.py` 仅依赖 Python 标准库，用 golden 集调用网关 `/v1/search`（可选 `/v1/chat`）并输出指标；低于 `eval/thresholds.json` 时进程退出码为 1，可直接接入 CI。
+
+| 指标 | 含义 |
+| --- | --- |
+| `recall_at_k` | top-k 命中的相关条目数 / 标注相关数 |
+| `mrr` | 首个相关结果排名的倒数均值 |
+| `ndcg_at_k` | 二值相关性 nDCG@k |
+| `citation_validity` | 引用中 `chunk_id` 非空的比例（`--with-chat`） |
+| `citation_hit_rate` | 至少命中一个标注相关条目的回答占比（`--with-chat`） |
+| `inline_marker_rate` | 有引用的回答中正文包含 `[n]` 的比例（`--with-chat`） |
+
+```bash
+# 先启动 dev-all；基于 3 条种子文档的示例集默认 k=2
+make eval-rag
+
+# 追加问答引用指标（需同时启动 rag-agent 与 intent-agent）
+make eval-rag-chat
+```
+
+用例格式（`eval/golden.jsonl`，每行一个）：
+
+```json
+{"query": "多路召回如何做 RRF 融合和精排？", "relevant_ids": ["doc-2"], "kb_id": null}
+```
+
+`relevant_ids` 可匹配 `chunk_id` 或 `meta.doc_id / document_id / file_name`。真实语料库建议 `--k 5` 并同步调整阈值；报告写入 `eval/report.json`（已忽略提交）。当前生成侧只做规则校验，LLM-as-judge 的 faithfulness/relevancy 尚未接入。
+
 ## 安全与可靠性加固
 
 - **上传**：仅接受 pdf/docx/txt/md/html；空文件与超限（100 MiB → 413）前置拒绝；`object_key`/`file_url`/`content_hash` 等保留元数据由服务端写入，客户端表单/JSON 无法伪造；内容去重命中时删除刚落盘的孤儿对象。

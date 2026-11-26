@@ -1,7 +1,8 @@
 SHELL := /bin/bash
 
 .PHONY: proto build test test-go test-py vet fmt web-install web-dev web-build \
-	run-dev-all run-gateway run-workflow run-auth-service run-user-service up down
+	run-dev-all run-gateway run-workflow run-auth-service run-user-service up down \
+	eval-rag eval-rag-chat
 
 proto:
 	protoc -I proto \
@@ -55,3 +56,10 @@ up:
 
 down:
 	docker compose -f deploy/docker-compose.yml down -v
+
+# Offline RAG evaluation (requires a running gateway + query service).
+eval-rag:
+	python3 eval/rag_eval.py --base-url http://127.0.0.1:8080 --k 2
+
+eval-rag-chat:
+	python3 eval/rag_eval.py --base-url http://127.0.0.1:8080 --k 2 --with-chat

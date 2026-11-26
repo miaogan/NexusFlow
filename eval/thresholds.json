@@ -1,0 +1,8 @@
+{
+  "recall_at_k": 0.9,
+  "mrr": 0.8,
+  "ndcg_at_k": 0.8,
+  "citation_validity": 0.99,
+  "citation_hit_rate": 0.8,
+  "inline_marker_rate": 0.9
+}

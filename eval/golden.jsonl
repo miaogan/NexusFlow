@@ -1,0 +1,8 @@
+# Golden query set for the dev-all seed corpus. One JSON object per line.
+# relevant_ids match chunk_id or meta.doc_id/document_id/file_name.
+{"query": "NexusFlow 的检索链路是如何工作的？", "relevant_ids": ["doc-2"]}
+{"query": "多路召回如何做 RRF 融合和精排？", "relevant_ids": ["doc-2"]}
+{"query": "系统采用什么方式做语义切块和索引构建？", "relevant_ids": ["doc-1"]}
+{"query": "NexusFlow 的编排调度由哪门语言负责？", "relevant_ids": ["doc-1"]}
+{"query": "自定义代码节点在哪里执行？", "relevant_ids": ["doc-3"]}
+{"query": "沙箱执行有哪些隔离和 TTL 限制？", "relevant_ids": ["doc-3"]}
