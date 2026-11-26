@@ -524,6 +524,8 @@ message SearchResponse {
 | 无结果/低分查询 | 隐式 | 召回不足或索引缺口 | 补数据、调切块 |
 | RAGAS 自动评估 | 系统 | 忠实度/相关性打分 | 回归评测、上线门禁 |
 
+> 落地状态：点赞/点踩（检索页与问答页）、引用点击已实现并落库；`corrected_answer` 字段已预留但暂无前端入口；无结果查询由 `eval/rag_eval.py` 与低分查询 API 覆盖；RAGAS/LLM-as-judge 自动评分尚未接入。
+
 ### 14.2 反馈数据模型
 
 ```protobuf
@@ -542,6 +544,8 @@ message FeedbackEvent {
   map<string,string> meta = 9;
 }
 ```
+
+实际实现位于 `backend/internal/feedback`，使用 Postgres `rag_feedback` 表（`FEEDBACK_DRIVER=postgres`，开发环境默认内存实现）。字段包括 `tenant_id / user_id / subject_id / trace_id / conversation_id / message_id / name / rating / comment / corrected_answer / query_text / answer_text / cited_chunk_ids / meta / created_at / updated_at`；`subject_id` 取 `message_id`，为空时回退 `trace_id`，按 `(tenant_id, user_id, subject_id, name)` 覆盖更新，同一消息只保留最新评分。反馈与 tracing 解耦：先落库，再旁路写 trace score，tracing 为 Noop 时也不会丢数据。
 
 ### 14.3 闭环处理流程（在线/离线分层）
 
@@ -588,6 +592,21 @@ message FeedbackEvent {
 - 灰度与回滚：策略变更先小流量灰度，指标劣化即自动回滚，不直接全量。
 - 隐私与合规：反馈含用户问答原文，落库需脱敏与访问控制，保留期与合规要求对齐。
 - 冷启动：无反馈初期以系统自动评估（RAGAS/规则）驱动，随真实反馈累积逐步切换权重。
+
+### 14.7 当前落地情况
+
+| 能力 | 状态 | 入口 |
+| --- | --- | --- |
+| 显式评分（赞/踩） | 已实现 | `POST /v1/feedback`；检索页与问答页 |
+| 隐式引用点击 | 已实现 | 问答页引用角标上报 `user.citation_click` |
+| 反馈持久化 | 已实现 | Postgres `rag_feedback`；开发环境内存实现 |
+| 低分查询 | 已实现 | `GET /v1/feedback?rating=-1`（`user:read`） |
+| 离线检索评测 | 已实现 | `eval/rag_eval.py`：Recall@k / MRR / nDCG@k |
+| 引用规则校验 | 已实现 | `--with-chat`：citation_validity / hit_rate / inline_marker_rate |
+| 阈值门禁 | 已实现 | `eval/thresholds.json` + `make eval-rag`，低于阈值退出码 1 |
+| 低分归因 / 回归集导出 | 规划中 | P2 |
+| RAGAS / LLM-as-judge | 未接入 | 需配置 LLM Key |
+| 在线降权 / 灰度回灌 | 规划中 | P3 |
 
 ## 15. 多租户与权限治理
 
