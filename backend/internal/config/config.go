@@ -154,7 +154,7 @@ func Load() Config {
 
 		VectorStoreURL: env("VECTOR_STORE_URL", "http://127.0.0.1:6333"),
 		EmbeddingModel: env("EMBEDDING_MODEL", "text-embedding-3-large"),
-		LlamaIndexURL:  env("LLAMAINDEX_URL", "http://127.0.0.1:8000"),
+		LlamaIndexURL:  env("LLAMAINDEX_URL", ""),
 
 		QueueDriver:        env("QUEUE_DRIVER", "memory"),
 		QueueURL:           env("QUEUE_URL", "amqp://guest:guest@127.0.0.1:5672/"),

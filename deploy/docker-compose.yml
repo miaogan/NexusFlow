@@ -183,6 +183,8 @@ services:
       PROCESSING_GRPC_ADDR: ":9092"
       MINERU_TARGET: ${MINERU_TARGET:-}
       PARSE_MAX_ATTEMPTS: "3"
+      # Parsed Markdown is indexed into Qdrant through the LlamaIndex service.
+      LLAMAINDEX_URL: "http://llamaindex:8000"
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9100/healthz"]
@@ -190,6 +192,8 @@ services:
       redis:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      llamaindex:
         condition: service_healthy
     volumes: ["objects:/data/objects"]
 

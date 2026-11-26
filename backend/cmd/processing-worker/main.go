@@ -7,6 +7,7 @@ import (
 	"syscall"
 
 	"github.com/nexusflow/nexusflow/backend/internal/config"
+	"github.com/nexusflow/nexusflow/backend/internal/indexing"
 	"github.com/nexusflow/nexusflow/backend/internal/mineru"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/broker"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/grpcserver"
@@ -63,6 +64,16 @@ func main() {
 		cfg.QueueTopicParsed, cfg.QueueTopicDLQ, "processing-worker",
 	)
 	b.Subscribe(cfg.QueueTopicUploaded, worker.Handle)
+
+	// Production indexing: parsed Markdown is written to the real vector store
+	// through the LlamaIndex service (chunk + embed + Qdrant upsert).
+	if cfg.LlamaIndexURL != "" {
+		idxr := indexing.New(indexing.NewLlamaIndexIndexer(cfg.LlamaIndexURL, 0), st, logger)
+		b.Subscribe(cfg.QueueTopicParsed, idxr.Handle)
+		logger.Info("llamaindex indexing enabled", "url", cfg.LlamaIndexURL)
+	} else {
+		logger.Warn("LLAMAINDEX_URL is empty, parsed documents will not be indexed")
+	}
 
 	parseSvc := processing.NewParseService(client, st, logger)
 

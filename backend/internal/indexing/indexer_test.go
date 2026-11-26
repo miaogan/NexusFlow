@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/nexusflow/nexusflow/backend/internal/queue"
 	"github.com/nexusflow/nexusflow/backend/internal/state"
@@ -65,6 +66,32 @@ func TestIndexer_IdempotentSkipCompleted(t *testing.T) {
 	}
 	if idx.calls != 0 {
 		t.Fatalf("index calls = %d, want 0 (should skip completed)", idx.calls)
+	}
+}
+
+// The parser publishes file.parsed just before flipping the task to PARSED, so
+// the indexer must wait out a short PARSING window instead of dropping the event.
+func TestIndexer_WaitsForParsedTransition(t *testing.T) {
+	st, _ := state.NewStore("memory", "")
+	seedTask(t, st, "task-1", "t1", state.Parsing)
+	idx := &stubIndexer{}
+	i := New(idx, st, slog.Default())
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		_, _ = st.Transition(context.Background(), "task-1", state.Parsed, "")
+	}()
+
+	payload, _ := json.Marshal(parsedEvent{TaskID: "task-1", TenantID: "t1", Markdown: "# hi"})
+	if err := i.Handle(context.Background(), queue.Message{Payload: payload}); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	task, _, _ := st.Get(context.Background(), "task-1")
+	if task.State != state.Completed {
+		t.Fatalf("state = %s, want COMPLETED", task.State)
+	}
+	if idx.calls != 1 {
+		t.Fatalf("index calls = %d, want 1 after the PARSED transition", idx.calls)
 	}
 }
 

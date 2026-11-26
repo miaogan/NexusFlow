@@ -11,10 +11,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/nexusflow/nexusflow/backend/internal/queue"
 	"github.com/nexusflow/nexusflow/backend/internal/state"
 )
+
+// parsedWaitTimeout bounds how long an indexing event waits for the parser to
+// flip the task to PARSED; the parsed event is published just before that
+// transition, so consumers may observe PARSING for a moment.
+const parsedWaitTimeout = 5 * time.Second
 
 // DocumentIndexer is the write boundary of the retrieval index. *query.Engine
 // satisfies it in dev mode; keeping it as an interface lets the pipeline run
@@ -57,6 +63,16 @@ func (idx *Indexer) Handle(ctx context.Context, msg queue.Message) error {
 	if task.State == state.Completed {
 		return nil // fully indexed
 	}
+	if task.State == state.Parsing {
+		// The parser publishes file.parsed right before flipping the state to
+		// PARSED. Wait for that transition instead of dropping the event as
+		// "not our stage yet" (which would leave the task stuck at PARSED).
+		waited, err := idx.waitForParsed(ctx, task.ID)
+		if err != nil {
+			return err
+		}
+		task = waited
+	}
 	// Resume from whichever indexing stage we stopped at, so a partial failure
 	// (e.g. crash between CHUNKED and EMBEDDED) is retried instead of skipped.
 	order := []state.State{state.Chunked, state.Embedded, state.Indexed, state.Completed}
@@ -79,8 +95,12 @@ func (idx *Indexer) Handle(ctx context.Context, msg queue.Message) error {
 		"task_id":   task.ID,
 	}
 	if task.Metadata != nil {
-		if fn, ok := task.Metadata["file_name"]; ok {
-			meta["file_name"] = fn
+		// Only retrieval-relevant keys are forwarded to the index so internal
+		// bookkeeping does not leak into chunk metadata.
+		for _, key := range []string{"file_name", "kb_id"} {
+			if value, ok := task.Metadata[key]; ok && value != "" {
+				meta[key] = value
+			}
 		}
 	}
 
@@ -107,4 +127,30 @@ func (idx *Indexer) Handle(ctx context.Context, msg queue.Message) error {
 	}
 	idx.logger.Info("index completed", "task_id", task.ID, "chunks", n)
 	return nil
+}
+
+// waitForParsed polls until the task leaves PARSING (normally PARSED) or the
+// short grace period expires.
+func (idx *Indexer) waitForParsed(ctx context.Context, taskID string) (state.Task, error) {
+	deadline := time.Now().Add(parsedWaitTimeout)
+	for {
+		select {
+		case <-ctx.Done():
+			return state.Task{}, ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
+		task, ok, err := idx.machine.Get(ctx, taskID)
+		if err != nil {
+			return state.Task{}, err
+		}
+		if !ok {
+			return state.Task{}, fmt.Errorf("unknown task %s", taskID)
+		}
+		if task.State != state.Parsing {
+			return task, nil
+		}
+		if time.Now().After(deadline) {
+			return state.Task{}, fmt.Errorf("task %s is still PARSING after %s", taskID, parsedWaitTimeout)
+		}
+	}
 }

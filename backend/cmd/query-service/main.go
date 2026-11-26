@@ -61,14 +61,19 @@ func main() {
 	engine := query.NewEngine(logger, reranker,
 		query.WithFeedbackPenalty(query.NewFeedbackPenalty(feedback.NewNegativeCounter(feedbackStore))),
 	)
-	docStore := engine.Store()
-	docStore.Add("seed", demoCorpus())
-	engine.Register(query.NewMemoryRetriever("vector", docStore))
-	engine.Register(query.NewMemoryRetriever("bm25", docStore))
-	// Graph recall runs in the LlamaIndex service (LightRAG-style entity graph);
-	// registering it lets RRF fuse graph candidates with the local routes.
 	if cfg.LlamaIndexURL != "" {
-		engine.Register(query.NewGraphRetriever(cfg.LlamaIndexURL, 5*time.Second))
+		// Production path: vector/bm25/graph all read the real Qdrant index that
+		// the processing worker fills through the LlamaIndex service.
+		for _, route := range []string{"vector", "bm25", "graph"} {
+			engine.Register(query.NewLlamaIndexRetriever(route, cfg.LlamaIndexURL, 10*time.Second))
+		}
+		logger.Info("retrieval routes backed by llamaindex", "url", cfg.LlamaIndexURL)
+	} else {
+		// Standalone demo fallback: in-memory seed corpus without LlamaIndex.
+		docStore := engine.Store()
+		docStore.Add("seed", demoCorpus())
+		engine.Register(query.NewMemoryRetriever("vector", docStore))
+		engine.Register(query.NewMemoryRetriever("bm25", docStore))
 	}
 
 	svc := query.NewGRPCService(engine)
