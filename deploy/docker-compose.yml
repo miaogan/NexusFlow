@@ -109,9 +109,13 @@ services:
     environment:
       <<: *app-env
       AUTH_GRPC_ADDR: ":9096"
-      # Users/roles are shared with user-service through Redis.
-      IDENTITY_DRIVER: redis
-    depends_on: [redis]
+      # Users/roles are shared with user-service through PostgreSQL; the
+      # identity schema and seed admin are created idempotently on start.
+      IDENTITY_DRIVER: postgres
+      IDENTITY_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports: ["9096:9096"]
 
   user-service:
@@ -122,8 +126,11 @@ services:
     environment:
       <<: *app-env
       USER_GRPC_ADDR: ":9097"
-      IDENTITY_DRIVER: redis
-    depends_on: [redis]
+      IDENTITY_DRIVER: postgres
+      IDENTITY_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports: ["9097:9097"]
 
   ingestion:

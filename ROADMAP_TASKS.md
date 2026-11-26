@@ -6,7 +6,7 @@
 
 ## Milestone 1: v1.0.0（生产基线与安全加固）
 
-* **[ ] Task 1.1: 验证并修复 Postgres 身份认证存储链路**
+* **[x] Task 1.1: 验证并修复 Postgres 身份认证存储链路**
   * **目标**：确保 `IDENTITY_DRIVER=postgres` 下自动建表与种子用户初始化幂等，补充集成测试 `backend/internal/identity/postgres_test.go`，对齐 `deploy/docker-compose.yml` 默认配置。
   * **验证命令**：`make vet && go test ./backend/internal/identity/...`
 * **[ ] Task 1.2: 实现基于 Redis 的 JWT 令牌吊销名单（Token Revocation）**

@@ -26,6 +26,10 @@ var _ Store = (*PostgresStore)(nil)
 const userColumns = `id, tenant_id, username, email, password_hash,
 	roles, departments, status, created_at, updated_at`
 
+// identitySchemaLockKey serializes DDL across the auth-service and user-service
+// when they start against the same database.
+const identitySchemaLockKey int64 = 0x4e465f4944454e54 // "NF_IDENT"
+
 var identitySchema = []string{
 	`CREATE TABLE IF NOT EXISTS identity_users (
 		id TEXT NOT NULL,
@@ -68,13 +72,33 @@ func NewPostgresStore(ctx context.Context, dsn string) (*PostgresStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("identity: ping postgres: %w", err)
 	}
+	store := &PostgresStore{db: db}
+	if err := store.ensureSchema(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+// ensureSchema applies the identity DDL exactly once per database. Concurrent
+// start-ups (auth-service and user-service) are serialized with an advisory
+// lock so CREATE TABLE IF NOT EXISTS does not race on the catalog.
+func (s *PostgresStore) ensureSchema(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("identity: begin migrate: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, identitySchemaLockKey); err != nil {
+		return fmt.Errorf("identity: migrate lock: %w", err)
+	}
 	for _, stmt := range identitySchema {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("identity: migrate: %w", err)
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("identity: migrate: %w", err)
 		}
 	}
-	return &PostgresStore{db: db}, nil
+	return tx.Commit()
 }
 
 func (s *PostgresStore) Seed(opts SeedOptions) error {
@@ -82,6 +106,13 @@ func (s *PostgresStore) Seed(opts SeedOptions) error {
 	if err := s.seedRoles(ctx); err != nil {
 		return err
 	}
+	return s.seedAdmin(ctx, opts)
+}
+
+// seedAdmin creates the first administrator when it is missing. The insert is
+// guarded by ON CONFLICT DO NOTHING so repeated or concurrent seeding from both
+// services still converges on exactly one account.
+func (s *PostgresStore) seedAdmin(ctx context.Context, opts SeedOptions) error {
 	if opts.AdminUsername == "" || opts.AdminPassword == "" {
 		return nil
 	}
@@ -102,22 +133,24 @@ func (s *PostgresStore) Seed(opts SeedOptions) error {
 	if err != nil {
 		return err
 	}
-	now := time.Now()
-	_, err = s.CreateUser(ctx, User{
-		ID:           uuid.NewString(),
-		TenantID:     tenant,
-		Username:     opts.AdminUsername,
-		PasswordHash: hash,
-		Roles:        []string{RoleAdmin},
-		Departments:  []string{},
-		Status:       StatusActive,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-	})
-	// Two services may seed concurrently; the second insert is harmless.
-	if errors.Is(err, ErrUserExists) {
-		return nil
+	roles, err := json.Marshal([]string{RoleAdmin})
+	if err != nil {
+		return err
 	}
+	departments, err := json.Marshal([]string{})
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	_, err = s.db.ExecContext(
+		ctx,
+		`INSERT INTO identity_users
+		 (id, tenant_id, username, email, password_hash, roles, departments, status, created_at, updated_at)
+		 VALUES ($1, $2, $3, '', $4, $5, $6, $7, $8, $8)
+		 ON CONFLICT DO NOTHING`,
+		uuid.NewString(), tenant, strings.TrimSpace(opts.AdminUsername),
+		hash, roles, departments, StatusActive, now,
+	)
 	return err
 }
 
