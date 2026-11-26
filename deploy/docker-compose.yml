@@ -205,6 +205,18 @@ services:
       INTENT_LLM_MODEL: ${INTENT_LLM_MODEL:-deepseek-chat}
     ports: ["8002:8002"]
 
+  summary-agent:
+    build:
+      context: ../services/summary-agent
+    environment:
+      SUMMARY_APP_ENV: prod
+      # Empty key -> deterministic extractive summaries (offline safe).
+      SUMMARY_LLM_BASE_URL: ${SUMMARY_LLM_BASE_URL:-}
+      SUMMARY_LLM_API_KEY: ${SUMMARY_LLM_API_KEY:-}
+      SUMMARY_LLM_MODEL: ${SUMMARY_LLM_MODEL:-deepseek-chat}
+      SUMMARY_BUDGET_CHARS: ${SUMMARY_BUDGET_CHARS:-1200}
+    ports: ["8003:8003"]
+
   rag-agent:
     build:
       context: ../services/rag-agent
@@ -217,6 +229,8 @@ services:
       RAG_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
       # Independent intent agent (supervisor step); falls back to knowledge QA.
       RAG_INTENT_URL: http://intent-agent:8002
+      # Independent summary agent for context compaction; empty -> no compaction.
+      RAG_SUMMARY_URL: http://summary-agent:8003
       RAG_LLM_BASE_URL: ${RAG_LLM_BASE_URL:-}
       RAG_LLM_API_KEY: ${RAG_LLM_API_KEY:-}
       RAG_LLM_MODEL: ${RAG_LLM_MODEL:-gpt-4o-mini}
@@ -225,6 +239,8 @@ services:
       postgres:
         condition: service_healthy
       intent-agent:
+        condition: service_started
+      summary-agent:
         condition: service_started
     ports: ["8001:8001"]
 

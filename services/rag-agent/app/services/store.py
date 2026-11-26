@@ -35,6 +35,10 @@ class ConversationStore(Protocol):
         citations: list[dict[str, Any]],
     ) -> dict[str, Any]: ...
 
+    def set_summary(
+        self, conversation_id: str, summary: str, summary_count: int
+    ) -> None: ...
+
     def list(
         self, tenant_id: str, user_id: str, limit: int, offset: int
     ) -> tuple[list[dict[str, Any]], int]: ...
@@ -51,6 +55,10 @@ def _new_conversation(tenant_id: str, user_id: str, title: str) -> dict[str, Any
         "updated_at": ts,
         "message_count": 0,
         "messages": [],
+        # Rolling summary of older turns; ``summary_count`` is the number of
+        # leading messages already folded into it.
+        "summary": "",
+        "summary_count": 0,
     }
 
 
@@ -95,6 +103,8 @@ class InMemoryConversationStore:
             return {
                 **_summary(conv),
                 "messages": [dict(m) for m in conv["messages"]],
+                "summary": conv.get("summary") or "",
+                "summary_count": int(conv.get("summary_count") or 0),
             }
 
     def append(
@@ -110,6 +120,16 @@ class InMemoryConversationStore:
             conv["messages"].append(msg)
             conv["updated_at"] = msg["created_at"]
         return dict(msg)
+
+    def set_summary(
+        self, conversation_id: str, summary: str, summary_count: int
+    ) -> None:
+        with self._lock:
+            conv = self._conversations.get(conversation_id)
+            if conv is None:
+                return
+            conv["summary"] = summary
+            conv["summary_count"] = summary_count
 
     def list(
         self, tenant_id: str, user_id: str, limit: int, offset: int
@@ -151,10 +171,21 @@ class PostgresConversationStore:
                     tenant_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
                     title TEXT NOT NULL,
+                    summary TEXT NOT NULL DEFAULT '',
+                    summary_count INTEGER NOT NULL DEFAULT 0,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """
+            )
+            # Add the compaction columns to databases created before summaries.
+            conn.execute(
+                "ALTER TABLE rag_conversations "
+                "ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT ''"
+            )
+            conn.execute(
+                "ALTER TABLE rag_conversations "
+                "ADD COLUMN IF NOT EXISTS summary_count INTEGER NOT NULL DEFAULT 0"
             )
             conn.execute(
                 """
@@ -201,7 +232,7 @@ class PostgresConversationStore:
         with self._connect() as conn:
             conv = conn.execute(
                 """
-                SELECT id, title, created_at, updated_at
+                SELECT id, title, summary, summary_count, created_at, updated_at
                 FROM rag_conversations
                 WHERE id = %s AND tenant_id = %s AND user_id = %s
                 """,
@@ -219,7 +250,13 @@ class PostgresConversationStore:
                 (conversation_id,),
             ).fetchall()
         messages = [_message_row(r) for r in rows]
-        return {**_row(conv), "message_count": len(messages), "messages": messages}
+        return {
+            **_row(conv),
+            "message_count": len(messages),
+            "messages": messages,
+            "summary": conv.get("summary") or "",
+            "summary_count": int(conv.get("summary_count") or 0),
+        }
 
     def append(
         self,
@@ -245,6 +282,19 @@ class PostgresConversationStore:
                 (conversation_id,),
             )
         return _message_row(row)
+
+    def set_summary(
+        self, conversation_id: str, summary: str, summary_count: int
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE rag_conversations
+                SET summary = %s, summary_count = %s, updated_at = now()
+                WHERE id = %s
+                """,
+                (summary, summary_count, conversation_id),
+            )
 
     def list(
         self, tenant_id: str, user_id: str, limit: int, offset: int

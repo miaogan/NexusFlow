@@ -13,6 +13,7 @@ from app.services.store import (
     InMemoryConversationStore,
     PostgresConversationStore,
 )
+from app.services.summary import HttpSummarizer
 
 
 @lru_cache
@@ -44,7 +45,21 @@ def get_intent_classifier() -> HttpIntentClassifier:
 
 
 @lru_cache
+def get_summarizer() -> HttpSummarizer:
+    settings = get_settings()
+    return HttpSummarizer(
+        settings.summary_url,
+        settings.summary_timeout_seconds,
+        settings.summary_budget_chars,
+    )
+
+
+@lru_cache
 def get_service() -> ChatService:
     return ChatService(
-        get_store(), get_chat_graph(), get_settings(), get_intent_classifier()
+        get_store(),
+        get_chat_graph(),
+        get_settings(),
+        get_intent_classifier(),
+        get_summarizer(),
     )

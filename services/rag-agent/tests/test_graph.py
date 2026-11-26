@@ -33,9 +33,11 @@ class FakeRetriever:
 class FakeGenerator:
     def __init__(self) -> None:
         self.seen: tuple[str, list[dict[str, str]], list[dict[str, Any]]] | None = None
+        self.summary = ""
 
-    def generate(self, query, history, chunks):
+    def generate(self, query, history, chunks, summary=""):
         self.seen = (query, history, chunks)
+        self.summary = summary
         return "Answer citing [1] and [2]."
 
 

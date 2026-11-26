@@ -25,6 +25,7 @@ class GeneratorLike(Protocol):
         query: str,
         history: list[dict[str, str]],
         chunks: list[dict[str, Any]],
+        summary: str = "",
     ) -> str: ...
 
     def astream(
@@ -32,6 +33,7 @@ class GeneratorLike(Protocol):
         query: str,
         history: list[dict[str, str]],
         chunks: list[dict[str, Any]],
+        summary: str = "",
     ) -> AsyncIterator[str]: ...
 
     def generate_intent(
@@ -39,6 +41,7 @@ class GeneratorLike(Protocol):
         intent: str,
         message: str,
         history: list[dict[str, str]],
+        summary: str = "",
     ) -> str: ...
 
     def astream_intent(
@@ -46,6 +49,7 @@ class GeneratorLike(Protocol):
         intent: str,
         message: str,
         history: list[dict[str, str]],
+        summary: str = "",
     ) -> AsyncIterator[str]: ...
 
 
@@ -54,6 +58,7 @@ class ChatState(TypedDict, total=False):
     user_id: str
     query: str
     history: list[dict[str, str]]
+    summary: str
     top_k: int
     kb_id: str | None
     filters: dict[str, str] | None
@@ -127,7 +132,10 @@ class ChatGraph:
     def _generate(self, state: ChatState) -> dict[str, Any]:
         chunks = state.get("chunks") or []
         answer = self._generator.generate(
-            state["query"], state.get("history") or [], chunks
+            state["query"],
+            state.get("history") or [],
+            chunks,
+            summary=state.get("summary") or "",
         )
         return {"answer": answer, "citations": self.citations(chunks)}
 
@@ -136,8 +144,11 @@ class ChatGraph:
         query: str,
         history: list[dict[str, str]],
         chunks: list[dict[str, Any]],
+        summary: str = "",
     ) -> AsyncIterator[str]:
-        async for piece in self._generator.astream(query, history, chunks):
+        async for piece in self._generator.astream(
+            query, history, chunks, summary=summary
+        ):
             yield piece
 
     def generate_intent_answer(
@@ -145,16 +156,22 @@ class ChatGraph:
         intent: str,
         message: str,
         history: list[dict[str, str]],
+        summary: str = "",
     ) -> str:
-        return self._generator.generate_intent(intent, message, history)
+        return self._generator.generate_intent(
+            intent, message, history, summary=summary
+        )
 
     async def stream_intent_answer(
         self,
         intent: str,
         message: str,
         history: list[dict[str, str]],
+        summary: str = "",
     ) -> AsyncIterator[str]:
-        async for piece in self._generator.astream_intent(intent, message, history):
+        async for piece in self._generator.astream_intent(
+            intent, message, history, summary=summary
+        ):
             yield piece
 
     def invoke(self, **state: Any) -> ChatState:

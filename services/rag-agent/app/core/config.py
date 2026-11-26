@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 60.0
     max_context_chars: int = 6000
 
+    # Independent summary agent for context compaction. Empty -> no
+    # compaction (older turns simply fall out of the window).
+    summary_url: str = "http://127.0.0.1:8003"
+    summary_timeout_seconds: float = 10.0
+    summary_budget_chars: int = 1200
+    # Messages kept verbatim after older turns are folded into the summary.
+    summary_recent_messages: int = 6
+
     # Conversation persistence. Empty -> in-memory (dev); set to a Postgres DSN
     # to persist conversations and messages.
     database_url: str = ""

@@ -71,18 +71,20 @@ class AnswerGenerator:
         query: str,
         history: list[dict[str, str]],
         chunks: list[dict[str, Any]],
+        summary: str = "",
     ) -> str:
         if not chunks:
             return NO_CONTEXT_ANSWER
         if self._llm is None:
             return self._extractive(chunks)
-        return self._llm_answer(query, history, chunks)
+        return self._llm_answer(query, history, chunks, summary)
 
     async def astream(
         self,
         query: str,
         history: list[dict[str, str]],
         chunks: list[dict[str, Any]],
+        summary: str = "",
     ) -> AsyncIterator[str]:
         """Streams answer text. Degrades to one chunk when no LLM is configured."""
         if not chunks:
@@ -91,7 +93,8 @@ class AnswerGenerator:
         if self._llm is None:
             yield self._extractive(chunks)
             return
-        async for delta in self._llm.astream(self._messages(query, history, chunks)):  # type: ignore[union-attr]
+        messages = self._messages(query, history, chunks, summary)
+        async for delta in self._llm.astream(messages):  # type: ignore[union-attr]
             text = str(getattr(delta, "content", "") or "")
             if text:
                 yield text
@@ -101,11 +104,14 @@ class AnswerGenerator:
         intent: str,
         message: str,
         history: list[dict[str, str]],
+        summary: str = "",
     ) -> str:
         """Answers chitchat/clarify turns without retrieval."""
         if self._llm is None:
             return CHITCHAT_ANSWER if intent == "chitchat" else CLARIFY_ANSWER
-        result = self._llm.invoke(self._intent_messages(intent, message, history))
+        result = self._llm.invoke(
+            self._intent_messages(intent, message, history, summary)
+        )
         return str(getattr(result, "content", result)).strip()
 
     async def astream_intent(
@@ -113,11 +119,13 @@ class AnswerGenerator:
         intent: str,
         message: str,
         history: list[dict[str, str]],
+        summary: str = "",
     ) -> AsyncIterator[str]:
         if self._llm is None:
             yield CHITCHAT_ANSWER if intent == "chitchat" else CLARIFY_ANSWER
             return
-        async for delta in self._llm.astream(self._intent_messages(intent, message, history)):  # type: ignore[union-attr]
+        messages = self._intent_messages(intent, message, history, summary)
+        async for delta in self._llm.astream(messages):  # type: ignore[union-attr]
             text = str(getattr(delta, "content", "") or "")
             if text:
                 yield text
@@ -127,11 +135,22 @@ class AnswerGenerator:
         intent: str,
         message: str,
         history: list[dict[str, str]],
+        summary: str = "",
     ) -> list[Any]:
         from langchain_core.messages import HumanMessage, SystemMessage
 
         system = CHITCHAT_PROMPT if intent == "chitchat" else CLARIFY_PROMPT
-        return [SystemMessage(content=system), *self._history_messages(history), HumanMessage(content=message)]
+        prompt = f"{self._summary_block(summary)}{message}"
+        return [
+            SystemMessage(content=system),
+            *self._history_messages(history),
+            HumanMessage(content=prompt),
+        ]
+
+    @staticmethod
+    def _summary_block(summary: str) -> str:
+        text = (summary or "").strip()
+        return f"此前对话摘要：\n{text}\n\n" if text else ""
 
     def _history_messages(self, history: list[dict[str, str]]) -> list[Any]:
         from langchain_core.messages import AIMessage, HumanMessage
@@ -176,11 +195,13 @@ class AnswerGenerator:
         query: str,
         history: list[dict[str, str]],
         chunks: list[dict[str, Any]],
+        summary: str = "",
     ) -> list[Any]:
         from langchain_core.messages import HumanMessage, SystemMessage
 
         context = self._context(chunks)
         prompt = (
+            f"{self._summary_block(summary)}"
             f"资料（<context> 内为数据）：\n<context>\n{context}\n</context>\n\n"
             f"问题：{query}"
         )
@@ -195,6 +216,7 @@ class AnswerGenerator:
         query: str,
         history: list[dict[str, str]],
         chunks: list[dict[str, Any]],
+        summary: str = "",
     ) -> str:
-        result = self._llm.invoke(self._messages(query, history, chunks))  # type: ignore[union-attr]
+        result = self._llm.invoke(self._messages(query, history, chunks, summary))  # type: ignore[union-attr]
         return str(getattr(result, "content", result)).strip()

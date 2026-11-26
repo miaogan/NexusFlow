@@ -17,6 +17,7 @@ from app.schemas import (
 from app.services.intent import HttpIntentClassifier, IntentClassifier
 from app.services.retrieval import RetrievalUnavailable
 from app.services.store import ConversationNotFound, ConversationStore
+from app.services.summary import ConversationSummarizer, HttpSummarizer
 
 
 class ChatService:
@@ -28,12 +29,52 @@ class ChatService:
         graph: ChatGraph,
         settings: Settings,
         intent: IntentClassifier | None = None,
+        summarizer: ConversationSummarizer | None = None,
     ) -> None:
         self._store = store
         self._graph = graph
         self._settings = settings
         # Default classifier degrades to knowledge QA without a configured URL.
         self._intent: IntentClassifier = intent or HttpIntentClassifier("")
+        # Default summarizer is a no-op without a configured URL.
+        self._summarizer: ConversationSummarizer = summarizer or HttpSummarizer("")
+
+    def _prepare_history(
+        self, conv: dict[str, Any]
+    ) -> tuple[list[dict[str, str]], str]:
+        """Returns the recent window plus a rolling summary of older turns.
+
+        Once the conversation outgrows ``max_history``, the messages between
+        the already-summarized prefix and the recent window are folded into the
+        summary. If the summary agent is unavailable the raw window is kept, so
+        a summary outage only costs context, never correctness.
+        """
+        messages = conv.get("messages", [])
+        summary = conv.get("summary") or ""
+        count = int(conv.get("summary_count") or 0)
+        limit = self._settings.max_history
+        total = len(messages)
+
+        if total > limit:
+            recent = min(limit, max(2, self._settings.summary_recent_messages))
+            end = total - recent
+            if end > count:
+                folded = [
+                    {"role": m["role"], "content": m["content"]}
+                    for m in messages[count:end]
+                ]
+                new_summary = self._summarizer.summarize(summary, folded)
+                if new_summary:
+                    summary = new_summary
+                    count = end
+                    self._store.set_summary(conv["id"], summary, count)
+
+        start = count if total - count <= limit else total - limit
+        history = [
+            {"role": m["role"], "content": m["content"]}
+            for m in messages[start:]
+        ]
+        return history, summary
 
     def chat(
         self,
@@ -50,10 +91,7 @@ class ChatService:
         else:
             conv = self._store.create(tenant_id, user_id, message[:40])
 
-        history = [
-            {"role": m["role"], "content": m["content"]}
-            for m in conv.get("messages", [])
-        ][-self._settings.max_history :]
+        history, summary = self._prepare_history(conv)
 
         # Persist the user turn before generation so a failed generation still
         # leaves the question visible for a retry.
@@ -69,6 +107,7 @@ class ChatService:
                 user_id=user_id,
                 query=message,
                 history=history,
+                summary=summary,
                 top_k=top_k,
                 kb_id=req.kb_id,
                 filters=req.filters,
@@ -79,7 +118,7 @@ class ChatService:
             trace_id = state.get("trace_id")
         else:
             answer = self._graph.generate_intent_answer(
-                str(intent.get("intent") or "clarify"), message, history
+                str(intent.get("intent") or "clarify"), message, history, summary=summary
             )
             citations = []
             trace_id = None
@@ -120,10 +159,7 @@ class ChatService:
                 self._store.create, tenant_id, user_id, message[:40]
             )
 
-        history = [
-            {"role": m["role"], "content": m["content"]}
-            for m in conv.get("messages", [])
-        ][-self._settings.max_history :]
+        history, summary = await run_in_threadpool(self._prepare_history, conv)
         await run_in_threadpool(self._store.append, conv["id"], "user", message, [])
 
         top_k = req.top_k or self._settings.default_top_k
@@ -140,7 +176,10 @@ class ChatService:
             intent_parts: list[str] = []
             try:
                 async for piece in self._graph.stream_intent_answer(
-                    str(intent.get("intent") or "clarify"), message, history
+                    str(intent.get("intent") or "clarify"),
+                    message,
+                    history,
+                    summary=summary,
                 ):
                     intent_parts.append(piece)
                     yield {"type": "token", "content": piece}
@@ -191,7 +230,9 @@ class ChatService:
 
         parts: list[str] = []
         try:
-            async for piece in self._graph.stream_answer(message, history, chunks):
+            async for piece in self._graph.stream_answer(
+                message, history, chunks, summary=summary
+            ):
                 parts.append(piece)
                 yield {"type": "token", "content": piece}
         except Exception as exc:  # noqa: BLE001 - surface upstream LLM failures

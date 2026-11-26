@@ -48,14 +48,14 @@ class FakeStreamGraph:
             for c in chunks
         ]
 
-    async def stream_answer(self, query, history, chunks):
+    async def stream_answer(self, query, history, chunks, summary=""):
         for piece in ("hello ", "world"):
             yield piece
 
-    def generate_intent(self, intent, message, history):
+    def generate_intent(self, intent, message, history, summary=""):
         return f"{intent} answer"
 
-    async def stream_intent_answer(self, intent, message, history):
+    async def stream_intent_answer(self, intent, message, history, summary=""):
         for piece in ("chat ", "reply"):
             yield piece
 
@@ -204,3 +204,94 @@ def test_intent_classifier_falls_back_without_url() -> None:
     assert result["intent"] == "knowledge_qa"
     assert result["need_retrieval"] is True
     assert result["source"] == "fallback"
+
+
+class FakeSummarizer:
+    def __init__(self, result: str | None = "早期摘要") -> None:
+        self.result = result
+        self.calls: list[dict[str, Any]] = []
+
+    def summarize(
+        self, previous_summary: str, messages: list[dict[str, str]]
+    ) -> str | None:
+        self.calls.append({"previous_summary": previous_summary, "messages": messages})
+        return self.result
+
+
+def _seed(store: InMemoryConversationStore, count: int) -> str:
+    conv = store.create("t1", "u1", "seed")
+    for i in range(count):
+        store.append(conv["id"], "user" if i % 2 == 0 else "assistant", f"m{i}", [])
+    return conv["id"]
+
+
+def test_chat_compacts_older_history_into_summary() -> None:
+    store = InMemoryConversationStore()
+    graph = FakeGraph()
+    summarizer = FakeSummarizer("摘要-1")
+    settings = Settings(_env_file=None, max_history=4, summary_recent_messages=2)
+    service = ChatService(store, graph, settings, summarizer=summarizer)
+    conv_id = _seed(store, 6)
+
+    service.chat(ChatRequest(message="latest", conversation_id=conv_id), "t1", "u1", None)
+
+    # Six existing messages > max_history: the first four are folded, the last
+    # two stay verbatim.
+    assert [m["content"] for m in summarizer.calls[0]["messages"]] == [
+        "m0",
+        "m1",
+        "m2",
+        "m3",
+    ]
+    assert graph.calls[0]["summary"] == "摘要-1"
+    assert [h["content"] for h in graph.calls[0]["history"]] == ["m4", "m5"]
+
+    detail = store.get("t1", "u1", conv_id)
+    assert detail["summary"] == "摘要-1"
+    assert detail["summary_count"] == 4
+
+    # The next turn folds new messages on top of the previous summary.
+    summarizer.result = "摘要-2"
+    service.chat(ChatRequest(message="again", conversation_id=conv_id), "t1", "u1", None)
+    assert summarizer.calls[1]["previous_summary"] == "摘要-1"
+    assert [m["content"] for m in summarizer.calls[1]["messages"]] == ["m4", "m5"]
+    detail = store.get("t1", "u1", conv_id)
+    assert detail["summary"] == "摘要-2"
+    assert detail["summary_count"] == 6
+
+
+def test_chat_keeps_raw_window_when_summary_unavailable() -> None:
+    store = InMemoryConversationStore()
+    graph = FakeGraph()
+    settings = Settings(_env_file=None, max_history=4, summary_recent_messages=2)
+    service = ChatService(
+        store, graph, settings, summarizer=FakeSummarizer(None)
+    )
+    conv_id = _seed(store, 6)
+
+    service.chat(ChatRequest(message="latest", conversation_id=conv_id), "t1", "u1", None)
+
+    assert graph.calls[0]["summary"] == ""
+    assert [h["content"] for h in graph.calls[0]["history"]] == ["m2", "m3", "m4", "m5"]
+    detail = store.get("t1", "u1", conv_id)
+    assert detail["summary"] == ""
+    assert detail["summary_count"] == 0
+
+
+def test_chat_stream_compacts_history() -> None:
+    store = InMemoryConversationStore()
+    graph = FakeStreamGraph()
+    settings = Settings(_env_file=None, max_history=4, summary_recent_messages=2)
+    service = ChatService(
+        store, graph, settings, summarizer=FakeSummarizer("流式摘要")
+    )
+    conv_id = _seed(store, 6)
+
+    events = _collect_stream(
+        service, ChatRequest(message="hi", conversation_id=conv_id), "t1", "u1"
+    )
+
+    assert events[-1]["type"] == "done"
+    detail = store.get("t1", "u1", conv_id)
+    assert detail["summary"] == "流式摘要"
+    assert detail["summary_count"] == 4

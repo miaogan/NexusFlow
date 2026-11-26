@@ -52,6 +52,7 @@ flowchart TB
 | LlamaIndex Service | Python | `services/llamaindex` | 8000 | 切块、索引、Embedding、检索策略 |
 | RAG Agent | Python | `services/rag-agent` | 8001 | LangGraph 多轮问答、意图路由、引用、会话持久化 |
 | Intent Agent | Python | `services/intent-agent` | 8002 | 独立意图识别服务（Supervisor 第一步），LLM + 规则降级 |
+| Summary Agent | Python | `services/summary-agent` | 8003 | 上下文总结 / 自动压缩（滚动摘要 + 预算裁剪），LLM + 抽取式降级 |
 | Web Console | React | `web` | 5173 / 8088 | 控制台：文件管理 / 任务中心 / 检索 / 沙箱 / DAG 编排 |
 
 ```text
@@ -73,6 +74,7 @@ flowchart TB
 ├── services/llamaindex/           # FastAPI + LlamaIndex 数据加工服务
 ├── services/rag-agent/            # FastAPI + LangGraph 多轮 RAG 问答服务
 ├── services/intent-agent/         # FastAPI + LangGraph 意图识别服务（独立部署）
+├── services/summary-agent/        # FastAPI + LangGraph 上下文总结 / 压缩服务（独立部署）
 ├── web/                           # React + TS 控制台（路由 + 多页面 + React Flow）
 ├── deploy/
 │   ├── docker-compose.yml         # 完整本地编排
@@ -232,6 +234,7 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 
 - **身份联动**：网关校验 JWT 后将 `x-tenant-id` / `x-user-id` / `Authorization` 透传给 rag-agent；会话与消息按「租户 + 用户」隔离，匿名调用者落在 `default/anonymous`。
 - **意图路由（multi-agent 第一步）**：rag-agent 调用独立 intent-agent（`RAG_INTENT_URL`）做 `knowledge_qa | chitchat | clarify` 分类；`chitchat` / `clarify` 跳过检索直接回答，服务不可用时降级为知识问答。
+- **上下文压缩（multi-agent 第二步）**：会话超出 `RAG_MAX_HISTORY` 时，rag-agent 把已摘要前缀与待压缩轮次送独立 summary-agent（`RAG_SUMMARY_URL`）生成滚动摘要并写入 `rag_conversations.summary`，prompt 使用「摘要 + 最近 `RAG_SUMMARY_RECENT_MESSAGES` 条原文」；摘要服务不可用时改回原文窗口，仅损失上下文、不影响正确性。全文与引用仍完整持久化，压缩只影响 prompt。
 - **检索复用**：rag-agent 通过 `RAG_GATEWAY_URL` 调用网关 `/v1/search`，复用统一的多路召回 + RRF + 重排链路与 trace，而不是自建第二套检索。
 - **LangGraph 生成**：`retrieve → generate` 两节点状态图；配置 `RAG_LLM_BASE_URL` + `RAG_LLM_API_KEY`（OpenAI 兼容）时调用大模型，未配置时降级为抽取式片段摘要，保证无 Key 也能演示。
 - **流式过程事件**：`/v1/chat/stream` 以 SSE 依次推送 `stage(intent) → intent → stage(retrieve) → sources → stage(generate) → token* → done`；控制台据此渲染「意图 → 检索 → 生成 → 回答」节点、检索知识面板，并支持正文 `[n]` 标记点击跳转到对应来源。非检索意图的「检索」节点显示为跳过。
@@ -248,11 +251,17 @@ cd services/intent-agent
 pip install -e ".[test]"
 uvicorn app.main:app --port 8002
 
-# 终端 3：RAG agent（内存会话 + 抽取式回答）
+# 终端 3：摘要服务（无 Key 时走抽取式摘要）
+cd services/summary-agent
+pip install -e ".[test]"
+uvicorn app.main:app --port 8003
+
+# 终端 4：RAG agent（内存会话 + 抽取式回答）
 cd services/rag-agent
 pip install -e ".[dev]"
 RAG_GATEWAY_URL=http://127.0.0.1:8080 \
 RAG_INTENT_URL=http://127.0.0.1:8002 \
+RAG_SUMMARY_URL=http://127.0.0.1:8003 \
 uvicorn app.main:app --port 8001
 ```
 
@@ -265,6 +274,9 @@ RAG_LLM_MODEL=deepseek-chat
 INTENT_LLM_BASE_URL=https://api.deepseek.com/v1
 INTENT_LLM_API_KEY=sk-...
 INTENT_LLM_MODEL=deepseek-chat
+SUMMARY_LLM_BASE_URL=https://api.deepseek.com/v1
+SUMMARY_LLM_API_KEY=sk-...
+SUMMARY_LLM_MODEL=deepseek-chat
 ```
 
 网关端点（`RAG_AGENT_URL` 为空会关闭代理）：
@@ -281,13 +293,13 @@ INTENT_LLM_MODEL=deepseek-chat
 | 阶段 | 服务 | 内容 | 状态 |
 | --- | --- | --- | --- |
 | P1 | `intent-agent` :8002 | 意图识别与路由（`knowledge_qa / chitchat / clarify`），LLM + 规则降级 | 已完成 |
-| P2 | `summary-agent` :8003 | 上下文总结、自动压缩（滚动摘要 + 最近 N 轮），按字符预算裁剪 | 规划中 |
+| P2 | `summary-agent` :8003 | 上下文总结、自动压缩（滚动摘要 + 最近 N 轮），按字符预算裁剪 | 已完成 |
 | P3 | `memory-agent` :8004 | 长期记忆抽取、去重合并、召回注入；Postgres + pgvector | 规划中 |
 
 P2/P3 约定：
 
 - 各 agent 独立部署、通过 HTTP 通信；rag-agent 保留 Supervisor 编排职责，新增 `RAG_SUMMARY_URL` / `RAG_MEMORY_URL` 接入。
-- 摘要写入 `rag_conversations.summary`，prompt 使用「摘要 + 最近 N 轮原文」；引用不因压缩丢失。
+- 摘要写入 `rag_conversations.summary`（`summary_count` 记录已折叠消息数），prompt 使用「摘要 + 最近 N 条原文」；引用与全文不因压缩丢失。
 - 记忆表 `rag_memories` 使用 pgvector（镜像切换为 `pgvector/pgvector:pg16` 并启用 `CREATE EXTENSION vector`），按 `tenant_id + user_id` 隔离；对话开始召回 top-k 注入，轮次结束异步抽取。
 - 所有 agent 统一使用 OpenAI 兼容配置（`RAG_LLM_*` / `INTENT_LLM_*`），DeepSeek 可直接接入。
 
