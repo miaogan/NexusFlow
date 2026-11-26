@@ -35,11 +35,13 @@ class FakeGenerator:
         self.seen: tuple[str, list[dict[str, str]], list[dict[str, Any]]] | None = None
         self.summary = ""
         self.memories: list[str] | None = None
+        self.corrected: list[dict[str, Any]] | None = None
 
-    def generate(self, query, history, chunks, summary="", memories=None):
+    def generate(self, query, history, chunks, summary="", memories=None, corrected=None):
         self.seen = (query, history, chunks)
         self.summary = summary
         self.memories = memories
+        self.corrected = corrected
         return "Answer citing [1] and [2]."
 
 
@@ -76,3 +78,21 @@ def test_graph_retrieves_then_generates() -> None:
     _query, history, chunks = generator.seen
     assert history == [{"role": "user", "content": "hi"}]
     assert len(chunks) == 2
+
+
+def test_graph_injects_corrected_answers_into_generation() -> None:
+    generator = FakeGenerator()
+    graph = ChatGraph(FakeRetriever(), generator)
+    corrected = [{"query": "how does it work?", "answer": "Use docker compose.", "score": 1.0}]
+
+    out = graph.invoke(
+        tenant_id="t1",
+        user_id="u1",
+        query="how does it work?",
+        history=[],
+        top_k=3,
+        corrected=corrected,
+    )
+
+    assert out["answer"].startswith("Answer citing")
+    assert generator.corrected == corrected

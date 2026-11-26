@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     database_url: str = ""
     max_history: int = 12
 
+    # Historical human corrections matched before retrieval (gateway
+    # /v1/corrected-answers). Lookup failure -> chat proceeds without them.
+    corrected_timeout_seconds: float = 5.0
+    corrected_top_k: int = 3
+
     @property
     def llm_enabled(self) -> bool:
         return bool(self.llm_api_key and self.llm_base_url)

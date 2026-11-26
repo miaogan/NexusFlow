@@ -23,7 +23,7 @@
 * **[x] Task 2.1: 实现负反馈在线检索降权（Online Down-ranking）**
   * **目标**：在检索重排流程中引入 `FeedbackPenalty` 阶段，对累计负反馈超阈值的 Chunk 乘以惩罚系数。
   * **验证命令**：`make vet && go test ./backend/internal/query/...`
-* **[ ] Task 2.2: 打通纠正答案（Corrected Answer）灰度回灌能力**
+* **[x] Task 2.2: 打通纠正答案（Corrected Answer）灰度回灌能力**
   * **目标**：在 `rag-agent` 检索前置步骤中匹配高优 `corrected_answer` 历史记录并注入 Prompt。
   * **验证命令**：`cd services/rag-agent && pytest`
 * **[ ] Task 2.3: 配置 GitHub Actions CI 自动化测试与离线评测卡点**

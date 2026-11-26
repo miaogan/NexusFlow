@@ -27,6 +27,7 @@ class GeneratorLike(Protocol):
         chunks: list[dict[str, Any]],
         summary: str = "",
         memories: list[str] | None = None,
+        corrected: list[dict[str, Any]] | None = None,
     ) -> str: ...
 
     def astream(
@@ -36,6 +37,7 @@ class GeneratorLike(Protocol):
         chunks: list[dict[str, Any]],
         summary: str = "",
         memories: list[str] | None = None,
+        corrected: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[str]: ...
 
     def generate_intent(
@@ -68,6 +70,8 @@ class ChatState(TypedDict, total=False):
     kb_id: str | None
     filters: dict[str, str] | None
     auth_header: str | None
+    # corrections matched before retrieval (high-priority historical answers)
+    corrected: list[dict[str, Any]]
     # outputs
     chunks: list[dict[str, Any]]
     answer: str
@@ -142,6 +146,7 @@ class ChatGraph:
             chunks,
             summary=state.get("summary") or "",
             memories=state.get("memories") or [],
+            corrected=state.get("corrected") or [],
         )
         return {"answer": answer, "citations": self.citations(chunks)}
 
@@ -152,9 +157,15 @@ class ChatGraph:
         chunks: list[dict[str, Any]],
         summary: str = "",
         memories: list[str] | None = None,
+        corrected: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[str]:
         async for piece in self._generator.astream(
-            query, history, chunks, summary=summary, memories=memories
+            query,
+            history,
+            chunks,
+            summary=summary,
+            memories=memories,
+            corrected=corrected,
         ):
             yield piece
 

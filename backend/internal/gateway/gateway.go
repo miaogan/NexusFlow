@@ -168,6 +168,8 @@ func (g *Gateway) Router() *gin.Engine {
 	v1.GET("/conversations/:id", RequirePermission("search:use"), g.getConversation)
 	v1.POST("/feedback", g.submitFeedback)
 	v1.GET("/feedback", RequirePermission("user:read"), g.listFeedback)
+	// Historical human corrections consumed by rag-agent before retrieval.
+	v1.GET("/corrected-answers", RequirePermission("search:use"), g.listCorrectedAnswers)
 	v1.GET("/traces", g.listTraces)
 	v1.GET("/traces/:id", g.getTrace)
 	v1.POST("/sandbox/execute", g.executeSandbox)

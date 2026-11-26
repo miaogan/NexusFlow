@@ -14,6 +14,10 @@ from app.schemas import (
     ConversationListResponse,
     MessageOut,
 )
+from app.services.corrected import (
+    CorrectedAnswerProvider,
+    NullCorrectedAnswerProvider,
+)
 from app.services.intent import HttpIntentClassifier, IntentClassifier
 from app.services.memory import ConversationMemory, HttpMemoryClient
 from app.services.retrieval import RetrievalUnavailable
@@ -32,6 +36,7 @@ class ChatService:
         intent: IntentClassifier | None = None,
         summarizer: ConversationSummarizer | None = None,
         memory: ConversationMemory | None = None,
+        corrections: CorrectedAnswerProvider | None = None,
     ) -> None:
         self._store = store
         self._graph = graph
@@ -42,6 +47,10 @@ class ChatService:
         self._summarizer: ConversationSummarizer = summarizer or HttpSummarizer("")
         # Default memory client is a no-op without a configured URL.
         self._memory: ConversationMemory = memory or HttpMemoryClient("")
+        # Default correction lookup is a no-op without a configured gateway.
+        self._corrections: CorrectedAnswerProvider = (
+            corrections or NullCorrectedAnswerProvider()
+        )
 
     def _prepare_history(
         self, conv: dict[str, Any]
@@ -93,6 +102,24 @@ class ChatService:
             ],
         )
 
+    def _corrected_answers(
+        self, message: str, tenant_id: str, auth_header: str | None
+    ) -> list[dict[str, Any]]:
+        """Matches historical corrected answers before retrieval.
+
+        Corrections are best-effort: any lookup failure returns no corrections
+        so a review-store outage only costs answer quality, never availability.
+        """
+        try:
+            return (
+                self._corrections.lookup(
+                    query=message, tenant_id=tenant_id, auth_header=auth_header
+                )
+                or []
+            )
+        except Exception:  # noqa: BLE001 - corrections must never fail a turn
+            return []
+
     def chat(
         self,
         req: ChatRequest,
@@ -122,6 +149,7 @@ class ChatService:
 
         intent = self._intent.classify(message, history)
         if intent.get("need_retrieval", True):
+            corrected = self._corrected_answers(message, tenant_id, auth_header)
             state = self._graph.invoke(
                 tenant_id=tenant_id,
                 user_id=user_id,
@@ -133,6 +161,7 @@ class ChatService:
                 kb_id=req.kb_id,
                 filters=req.filters,
                 auth_header=auth_header,
+                corrected=corrected,
             )
             answer = state.get("answer") or ""
             citations: list[dict[str, Any]] = state.get("citations") or []
@@ -238,6 +267,9 @@ class ChatService:
             return
 
         yield {"type": "stage", "stage": "retrieve", "status": "start"}
+        corrected = await run_in_threadpool(
+            self._corrected_answers, message, tenant_id, auth_header
+        )
         try:
             retrieved = await run_in_threadpool(
                 self._graph.retrieve,
@@ -266,7 +298,12 @@ class ChatService:
         parts: list[str] = []
         try:
             async for piece in self._graph.stream_answer(
-                message, history, chunks, summary=summary, memories=memories
+                message,
+                history,
+                chunks,
+                summary=summary,
+                memories=memories,
+                corrected=corrected,
             ):
                 parts.append(piece)
                 yield {"type": "token", "content": piece}

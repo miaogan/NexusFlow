@@ -5,6 +5,7 @@ from functools import lru_cache
 from app.core.config import get_settings
 from app.graph import ChatGraph
 from app.services.chat import ChatService
+from app.services.corrected import HttpCorrectedAnswerProvider
 from app.services.intent import HttpIntentClassifier
 from app.services.llm import AnswerGenerator
 from app.services.memory import HttpMemoryClient
@@ -66,6 +67,16 @@ def get_memory_client() -> HttpMemoryClient:
 
 
 @lru_cache
+def get_corrected_provider() -> HttpCorrectedAnswerProvider:
+    settings = get_settings()
+    return HttpCorrectedAnswerProvider(
+        settings.gateway_url,
+        settings.corrected_timeout_seconds,
+        settings.corrected_top_k,
+    )
+
+
+@lru_cache
 def get_service() -> ChatService:
     return ChatService(
         get_store(),
@@ -74,4 +85,5 @@ def get_service() -> ChatService:
         get_intent_classifier(),
         get_summarizer(),
         get_memory_client(),
+        get_corrected_provider(),
     )

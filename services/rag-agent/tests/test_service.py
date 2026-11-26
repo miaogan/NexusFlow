@@ -27,6 +27,7 @@ class FakeGraph:
 class FakeStreamGraph:
     def __init__(self) -> None:
         self.retrieve_calls: list[dict[str, Any]] = []
+        self.stream_corrected: list[dict[str, Any]] | None = None
 
     def retrieve(self, **kwargs: Any) -> dict[str, Any]:
         self.retrieve_calls.append(kwargs)
@@ -48,7 +49,10 @@ class FakeStreamGraph:
             for c in chunks
         ]
 
-    async def stream_answer(self, query, history, chunks, summary="", memories=None):
+    async def stream_answer(
+        self, query, history, chunks, summary="", memories=None, corrected=None
+    ):
+        self.stream_corrected = corrected
         for piece in ("hello ", "world"):
             yield piece
 
@@ -346,3 +350,70 @@ def test_chat_stream_injects_memories_and_extracts_turn() -> None:
     assert memory.recall_calls[0]["query"] == "hi"
     assert len(memory.extract_calls) == 1
     assert memory.extract_calls[0]["messages"][0]["content"] == "hi"
+
+
+class FakeCorrections:
+    def __init__(self, items: list[dict[str, Any]] | None = None, raises: bool = False):
+        self.items = list(items or [])
+        self.raises = raises
+        self.calls: list[dict[str, Any]] = []
+
+    def lookup(self, *, query, tenant_id, auth_header=None, limit=3):
+        self.calls.append(
+            {"query": query, "tenant": tenant_id, "auth_header": auth_header}
+        )
+        if self.raises:
+            raise RuntimeError("gateway down")
+        return self.items
+
+
+def test_chat_injects_corrected_answers_before_retrieval() -> None:
+    store = InMemoryConversationStore()
+    graph = FakeGraph()
+    corrected = [{"query": "怎么部署？", "answer": "使用 make up。", "score": 1.0}]
+    corrections = FakeCorrections(corrected)
+    service = ChatService(
+        store, graph, Settings(_env_file=None), corrections=corrections
+    )
+
+    service.chat(ChatRequest(message="怎么部署 NexusFlow？"), "t1", "u1", "Bearer t")
+
+    assert corrections.calls[0] == {
+        "query": "怎么部署 NexusFlow？",
+        "tenant": "t1",
+        "auth_header": "Bearer t",
+    }
+    assert graph.calls[0]["corrected"] == corrected
+
+
+def test_chat_stream_injects_corrected_answers() -> None:
+    store = InMemoryConversationStore()
+    graph = FakeStreamGraph()
+    corrected = [{"query": "hi", "answer": "纠正后的回答", "score": 0.9}]
+    service = ChatService(
+        store,
+        graph,
+        Settings(_env_file=None),
+        corrections=FakeCorrections(corrected),
+    )
+
+    events = _collect_stream(service, ChatRequest(message="hi"), "t1", "u1")
+
+    assert events[-1]["type"] == "done"
+    assert graph.stream_corrected == corrected
+
+
+def test_chat_survives_correction_lookup_failure() -> None:
+    store = InMemoryConversationStore()
+    graph = FakeGraph()
+    service = ChatService(
+        store,
+        graph,
+        Settings(_env_file=None),
+        corrections=FakeCorrections(raises=True),
+    )
+
+    resp = service.chat(ChatRequest(message="怎么部署？"), "t1", "u1", None)
+
+    assert resp.answer == "generated answer"
+    assert graph.calls[0]["corrected"] == []
