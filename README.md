@@ -318,6 +318,7 @@ P2/P3 约定：
 - 摘要写入 `rag_conversations.summary`（`summary_count` 记录已折叠消息数），prompt 使用「摘要 + 最近 N 条原文」；引用与全文不因压缩丢失。
 - 记忆表 `rag_memories` 使用 pgvector（compose 镜像为 `pgvector/pgvector:pg16`，配置 `MEMORY_EMBEDDING_*` 时启用 `CREATE EXTENSION vector` 与向量召回；未配置时退化为词面召回），按 `tenant_id + user_id` 隔离；对话开始召回 top-k 注入，轮次结束异步抽取。
 - 记忆抽取在有 `MEMORY_LLM_*` 时用 LLM，否则走规则（偏好/画像/明确要求记住的事实）；去重按归一化文本 + 词面相似度合并，更新而非新增。
+- **pgvector 索引调优**：`MEMORY_VECTOR_INDEX=hnsw|ivfflat|none`。HNSW 用 `MEMORY_HNSW_M`（默认 16）与 `MEMORY_HNSW_EF_CONSTRUCTION`（64）建索引，查询期 `MEMORY_HNSW_EF_SEARCH`（40）在召回与延迟间权衡；IVFFlat 用 `MEMORY_IVFFLAT_LISTS`（≈行数/1000）建索引、`MEMORY_IVFFLAT_PROBES` 查询期探测；数据量小时可设 `none` 走精确扫描。修改参数需 `MEMORY_VECTOR_INDEX_RECREATE=true` 重建索引（`CREATE INDEX IF NOT EXISTS` 不会覆盖旧定义）。召回延迟见 `memory_agent_recall_seconds` 直方图，`/healthz` 暴露当前索引类型；召回按 `tenant_id + user_id` 过滤，强过滤下近似索引可能退化，建议结合 `EXPLAIN ANALYZE` 观察。
 - 所有 agent 统一使用 OpenAI 兼容配置（`RAG_LLM_*` / `INTENT_LLM_*`），DeepSeek 可直接接入。
 
 ## 反馈与评审

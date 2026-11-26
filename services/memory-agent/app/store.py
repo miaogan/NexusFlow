@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -7,6 +8,13 @@ from typing import Any, Protocol
 
 from app.rules import clean_content
 from app.similarity import cosine, lexical_score, vector_literal
+from app.vector_index import (
+    index_statements,
+    normalize_index_type,
+    runtime_settings,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _now() -> str:
@@ -145,11 +153,25 @@ class PostgresMemoryStore:
         embedding_dim: int = 0,
         dedupe_threshold: float = 0.85,
         max_candidates: int = 300,
+        vector_index: str = "hnsw",
+        vector_index_recreate: bool = False,
+        hnsw_m: int = 16,
+        hnsw_ef_construction: int = 64,
+        hnsw_ef_search: int = 40,
+        ivfflat_lists: int = 100,
+        ivfflat_probes: int = 10,
     ) -> None:
         self._dsn = dsn
         self._dim = embedding_dim
         self._threshold = dedupe_threshold
         self._max_candidates = max_candidates
+        self._index_type = normalize_index_type(vector_index)
+        self._index_recreate = vector_index_recreate
+        self._hnsw_m = hnsw_m
+        self._hnsw_ef_construction = hnsw_ef_construction
+        self._hnsw_ef_search = hnsw_ef_search
+        self._ivfflat_lists = ivfflat_lists
+        self._ivfflat_probes = ivfflat_probes
         self._init_schema()
 
     def _connect(self):  # pragma: no cover - exercised against a real database
@@ -189,11 +211,19 @@ class PostgresMemoryStore:
                 "CREATE INDEX IF NOT EXISTS rag_memories_owner_idx "
                 "ON rag_memories (tenant_id, user_id, updated_at DESC)"
             )
-            if self._dim:
-                conn.execute(
-                    "CREATE INDEX IF NOT EXISTS rag_memories_embedding_idx "
-                    "ON rag_memories USING hnsw (embedding vector_cosine_ops)"
-                )
+            statements = index_statements(
+                index_type=self._index_type,
+                dim=self._dim,
+                m=self._hnsw_m,
+                ef_construction=self._hnsw_ef_construction,
+                lists=self._ivfflat_lists,
+                recreate=self._index_recreate,
+            )
+            for statement in statements:
+                try:
+                    conn.execute(statement)
+                except Exception as exc:  # noqa: BLE001 - index tuning is best-effort
+                    logger.warning("vector index setup failed: %s", exc)
 
     def upsert(
         self, tenant_id: str, user_id: str, candidates: list[dict[str, Any]]
@@ -336,6 +366,18 @@ class PostgresMemoryStore:
                 ),
             )
 
+    def _apply_runtime_settings(self, conn: Any) -> None:
+        """Tunes recall for this connection (pgvector session GUCs)."""
+        if not self._dim:
+            return
+        params = runtime_settings(
+            index_type=self._index_type,
+            ef_search=self._hnsw_ef_search,
+            probes=self._ivfflat_probes,
+        )
+        for key, value in params.items():
+            conn.execute("SELECT set_config(%s, %s, false)", (key, value))
+
     def search(
         self,
         tenant_id: str,
@@ -345,6 +387,7 @@ class PostgresMemoryStore:
         top_k: int,
     ) -> list[dict[str, Any]]:  # pragma: no cover - real database only
         with self._connect() as conn:
+            self._apply_runtime_settings(conn)
             if self._dim and query_embedding:
                 literal = vector_literal(query_embedding)
                 rows = conn.execute(

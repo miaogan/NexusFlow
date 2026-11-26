@@ -40,6 +40,18 @@ class Settings(BaseSettings):
     # pgvector when ``embedding_*`` is configured.
     database_url: str = ""
 
+    # pgvector index tuning (effective when embeddings are enabled).
+    # hnsw: better recall at higher build cost; ivfflat: cheaper, needs data
+    # first; none: exact scan, fine for small per-user datasets.
+    vector_index: str = "hnsw"
+    # Drop + recreate the index so changed parameters take effect.
+    vector_index_recreate: bool = False
+    hnsw_m: int = 16
+    hnsw_ef_construction: int = 64
+    hnsw_ef_search: int = 40
+    ivfflat_lists: int = 100
+    ivfflat_probes: int = 10
+
     top_k: int = 3
     max_content_chars: int = 300
     min_content_chars: int = 4

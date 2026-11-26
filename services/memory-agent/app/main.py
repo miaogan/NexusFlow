@@ -7,6 +7,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from app.api.routes import router
 from app.core.config import get_settings
 from app.schemas import HealthResponse
+from app.vector_index import normalize_index_type
 
 settings = get_settings()
 
@@ -21,6 +22,11 @@ def healthz() -> HealthResponse:
         llm_enabled=settings.llm_enabled,
         embedding_enabled=settings.embedding_enabled,
         store="postgres" if settings.database_url else "memory",
+        vector_index=(
+            normalize_index_type(settings.vector_index)
+            if settings.embedding_enabled
+            else "none"
+        ),
     )
 
 

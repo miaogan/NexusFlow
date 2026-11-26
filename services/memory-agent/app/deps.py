@@ -22,6 +22,13 @@ def get_store() -> MemoryStore:
             embedding_dim=settings.embedding_dim if settings.embedding_enabled else 0,
             dedupe_threshold=settings.dedupe_threshold,
             max_candidates=settings.max_recall_candidates,
+            vector_index=settings.vector_index,
+            vector_index_recreate=settings.vector_index_recreate,
+            hnsw_m=settings.hnsw_m,
+            hnsw_ef_construction=settings.hnsw_ef_construction,
+            hnsw_ef_search=settings.hnsw_ef_search,
+            ivfflat_lists=settings.ivfflat_lists,
+            ivfflat_probes=settings.ivfflat_probes,
         )
     return InMemoryMemoryStore(settings.dedupe_threshold)
 

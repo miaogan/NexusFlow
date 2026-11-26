@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
+from time import perf_counter
 from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
-from prometheus_client import Counter
+from prometheus_client import Counter, Histogram
 from pydantic import BaseModel
 
 from app.core.config import Settings
@@ -18,6 +19,12 @@ RECALLS = Counter(
     "memory_agent_recalls_total",
     "Memory recalls by source",
     ["source"],
+)
+RECALL_LATENCY = Histogram(
+    "memory_agent_recall_seconds",
+    "Memory recall latency by source",
+    ["source"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5),
 )
 EXTRACTIONS = Counter(
     "memory_agent_extractions_total",
@@ -87,6 +94,8 @@ class RecallGraph:
             vectors = self._embedder.embed([query])
             embedding = vectors[0] if vectors else None
 
+        source = "semantic" if embedding is not None else "lexical"
+        start = perf_counter()
         memories = self._store.search(
             state["tenant_id"],
             state["user_id"],
@@ -94,7 +103,7 @@ class RecallGraph:
             embedding,
             state.get("top_k") or self._settings.top_k,
         )
-        source = "semantic" if embedding is not None else "lexical"
+        RECALL_LATENCY.labels(source=source).observe(perf_counter() - start)
         RECALLS.labels(source=source).inc()
         return {"memories": memories, "source": source}
 

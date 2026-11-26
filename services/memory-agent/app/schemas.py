@@ -48,3 +48,4 @@ class HealthResponse(BaseModel):
     llm_enabled: bool
     embedding_enabled: bool
     store: str
+    vector_index: str = "none"
