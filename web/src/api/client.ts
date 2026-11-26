@@ -1,5 +1,8 @@
 import type {
   AuthUser,
+  ChatResponse,
+  ConversationDetail,
+  ConversationListResponse,
   Dag,
   JwtClaims,
   LoginResponse,
@@ -229,6 +232,40 @@ export async function runSearch(query: string): Promise<SearchResponse> {
       final_top_n: 5,
     }),
   });
+}
+
+// ---------- RAG chat APIs ----------
+
+export async function chat(
+  message: string,
+  conversationId?: string,
+  topK?: number,
+): Promise<ChatResponse> {
+  return request<ChatResponse>(`${GATEWAY_BASE}/v1/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message,
+      conversation_id: conversationId || undefined,
+      top_k: topK,
+    }),
+  });
+}
+
+export async function listConversations(
+  limit = 20,
+  offset = 0,
+): Promise<ConversationListResponse> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  return request<ConversationListResponse>(
+    `${GATEWAY_BASE}/v1/conversations?${params.toString()}`,
+  );
+}
+
+export async function getConversation(id: string): Promise<ConversationDetail> {
+  return request<ConversationDetail>(
+    `${GATEWAY_BASE}/v1/conversations/${encodeURIComponent(id)}`,
+  );
 }
 
 // ---------- Observability APIs ----------

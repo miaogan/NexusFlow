@@ -31,6 +31,8 @@ type Config struct {
 	MinerUTarget    string
 	RerankURL       string
 	RerankModel     string
+	// RAGAgentURL is the Python RAG chat service (LangGraph) base URL.
+	RAGAgentURL string
 
 	StateDriver string
 	RedisAddr   string
@@ -96,6 +98,7 @@ func Load() Config {
 		MinerUTarget:    env("MINERU_TARGET", ""),
 		RerankURL:       env("RERANK_URL", ""),
 		RerankModel:     env("RERANK_MODEL", "bge-reranker-v2-m3"),
+		RAGAgentURL:     env("RAG_AGENT_URL", "http://127.0.0.1:8001"),
 
 		StateDriver:    env("STATE_DRIVER", "memory"),
 		RedisAddr:      env("REDIS_ADDR", "127.0.0.1:6379"),

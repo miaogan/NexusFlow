@@ -227,6 +227,7 @@ func main() {
 			pb.NewAuthServiceClient(authConn),
 			pb.NewUserServiceClient(userConn),
 		),
+		gateway.WithRAGAgent(cfg.RAGAgentURL),
 	)
 	srv := &http.Server{
 		Addr:              cfg.GatewayHTTPAddr,

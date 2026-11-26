@@ -1,0 +1,290 @@
+from __future__ import annotations
+
+import threading
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Protocol
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _iso(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+class ConversationNotFound(Exception):
+    """Raised when a conversation does not exist for the given owner."""
+
+
+class ConversationStore(Protocol):
+    def create(self, tenant_id: str, user_id: str, title: str) -> dict[str, Any]: ...
+
+    def get(
+        self, tenant_id: str, user_id: str, conversation_id: str
+    ) -> dict[str, Any] | None: ...
+
+    def append(
+        self,
+        conversation_id: str,
+        role: str,
+        content: str,
+        citations: list[dict[str, Any]],
+    ) -> dict[str, Any]: ...
+
+    def list(
+        self, tenant_id: str, user_id: str, limit: int, offset: int
+    ) -> tuple[list[dict[str, Any]], int]: ...
+
+
+def _new_conversation(tenant_id: str, user_id: str, title: str) -> dict[str, Any]:
+    ts = _now()
+    return {
+        "id": uuid.uuid4().hex,
+        "tenant_id": tenant_id,
+        "user_id": user_id,
+        "title": title,
+        "created_at": ts,
+        "updated_at": ts,
+        "message_count": 0,
+        "messages": [],
+    }
+
+
+def _new_message(
+    role: str, content: str, citations: list[dict[str, Any]]
+) -> dict[str, Any]:
+    return {
+        "id": uuid.uuid4().hex,
+        "role": role,
+        "content": content,
+        "citations": citations,
+        "created_at": _now(),
+    }
+
+
+def _summary(conv: dict[str, Any]) -> dict[str, Any]:
+    out = {k: conv[k] for k in ("id", "title", "created_at", "updated_at")}
+    out["message_count"] = conv.get("message_count") or len(conv.get("messages", []))
+    return out
+
+
+class InMemoryConversationStore:
+    """Process-local store used when ``RAG_DATABASE_URL`` is unset."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._conversations: dict[str, dict[str, Any]] = {}
+
+    def create(self, tenant_id: str, user_id: str, title: str) -> dict[str, Any]:
+        conv = _new_conversation(tenant_id, user_id, title)
+        with self._lock:
+            self._conversations[conv["id"]] = conv
+        return _summary(conv)
+
+    def get(
+        self, tenant_id: str, user_id: str, conversation_id: str
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            conv = self._conversations.get(conversation_id)
+            if conv is None or conv["tenant_id"] != tenant_id or conv["user_id"] != user_id:
+                return None
+            return {
+                **_summary(conv),
+                "messages": [dict(m) for m in conv["messages"]],
+            }
+
+    def append(
+        self,
+        conversation_id: str,
+        role: str,
+        content: str,
+        citations: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        msg = _new_message(role, content, citations)
+        with self._lock:
+            conv = self._conversations[conversation_id]
+            conv["messages"].append(msg)
+            conv["updated_at"] = msg["created_at"]
+        return dict(msg)
+
+    def list(
+        self, tenant_id: str, user_id: str, limit: int, offset: int
+    ) -> tuple[list[dict[str, Any]], int]:
+        with self._lock:
+            owned = [
+                c
+                for c in self._conversations.values()
+                if c["tenant_id"] == tenant_id and c["user_id"] == user_id
+            ]
+            owned.sort(key=lambda c: (c["updated_at"], c["id"]), reverse=True)
+            total = len(owned)
+            page = owned[offset : offset + limit]
+            items = [
+                {**_summary(c), "message_count": len(c["messages"])} for c in page
+            ]
+        return items, total
+
+
+class PostgresConversationStore:
+    """Postgres-backed store: conversations + messages in two tables."""
+
+    def __init__(self, dsn: str) -> None:
+        self._dsn = dsn
+        self._init_schema()
+
+    def _connect(self):  # pragma: no cover - exercised against a real database
+        import psycopg
+        from psycopg.rows import dict_row
+
+        return psycopg.connect(self._dsn, row_factory=dict_row)
+
+    def _init_schema(self) -> None:  # pragma: no cover - real database only
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS rag_conversations (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS rag_conversations_owner_idx
+                ON rag_conversations (tenant_id, user_id, updated_at DESC)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS rag_messages (
+                    id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL
+                        REFERENCES rag_conversations(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    citations JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS rag_messages_conversation_idx
+                ON rag_messages (conversation_id, created_at)
+                """
+            )
+
+    def create(self, tenant_id: str, user_id: str, title: str) -> dict[str, Any]:
+        conv_id = uuid.uuid4().hex
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                INSERT INTO rag_conversations (id, tenant_id, user_id, title)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id, title, created_at, updated_at
+                """,
+                (conv_id, tenant_id, user_id, title),
+            ).fetchone()
+        return {**_row(row), "message_count": 0}
+
+    def get(
+        self, tenant_id: str, user_id: str, conversation_id: str
+    ) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            conv = conn.execute(
+                """
+                SELECT id, title, created_at, updated_at
+                FROM rag_conversations
+                WHERE id = %s AND tenant_id = %s AND user_id = %s
+                """,
+                (conversation_id, tenant_id, user_id),
+            ).fetchone()
+            if conv is None:
+                return None
+            rows = conn.execute(
+                """
+                SELECT id, role, content, citations, created_at
+                FROM rag_messages
+                WHERE conversation_id = %s
+                ORDER BY created_at ASC, id ASC
+                """,
+                (conversation_id,),
+            ).fetchall()
+        messages = [_message_row(r) for r in rows]
+        return {**_row(conv), "message_count": len(messages), "messages": messages}
+
+    def append(
+        self,
+        conversation_id: str,
+        role: str,
+        content: str,
+        citations: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        from psycopg.types.json import Jsonb
+
+        msg_id = uuid.uuid4().hex
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                INSERT INTO rag_messages (id, conversation_id, role, content, citations)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id, role, content, citations, created_at
+                """,
+                (msg_id, conversation_id, role, content, Jsonb(citations)),
+            ).fetchone()
+            conn.execute(
+                "UPDATE rag_conversations SET updated_at = now() WHERE id = %s",
+                (conversation_id,),
+            )
+        return _message_row(row)
+
+    def list(
+        self, tenant_id: str, user_id: str, limit: int, offset: int
+    ) -> tuple[list[dict[str, Any]], int]:
+        with self._connect() as conn:
+            total = conn.execute(
+                "SELECT count(*) AS n FROM rag_conversations WHERE tenant_id = %s AND user_id = %s",
+                (tenant_id, user_id),
+            ).fetchone()["n"]
+            rows = conn.execute(
+                """
+                SELECT c.id, c.title, c.created_at, c.updated_at,
+                       (SELECT count(*) FROM rag_messages m
+                        WHERE m.conversation_id = c.id) AS message_count
+                FROM rag_conversations c
+                WHERE c.tenant_id = %s AND c.user_id = %s
+                ORDER BY c.updated_at DESC, c.id DESC
+                LIMIT %s OFFSET %s
+                """,
+                (tenant_id, user_id, limit, offset),
+            ).fetchall()
+        return [{**_row(r), "message_count": int(r["message_count"])} for r in rows], int(
+            total
+        )
+
+
+def _row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "created_at": _iso(row["created_at"]),
+        "updated_at": _iso(row["updated_at"]),
+    }
+
+
+def _message_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "role": row["role"],
+        "content": row["content"],
+        "citations": row.get("citations") or [],
+        "created_at": _iso(row["created_at"]),
+    }

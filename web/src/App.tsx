@@ -4,6 +4,7 @@ import Dashboard from "./pages/Dashboard";
 import Files from "./pages/Files";
 import Tasks from "./pages/Tasks";
 import Search from "./pages/Search";
+import Chat from "./pages/Chat";
 import Workflow from "./pages/Workflow";
 import Sandbox from "./pages/Sandbox";
 import Login from "./pages/Login";
@@ -18,6 +19,7 @@ export default function App() {
         <Route path="/files" element={<Files />} />
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/search" element={<Search />} />
+        <Route path="/chat" element={<Chat />} />
         <Route path="/workflow" element={<Workflow />} />
         <Route path="/sandbox" element={<Sandbox />} />
         <Route path="/users" element={<Users />} />

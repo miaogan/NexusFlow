@@ -50,6 +50,7 @@ flowchart TB
 | Sandbox Execution | Go | `backend/cmd/sandbox-execution` | 9093 | 自定义代码节点强隔离执行 |
 | Query Service | Go | `backend/cmd/query-service` | 9094 | 多路召回、RRF、重排、流式回答 |
 | LlamaIndex Service | Python | `services/llamaindex` | 8000 | 切块、索引、Embedding、检索策略 |
+| RAG Agent | Python | `services/rag-agent` | 8001 | LangGraph 多轮问答、引用、会话持久化 |
 | Web Console | React | `web` | 5173 / 8088 | 控制台：文件管理 / 任务中心 / 检索 / 沙箱 / DAG 编排 |
 
 ```text
@@ -69,6 +70,7 @@ flowchart TB
 │   │   └── platform/              # 日志、指标、HTTP/gRPC 服务封装
 │   └── pb/                        # protoc 生成代码
 ├── services/llamaindex/           # FastAPI + LlamaIndex 数据加工服务
+├── services/rag-agent/            # FastAPI + LangGraph 多轮 RAG 问答服务
 ├── web/                           # React + TS 控制台（路由 + 多页面 + React Flow）
 ├── deploy/
 │   ├── docker-compose.yml         # 完整本地编排
@@ -140,6 +142,7 @@ make web-dev        # http://localhost:5173
 | 文件管理 | `/files` | 拖拽/点击上传文件，查看处理状态 |
 | 任务中心 | `/tasks` | 任务列表、状态过滤、自动轮询、详情 |
 | 检索测试 | `/search` | 多路召回检索、赞/踩反馈与链路分解 |
+| 智能问答 | `/chat` | 多轮 RAG 问答、答案引用、会话历史 |
 | 用户管理 | `/users` | 用户 CRUD、角色与权限点管理（需 `user:read`） |
 | 沙箱 Playground | `/sandbox` | 自定义代码执行与输入/输出合约调试 |
 | 工作流编排 | `/workflow` | 拖拽节点、连线、DAG 校验与试运行 |
@@ -159,6 +162,7 @@ make up
 | Gateway API | http://localhost:8080 |
 | Workflow Engine | http://localhost:8081 |
 | LlamaIndex Service | http://localhost:8000 |
+| RAG Agent | http://localhost:8001 |
 | RabbitMQ 控制台 | http://localhost:15672 |
 | Prometheus / Grafana | http://localhost:9090 / http://localhost:3000 |
 
@@ -218,7 +222,36 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 | DELETE | `/v1/roles/:name` | `role:write` | 删除自定义角色 |
 | GET | `/v1/permissions` | `role:read` | 权限点目录 |
 
-首次启动会自动种子管理员：`admin / admin123`（可用 `SEED_ADMIN_*` 覆盖）。控制台 `/login` 登录后，`admin` 可在"用户管理"页创建账号、分配角色、启停用户，并新建自定义角色。未登录可点"以匿名身份浏览"（需 `ALLOW_ANONYMOUS=true`），匿名身份无任何管理权限。
+首次启动会自动种子管理员：`admin / admin123`（可用 `SEED_ADMIN_*` 覆盖）。控制台 `/login` 登录后，`admin` 可在"用户管理"页创建账号、分配角色、启停用户，并新建自定义角色。未登录可点"以匿名身份浏览"（需 `ALLOW_ANONYMOUS=true`），匿名身份仅有 `search:use`，可使用检索与智能问答，但无任何管理权限。
+
+## RAG 对话服务（LangGraph）
+
+`services/rag-agent` 打通「用户身份」与「检索」，提供多轮问答、答案引用与会话历史：
+
+- **身份联动**：网关校验 JWT 后将 `x-tenant-id` / `x-user-id` / `Authorization` 透传给 rag-agent；会话与消息按「租户 + 用户」隔离，匿名调用者落在 `default/anonymous`。
+- **检索复用**：rag-agent 通过 `RAG_GATEWAY_URL` 调用网关 `/v1/search`，复用统一的多路召回 + RRF + 重排链路与 trace，而不是自建第二套检索。
+- **LangGraph 生成**：`retrieve → generate` 两节点状态图；配置 `RAG_LLM_BASE_URL` + `RAG_LLM_API_KEY`（OpenAI 兼容）时调用大模型，未配置时降级为抽取式片段摘要，保证无 Key 也能演示。
+- **会话存储**：`RAG_DATABASE_URL` 指向 Postgres 时持久化到 `rag_conversations` / `rag_messages`；为空则使用进程内存储（仅开发）。
+
+本地运行（先启动 dev-all 提供网关与检索，再启动 rag-agent）：
+
+```bash
+# 终端 1：Go 全链路（含 Gateway :8080 与查询服务）
+make run-dev-all
+
+# 终端 2：RAG agent（内存会话 + 抽取式回答，无需外部依赖）
+cd services/rag-agent
+pip install -e ".[dev]"
+RAG_GATEWAY_URL=http://127.0.0.1:8080 uvicorn app.main:app --port 8001
+```
+
+网关端点（`RAG_AGENT_URL` 为空会关闭代理）：
+
+| 方法 | 路径 | 鉴权 | 说明 |
+| --- | --- | --- | --- |
+| POST | `/v1/chat` | `search:use` | 提问 `{message, conversation_id?, top_k?, kb_id?}`，返回答案 + 引用 |
+| GET | `/v1/conversations` | `search:use` | 当前用户的会话列表（分页） |
+| GET | `/v1/conversations/:id` | `search:use` | 会话详情（消息 + 引用） |
 
 ## 安全与可靠性加固
 

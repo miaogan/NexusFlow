@@ -167,6 +167,52 @@ export interface FeedbackRequest {
   name?: string;
 }
 
+// ---------- RAG chat ----------
+
+export interface Citation {
+  chunk_id: string;
+  content: string;
+  score: number;
+  meta?: Record<string, string>;
+}
+
+export interface ChatResponse {
+  conversation_id: string;
+  message_id: string;
+  answer: string;
+  citations: Citation[];
+  trace_id?: string;
+  created_at: string;
+}
+
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationListResponse {
+  conversations: ConversationSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant" | string;
+  content: string;
+  citations?: Citation[];
+  created_at: string;
+}
+
+export interface ConversationDetail {
+  conversation: ConversationSummary;
+  messages: ChatMessage[];
+}
+
 // ---------- Identity / auth ----------
 
 export interface AuthUser {

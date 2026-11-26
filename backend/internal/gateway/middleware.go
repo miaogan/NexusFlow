@@ -33,7 +33,14 @@ func Auth(secret string, allowAnonymous bool) gin.HandlerFunc {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
 				return
 			}
-			p := tenant.Principal{TenantID: "default", UserID: "anonymous", Roles: []string{"reader"}}
+			// Anonymous callers keep read-only access: they may search and use
+			// retrieval-backed chat, but never manage files, users or roles.
+			p := tenant.Principal{
+				TenantID:    "default",
+				UserID:      "anonymous",
+				Roles:       []string{"reader"},
+				Permissions: []string{"search:use"},
+			}
 			c.Request = c.Request.WithContext(tenant.With(c.Request.Context(), p))
 			c.Next()
 			return

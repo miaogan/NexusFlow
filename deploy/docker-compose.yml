@@ -36,6 +36,20 @@ services:
       timeout: 10s
       retries: 5
 
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: nexusflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexusflow}
+      POSTGRES_DB: nexusflow
+    ports: ["5432:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexusflow -d nexusflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   qdrant:
     image: qdrant/qdrant:v1.12.4
     ports: ["6333:6333"]
@@ -63,8 +77,9 @@ services:
       SANDBOX_TARGET: "sandbox-execution:9093"
       AUTH_TARGET: "auth-service:9096"
       USER_TARGET: "user-service:9097"
+      RAG_AGENT_URL: "http://rag-agent:8001"
       METRICS_ADDR: ""
-    depends_on: [ingestion, query-service, sandbox-execution, auth-service, user-service]
+    depends_on: [ingestion, query-service, sandbox-execution, auth-service, user-service, rag-agent]
     volumes: ["objects:/data/objects"]
     ports: ["8080:8080"]
 
@@ -162,6 +177,25 @@ services:
     depends_on: [qdrant]
     ports: ["8000:8000"]
 
+  rag-agent:
+    build:
+      context: ../services/rag-agent
+    environment:
+      RAG_APP_ENV: prod
+      # Retrieval goes through the gateway so chat reuses the unified
+      # multi-route recall + rerank pipeline.
+      RAG_GATEWAY_URL: http://gateway:8080
+      # Empty RAG_DATABASE_URL -> in-memory conversations (dev only).
+      RAG_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
+      RAG_LLM_BASE_URL: ${LLM_BASE_URL:-}
+      RAG_LLM_API_KEY: ${LLM_API_KEY:-}
+      RAG_LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      RAG_DEFAULT_TOP_K: "5"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports: ["8001:8001"]
+
   web:
     build:
       context: ../web
@@ -185,4 +219,5 @@ volumes:
   redis-data:
   qdrant-data:
   minio-data:
+  postgres-data:
   objects:

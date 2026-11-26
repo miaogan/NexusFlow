@@ -11,6 +11,7 @@ const NAV: NavItem[] = [
   { to: "/files", label: "文件管理" },
   { to: "/tasks", label: "任务中心" },
   { to: "/search", label: "检索测试" },
+  { to: "/chat", label: "智能问答" },
   { to: "/workflow", label: "工作流编排" },
   { to: "/sandbox", label: "沙箱 Playground" },
 ];

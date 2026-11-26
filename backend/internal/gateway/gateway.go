@@ -44,6 +44,8 @@ type Gateway struct {
 	secret    string
 	allowAnon bool
 	tracer    tracing.Tracer
+	// rag proxies chat/conversation calls to the Python RAG agent.
+	rag *ragProxy
 	// allowedUploadHosts restricts presigned upload URLs; empty disables the check.
 	allowedUploadHosts map[string]struct{}
 }
@@ -68,6 +70,12 @@ func WithAllowedUploadHosts(hosts []string) Option {
 // WithTracer attaches the observability tracer (feedback scores + trace viewer).
 func WithTracer(t tracing.Tracer) Option {
 	return func(g *Gateway) { g.tracer = t }
+}
+
+// WithRAGAgent enables the RAG chat endpoints by pointing the gateway at the
+// Python rag-agent service. An empty URL leaves chat disabled.
+func WithRAGAgent(rawURL string) Option {
+	return func(g *Gateway) { g.rag = newRAGProxy(rawURL) }
 }
 
 // WithIdentity attaches the authentication and user-management gRPC clients.
@@ -128,6 +136,10 @@ func (g *Gateway) Router() *gin.Engine {
 	v1.DELETE("/tasks/:id", g.deleteTask)
 	v1.POST("/tasks/:id/retry", g.retryTask)
 	v1.POST("/search", g.search)
+	// RAG chat: multi-turn Q&A over the retrieval corpus, scoped to the caller.
+	v1.POST("/chat", RequirePermission("search:use"), g.chat)
+	v1.GET("/conversations", RequirePermission("search:use"), g.listConversations)
+	v1.GET("/conversations/:id", RequirePermission("search:use"), g.getConversation)
 	v1.POST("/feedback", g.submitFeedback)
 	v1.GET("/traces", g.listTraces)
 	v1.GET("/traces/:id", g.getTrace)
