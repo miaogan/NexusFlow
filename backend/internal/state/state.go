@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 )
@@ -73,6 +74,7 @@ type Task struct {
 type Store interface {
 	Create(ctx context.Context, t Task) (Task, bool, error)
 	Get(ctx context.Context, id string) (Task, bool, error)
+	List(ctx context.Context, tenantID, status string, limit, offset int) ([]Task, int, error)
 	Transition(ctx context.Context, id string, to State, errMsg string) (Task, error)
 }
 
@@ -134,6 +136,40 @@ func (m *Machine) Get(_ context.Context, id string) (Task, bool, error) {
 		return Task{}, false, nil
 	}
 	return *t, true, nil
+}
+
+// List returns tasks for a tenant, optionally filtered by status, newest first.
+// A zero limit returns all matched tasks after the offset.
+func (m *Machine) List(_ context.Context, tenantID, status string, limit, offset int) ([]Task, int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	matched := make([]Task, 0)
+	for _, t := range m.tasks {
+		if tenantID != "" && t.TenantID != tenantID {
+			continue
+		}
+		if status != "" && string(t.State) != status {
+			continue
+		}
+		matched = append(matched, *t)
+	}
+	sort.Slice(matched, func(i, j int) bool {
+		return matched[i].CreatedAt.After(matched[j].CreatedAt)
+	})
+
+	total := len(matched)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	end := offset + limit
+	if limit <= 0 || end > total {
+		end = total
+	}
+	return matched[offset:end], total, nil
 }
 
 func (m *Machine) Transition(_ context.Context, id string, to State, errMsg string) (Task, error) {

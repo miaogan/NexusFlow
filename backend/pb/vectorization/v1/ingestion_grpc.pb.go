@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	IngestionService_UploadFile_FullMethodName    = "/vectorization.v1.IngestionService/UploadFile"
 	IngestionService_GetTaskStatus_FullMethodName = "/vectorization.v1.IngestionService/GetTaskStatus"
+	IngestionService_ListTasks_FullMethodName     = "/vectorization.v1.IngestionService/ListTasks"
 )
 
 // IngestionServiceClient is the client API for IngestionService service.
@@ -31,6 +32,7 @@ const (
 type IngestionServiceClient interface {
 	UploadFile(ctx context.Context, in *UploadFileRequest, opts ...grpc.CallOption) (*UploadFileResponse, error)
 	GetTaskStatus(ctx context.Context, in *GetTaskStatusRequest, opts ...grpc.CallOption) (*GetTaskStatusResponse, error)
+	ListTasks(ctx context.Context, in *ListTasksRequest, opts ...grpc.CallOption) (*ListTasksResponse, error)
 }
 
 type ingestionServiceClient struct {
@@ -61,6 +63,16 @@ func (c *ingestionServiceClient) GetTaskStatus(ctx context.Context, in *GetTaskS
 	return out, nil
 }
 
+func (c *ingestionServiceClient) ListTasks(ctx context.Context, in *ListTasksRequest, opts ...grpc.CallOption) (*ListTasksResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTasksResponse)
+	err := c.cc.Invoke(ctx, IngestionService_ListTasks_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // IngestionServiceServer is the server API for IngestionService service.
 // All implementations must embed UnimplementedIngestionServiceServer
 // for forward compatibility.
@@ -69,6 +81,7 @@ func (c *ingestionServiceClient) GetTaskStatus(ctx context.Context, in *GetTaskS
 type IngestionServiceServer interface {
 	UploadFile(context.Context, *UploadFileRequest) (*UploadFileResponse, error)
 	GetTaskStatus(context.Context, *GetTaskStatusRequest) (*GetTaskStatusResponse, error)
+	ListTasks(context.Context, *ListTasksRequest) (*ListTasksResponse, error)
 	mustEmbedUnimplementedIngestionServiceServer()
 }
 
@@ -84,6 +97,9 @@ func (UnimplementedIngestionServiceServer) UploadFile(context.Context, *UploadFi
 }
 func (UnimplementedIngestionServiceServer) GetTaskStatus(context.Context, *GetTaskStatusRequest) (*GetTaskStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetTaskStatus not implemented")
+}
+func (UnimplementedIngestionServiceServer) ListTasks(context.Context, *ListTasksRequest) (*ListTasksResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListTasks not implemented")
 }
 func (UnimplementedIngestionServiceServer) mustEmbedUnimplementedIngestionServiceServer() {}
 func (UnimplementedIngestionServiceServer) testEmbeddedByValue()                          {}
@@ -142,6 +158,24 @@ func _IngestionService_GetTaskStatus_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _IngestionService_ListTasks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTasksRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IngestionServiceServer).ListTasks(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IngestionService_ListTasks_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IngestionServiceServer).ListTasks(ctx, req.(*ListTasksRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // IngestionService_ServiceDesc is the grpc.ServiceDesc for IngestionService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -156,6 +190,10 @@ var IngestionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTaskStatus",
 			Handler:    _IngestionService_GetTaskStatus_Handler,
+		},
+		{
+			MethodName: "ListTasks",
+			Handler:    _IngestionService_ListTasks_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

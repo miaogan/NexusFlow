@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -70,10 +72,14 @@ func (s *Service) UploadFile(ctx context.Context, req *pb.UploadFileRequest) (*p
 
 	principal := tenant.FromIncoming(ctx)
 	taskID := uuid.NewString()
-	objectKey := fmt.Sprintf("%s/%s/%s", principal.TenantID, taskID, req.GetFileName())
+	// object_key 由 gateway 直传时指定（文件已落地对象存储），否则在此生成。
+	objectKey := req.GetObjectKey()
+	if objectKey == "" {
+		objectKey = fmt.Sprintf("%s/%s/%s", principal.TenantID, taskID, req.GetFileName())
+	}
 
-	contentHash := ""
-	if req.GetMetadata() != nil {
+	contentHash := req.GetContentHash()
+	if contentHash == "" && req.GetMetadata() != nil {
 		contentHash = req.GetMetadata()["content_hash"]
 	}
 
@@ -140,4 +146,45 @@ func (s *Service) GetTaskStatus(ctx context.Context, req *pb.GetTaskStatusReques
 		Progress: task.Progress,
 		ErrorMsg: task.ErrorMsg,
 	}, nil
+}
+
+func (s *Service) ListTasks(ctx context.Context, req *pb.ListTasksRequest) (*pb.ListTasksResponse, error) {
+	principal := tenant.FromIncoming(ctx)
+	limit := int(req.GetLimit())
+	if limit <= 0 {
+		limit = 50
+	}
+	offset := int(req.GetOffset())
+	if offset < 0 {
+		offset = 0
+	}
+	tasks, total, err := s.machine.List(ctx, principal.TenantID, req.GetStatus(), limit, offset)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	out := make([]*pb.TaskSummary, 0, len(tasks))
+	for _, t := range tasks {
+		out = append(out, toTaskSummary(t))
+	}
+	return &pb.ListTasksResponse{Tasks: out, Total: int32(total)}, nil
+}
+
+func toTaskSummary(t state.Task) *pb.TaskSummary {
+	meta := t.Metadata
+	if meta == nil {
+		meta = map[string]string{}
+	}
+	fileSize, _ := strconv.ParseInt(meta["file_size"], 10, 64)
+	return &pb.TaskSummary{
+		TaskId:      t.ID,
+		Status:      string(t.State),
+		Progress:    t.Progress,
+		FileName:    meta["file_name"],
+		FileType:    meta["file_type"],
+		FileSize:    fileSize,
+		ContentHash: t.ContentHash,
+		ErrorMsg:    t.ErrorMsg,
+		CreatedAt:   t.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:   t.UpdatedAt.Format(time.RFC3339),
+	}
 }

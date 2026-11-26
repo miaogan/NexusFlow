@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strconv"
 	"time"
 
@@ -39,6 +40,8 @@ func taskKey(id string) string { return "nexusflow:task:" + id }
 func idemKey(tenantID, hash string) string {
 	return "nexusflow:idem:" + tenantID + ":" + hash
 }
+
+func tenantTasksKey(tenantID string) string { return "nexusflow:tenant:" + tenantID + ":tasks" }
 
 func (s *RedisStore) Create(ctx context.Context, t Task) (Task, bool, error) {
 	if t.ID == "" {
@@ -94,7 +97,48 @@ func (s *RedisStore) Create(ctx context.Context, t Task) (Task, bool, error) {
 	if err := s.rdb.HSet(ctx, taskKey(t.ID), fields).Err(); err != nil {
 		return Task{}, false, err
 	}
+	if err := s.rdb.SAdd(ctx, tenantTasksKey(t.TenantID), t.ID).Err(); err != nil {
+		return Task{}, false, err
+	}
 	return t, true, nil
+}
+
+// List scans the tenant's task index, filters by status and paginates.
+func (s *RedisStore) List(ctx context.Context, tenantID, status string, limit, offset int) ([]Task, int, error) {
+	if tenantID == "" {
+		return nil, 0, nil
+	}
+	ids, err := s.rdb.SMembers(ctx, tenantTasksKey(tenantID)).Result()
+	if err != nil {
+		return nil, 0, err
+	}
+	matched := make([]Task, 0, len(ids))
+	for _, id := range ids {
+		t, ok, err := s.Get(ctx, id)
+		if err != nil || !ok {
+			continue
+		}
+		if status != "" && string(t.State) != status {
+			continue
+		}
+		matched = append(matched, t)
+	}
+	sort.Slice(matched, func(i, j int) bool {
+		return matched[i].CreatedAt.After(matched[j].CreatedAt)
+	})
+
+	total := len(matched)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	end := offset + limit
+	if limit <= 0 || end > total {
+		end = total
+	}
+	return matched[offset:end], total, nil
 }
 
 func (s *RedisStore) Get(ctx context.Context, id string) (Task, bool, error) {

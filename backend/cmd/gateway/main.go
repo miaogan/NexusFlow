@@ -12,6 +12,7 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/gateway"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/httpserver"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/log"
+	"github.com/nexusflow/nexusflow/backend/internal/store"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -23,6 +24,12 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	objects, err := store.NewLocalObjectStore(cfg.ObjectStoreDir, cfg.ObjectStoreBase)
+	if err != nil {
+		logger.Error("init object store", "error", err)
+		os.Exit(1)
+	}
 
 	ingestConn, err := grpc.NewClient(cfg.IngestionTarget, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -38,9 +45,18 @@ func main() {
 	}
 	defer queryConn.Close()
 
+	sandboxConn, err := grpc.NewClient(cfg.SandboxTarget, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		logger.Error("connect sandbox", "error", err)
+		os.Exit(1)
+	}
+	defer sandboxConn.Close()
+
 	g := gateway.New(
 		pb.NewIngestionServiceClient(ingestConn),
 		pb.NewQueryServiceClient(queryConn),
+		pb.NewSandboxExecutionServiceClient(sandboxConn),
+		objects,
 		logger, cfg.JWTSecret, cfg.AllowAnonymous,
 	)
 

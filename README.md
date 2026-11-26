@@ -48,7 +48,7 @@ flowchart TB
 | Sandbox Execution | Go | `backend/cmd/sandbox-execution` | 9093 | 自定义代码节点强隔离执行 |
 | Query Service | Go | `backend/cmd/query-service` | 9094 | 多路召回、RRF、重排、流式回答 |
 | LlamaIndex Service | Python | `services/llamaindex` | 8000 | 切块、索引、Embedding、检索策略 |
-| Web Canvas | React | `web` | 5173 / 8088 | 可视化 DAG 画布与调试面板 |
+| Web Console | React | `web` | 5173 / 8088 | 控制台：文件管理 / 任务中心 / 检索 / 沙箱 / DAG 编排 |
 
 ```text
 .
@@ -67,7 +67,7 @@ flowchart TB
 │   │   └── platform/              # 日志、指标、HTTP/gRPC 服务封装
 │   └── pb/                        # protoc 生成代码
 ├── services/llamaindex/           # FastAPI + LlamaIndex 数据加工服务
-├── web/                           # React + TypeScript + React Flow 画布
+├── web/                           # React + TS 控制台（路由 + 多页面 + React Flow）
 ├── deploy/
 │   ├── docker-compose.yml         # 完整本地编排
 │   ├── k8s/nexusflow.yaml         # K8s 部署 + HPA 自定义指标
@@ -80,7 +80,7 @@ flowchart TB
 
 ### 1. 单进程跑通全链路
 
-无需任何外部依赖，使用内存消息总线 + Mock MinerU：
+无需任何外部依赖，单进程即启动 Gateway（:8080）、Workflow Engine（:8081）与全部 gRPC 服务，使用内存消息总线 + Mock MinerU：
 
 ```bash
 make run-dev-all
@@ -89,18 +89,29 @@ make run-dev-all
 然后：
 
 ```bash
-# 登记文件任务（dev 模式允许匿名）
+# 1) 上传真实文件（multipart）——文件写入对象存储并登记任务
+curl -s http://127.0.0.1:8080/v1/files -F "file=@./README.md"
+
+# 或仅登记元数据（文件由客户端直传对象存储时使用）
 curl -s http://127.0.0.1:8080/v1/files \
   -H 'Content-Type: application/json' \
   -d '{"file_name":"demo.pdf","file_type":"pdf","file_size":1024}'
 
-# 查询任务状态（task_id 换成上一步返回值）
+# 2) 任务列表（按状态过滤 / 分页）
+curl -s "http://127.0.0.1:8080/v1/tasks?limit=20"
+
+# 3) 单个任务状态（task_id 换成上一步返回值）
 curl -s http://127.0.0.1:8080/v1/tasks/<task_id>
 
-# 检索（内置演示语料）
+# 4) 检索（内置演示语料）
 curl -s http://127.0.0.1:8080/v1/search \
   -H 'Content-Type: application/json' \
   -d '{"query":"三路召回如何融合？","routes":[{"type":"vector","top_k":20},{"type":"bm25","top_k":20}],"final_top_n":5}'
+
+# 5) 沙箱执行自定义代码（输入/输出走 /tmp/input.json、/tmp/output.json）
+curl -s http://127.0.0.1:8080/v1/sandbox/execute \
+  -H 'Content-Type: application/json' \
+  -d '{"code":"print(1+2)","runtime":"python","timeout_seconds":10}'
 ```
 
 DAG 校验与试运行：
@@ -111,14 +122,25 @@ curl -s http://127.0.0.1:8081/v1/workflows/validate \
   -d '{"dag":{"name":"demo","nodes":[{"id":"ingest","type":"ingest"},{"id":"parse","type":"parse"}],"edges":[{"from":"ingest","to":"parse"}]}}'
 ```
 
-### 2. 前端画布
+### 2. 前端控制台
 
 ```bash
 make web-install
 make web-dev        # http://localhost:5173
 ```
 
-画布通过 Vite 代理连接 Gateway（`/api`）与 Workflow Engine（`/wf`），支持拖拽节点、连线、DAG 校验、试运行与检索调试。
+控制台通过 Vite 代理连接 Gateway（`/api`）与 Workflow Engine（`/wf`），包含以下页面：
+
+| 页面 | 路径 | 功能 |
+| --- | --- | --- |
+| 概览 | `/` | 任务统计、最近任务、快捷入口 |
+| 文件管理 | `/files` | 拖拽/点击上传文件，查看处理状态 |
+| 任务中心 | `/tasks` | 任务列表、状态过滤、自动轮询、详情 |
+| 检索测试 | `/search` | 多路召回检索与结果展示 |
+| 沙箱 Playground | `/sandbox` | 自定义代码执行与输入/输出合约调试 |
+| 工作流编排 | `/workflow` | 拖拽节点、连线、DAG 校验与试运行 |
+
+右上角「Token」可粘贴 JWT 切换租户身份；留空则匿名访问（需 `ALLOW_ANONYMOUS=true`）。
 
 ### 3. 完整容器编排
 

@@ -28,6 +28,8 @@ type UploadFileRequest struct {
 	FileSize      int64                  `protobuf:"varint,3,opt,name=file_size,json=fileSize,proto3" json:"file_size,omitempty"`
 	PresignedUrl  string                 `protobuf:"bytes,4,opt,name=presigned_url,json=presignedUrl,proto3" json:"presigned_url,omitempty"` // 预签名直传地址
 	Metadata      map[string]string      `protobuf:"bytes,5,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	ObjectKey     string                 `protobuf:"bytes,6,opt,name=object_key,json=objectKey,proto3" json:"object_key,omitempty"`       // 已落地的对象存储 key（gateway 直传时填写）
+	ContentHash   string                 `protobuf:"bytes,7,opt,name=content_hash,json=contentHash,proto3" json:"content_hash,omitempty"` // 文件内容 sha256，作为幂等键
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -97,6 +99,248 @@ func (x *UploadFileRequest) GetMetadata() map[string]string {
 	return nil
 }
 
+func (x *UploadFileRequest) GetObjectKey() string {
+	if x != nil {
+		return x.ObjectKey
+	}
+	return ""
+}
+
+func (x *UploadFileRequest) GetContentHash() string {
+	if x != nil {
+		return x.ContentHash
+	}
+	return ""
+}
+
+type TaskSummary struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	Progress      int32                  `protobuf:"varint,3,opt,name=progress,proto3" json:"progress,omitempty"`
+	FileName      string                 `protobuf:"bytes,4,opt,name=file_name,json=fileName,proto3" json:"file_name,omitempty"`
+	FileType      string                 `protobuf:"bytes,5,opt,name=file_type,json=fileType,proto3" json:"file_type,omitempty"`
+	FileSize      int64                  `protobuf:"varint,6,opt,name=file_size,json=fileSize,proto3" json:"file_size,omitempty"`
+	ContentHash   string                 `protobuf:"bytes,7,opt,name=content_hash,json=contentHash,proto3" json:"content_hash,omitempty"`
+	ErrorMsg      string                 `protobuf:"bytes,8,opt,name=error_msg,json=errorMsg,proto3" json:"error_msg,omitempty"`
+	CreatedAt     string                 `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt     string                 `protobuf:"bytes,10,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TaskSummary) Reset() {
+	*x = TaskSummary{}
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskSummary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskSummary) ProtoMessage() {}
+
+func (x *TaskSummary) ProtoReflect() protoreflect.Message {
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskSummary.ProtoReflect.Descriptor instead.
+func (*TaskSummary) Descriptor() ([]byte, []int) {
+	return file_vectorization_v1_ingestion_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *TaskSummary) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *TaskSummary) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *TaskSummary) GetProgress() int32 {
+	if x != nil {
+		return x.Progress
+	}
+	return 0
+}
+
+func (x *TaskSummary) GetFileName() string {
+	if x != nil {
+		return x.FileName
+	}
+	return ""
+}
+
+func (x *TaskSummary) GetFileType() string {
+	if x != nil {
+		return x.FileType
+	}
+	return ""
+}
+
+func (x *TaskSummary) GetFileSize() int64 {
+	if x != nil {
+		return x.FileSize
+	}
+	return 0
+}
+
+func (x *TaskSummary) GetContentHash() string {
+	if x != nil {
+		return x.ContentHash
+	}
+	return ""
+}
+
+func (x *TaskSummary) GetErrorMsg() string {
+	if x != nil {
+		return x.ErrorMsg
+	}
+	return ""
+}
+
+func (x *TaskSummary) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
+func (x *TaskSummary) GetUpdatedAt() string {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return ""
+}
+
+type ListTasksRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        string                 `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"` // 空表示全部
+	Limit         int32                  `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
+	Offset        int32                  `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListTasksRequest) Reset() {
+	*x = ListTasksRequest{}
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListTasksRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTasksRequest) ProtoMessage() {}
+
+func (x *ListTasksRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTasksRequest.ProtoReflect.Descriptor instead.
+func (*ListTasksRequest) Descriptor() ([]byte, []int) {
+	return file_vectorization_v1_ingestion_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ListTasksRequest) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *ListTasksRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *ListTasksRequest) GetOffset() int32 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+type ListTasksResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tasks         []*TaskSummary         `protobuf:"bytes,1,rep,name=tasks,proto3" json:"tasks,omitempty"`
+	Total         int32                  `protobuf:"varint,2,opt,name=total,proto3" json:"total,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListTasksResponse) Reset() {
+	*x = ListTasksResponse{}
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListTasksResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTasksResponse) ProtoMessage() {}
+
+func (x *ListTasksResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTasksResponse.ProtoReflect.Descriptor instead.
+func (*ListTasksResponse) Descriptor() ([]byte, []int) {
+	return file_vectorization_v1_ingestion_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ListTasksResponse) GetTasks() []*TaskSummary {
+	if x != nil {
+		return x.Tasks
+	}
+	return nil
+}
+
+func (x *ListTasksResponse) GetTotal() int32 {
+	if x != nil {
+		return x.Total
+	}
+	return 0
+}
+
 type UploadFileResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
@@ -108,7 +352,7 @@ type UploadFileResponse struct {
 
 func (x *UploadFileResponse) Reset() {
 	*x = UploadFileResponse{}
-	mi := &file_vectorization_v1_ingestion_proto_msgTypes[1]
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -120,7 +364,7 @@ func (x *UploadFileResponse) String() string {
 func (*UploadFileResponse) ProtoMessage() {}
 
 func (x *UploadFileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_ingestion_proto_msgTypes[1]
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -133,7 +377,7 @@ func (x *UploadFileResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadFileResponse.ProtoReflect.Descriptor instead.
 func (*UploadFileResponse) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_ingestion_proto_rawDescGZIP(), []int{1}
+	return file_vectorization_v1_ingestion_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *UploadFileResponse) GetTaskId() string {
@@ -166,7 +410,7 @@ type GetTaskStatusRequest struct {
 
 func (x *GetTaskStatusRequest) Reset() {
 	*x = GetTaskStatusRequest{}
-	mi := &file_vectorization_v1_ingestion_proto_msgTypes[2]
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -178,7 +422,7 @@ func (x *GetTaskStatusRequest) String() string {
 func (*GetTaskStatusRequest) ProtoMessage() {}
 
 func (x *GetTaskStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_ingestion_proto_msgTypes[2]
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -191,7 +435,7 @@ func (x *GetTaskStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTaskStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetTaskStatusRequest) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_ingestion_proto_rawDescGZIP(), []int{2}
+	return file_vectorization_v1_ingestion_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *GetTaskStatusRequest) GetTaskId() string {
@@ -213,7 +457,7 @@ type GetTaskStatusResponse struct {
 
 func (x *GetTaskStatusResponse) Reset() {
 	*x = GetTaskStatusResponse{}
-	mi := &file_vectorization_v1_ingestion_proto_msgTypes[3]
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -225,7 +469,7 @@ func (x *GetTaskStatusResponse) String() string {
 func (*GetTaskStatusResponse) ProtoMessage() {}
 
 func (x *GetTaskStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_ingestion_proto_msgTypes[3]
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -238,7 +482,7 @@ func (x *GetTaskStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTaskStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetTaskStatusResponse) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_ingestion_proto_rawDescGZIP(), []int{3}
+	return file_vectorization_v1_ingestion_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *GetTaskStatusResponse) GetTaskId() string {
@@ -273,16 +517,40 @@ var File_vectorization_v1_ingestion_proto protoreflect.FileDescriptor
 
 const file_vectorization_v1_ingestion_proto_rawDesc = "" +
 	"\n" +
-	" vectorization/v1/ingestion.proto\x12\x10vectorization.v1\"\x9b\x02\n" +
+	" vectorization/v1/ingestion.proto\x12\x10vectorization.v1\"\xdd\x02\n" +
 	"\x11UploadFileRequest\x12\x1b\n" +
 	"\tfile_name\x18\x01 \x01(\tR\bfileName\x12\x1b\n" +
 	"\tfile_type\x18\x02 \x01(\tR\bfileType\x12\x1b\n" +
 	"\tfile_size\x18\x03 \x01(\x03R\bfileSize\x12#\n" +
 	"\rpresigned_url\x18\x04 \x01(\tR\fpresignedUrl\x12M\n" +
-	"\bmetadata\x18\x05 \x03(\v21.vectorization.v1.UploadFileRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bmetadata\x18\x05 \x03(\v21.vectorization.v1.UploadFileRequest.MetadataEntryR\bmetadata\x12\x1d\n" +
+	"\n" +
+	"object_key\x18\x06 \x01(\tR\tobjectKey\x12!\n" +
+	"\fcontent_hash\x18\a \x01(\tR\vcontentHash\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"_\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xaf\x02\n" +
+	"\vTaskSummary\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\x12\x1a\n" +
+	"\bprogress\x18\x03 \x01(\x05R\bprogress\x12\x1b\n" +
+	"\tfile_name\x18\x04 \x01(\tR\bfileName\x12\x1b\n" +
+	"\tfile_type\x18\x05 \x01(\tR\bfileType\x12\x1b\n" +
+	"\tfile_size\x18\x06 \x01(\x03R\bfileSize\x12!\n" +
+	"\fcontent_hash\x18\a \x01(\tR\vcontentHash\x12\x1b\n" +
+	"\terror_msg\x18\b \x01(\tR\berrorMsg\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\t \x01(\tR\tcreatedAt\x12\x1d\n" +
+	"\n" +
+	"updated_at\x18\n" +
+	" \x01(\tR\tupdatedAt\"X\n" +
+	"\x10ListTasksRequest\x12\x16\n" +
+	"\x06status\x18\x01 \x01(\tR\x06status\x12\x14\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\x12\x16\n" +
+	"\x06offset\x18\x03 \x01(\x05R\x06offset\"^\n" +
+	"\x11ListTasksResponse\x123\n" +
+	"\x05tasks\x18\x01 \x03(\v2\x1d.vectorization.v1.TaskSummaryR\x05tasks\x12\x14\n" +
+	"\x05total\x18\x02 \x01(\x05R\x05total\"_\n" +
 	"\x12UploadFileResponse\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x18\n" +
@@ -293,11 +561,12 @@ const file_vectorization_v1_ingestion_proto_rawDesc = "" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x1a\n" +
 	"\bprogress\x18\x03 \x01(\x05R\bprogress\x12\x1b\n" +
-	"\terror_msg\x18\x04 \x01(\tR\berrorMsg2\xcd\x01\n" +
+	"\terror_msg\x18\x04 \x01(\tR\berrorMsg2\xa3\x02\n" +
 	"\x10IngestionService\x12W\n" +
 	"\n" +
 	"UploadFile\x12#.vectorization.v1.UploadFileRequest\x1a$.vectorization.v1.UploadFileResponse\x12`\n" +
-	"\rGetTaskStatus\x12&.vectorization.v1.GetTaskStatusRequest\x1a'.vectorization.v1.GetTaskStatusResponseBLZJgithub.com/nexusflow/nexusflow/backend/pb/vectorization/v1;vectorizationv1b\x06proto3"
+	"\rGetTaskStatus\x12&.vectorization.v1.GetTaskStatusRequest\x1a'.vectorization.v1.GetTaskStatusResponse\x12T\n" +
+	"\tListTasks\x12\".vectorization.v1.ListTasksRequest\x1a#.vectorization.v1.ListTasksResponseBLZJgithub.com/nexusflow/nexusflow/backend/pb/vectorization/v1;vectorizationv1b\x06proto3"
 
 var (
 	file_vectorization_v1_ingestion_proto_rawDescOnce sync.Once
@@ -311,25 +580,31 @@ func file_vectorization_v1_ingestion_proto_rawDescGZIP() []byte {
 	return file_vectorization_v1_ingestion_proto_rawDescData
 }
 
-var file_vectorization_v1_ingestion_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_vectorization_v1_ingestion_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_vectorization_v1_ingestion_proto_goTypes = []any{
 	(*UploadFileRequest)(nil),     // 0: vectorization.v1.UploadFileRequest
-	(*UploadFileResponse)(nil),    // 1: vectorization.v1.UploadFileResponse
-	(*GetTaskStatusRequest)(nil),  // 2: vectorization.v1.GetTaskStatusRequest
-	(*GetTaskStatusResponse)(nil), // 3: vectorization.v1.GetTaskStatusResponse
-	nil,                           // 4: vectorization.v1.UploadFileRequest.MetadataEntry
+	(*TaskSummary)(nil),           // 1: vectorization.v1.TaskSummary
+	(*ListTasksRequest)(nil),      // 2: vectorization.v1.ListTasksRequest
+	(*ListTasksResponse)(nil),     // 3: vectorization.v1.ListTasksResponse
+	(*UploadFileResponse)(nil),    // 4: vectorization.v1.UploadFileResponse
+	(*GetTaskStatusRequest)(nil),  // 5: vectorization.v1.GetTaskStatusRequest
+	(*GetTaskStatusResponse)(nil), // 6: vectorization.v1.GetTaskStatusResponse
+	nil,                           // 7: vectorization.v1.UploadFileRequest.MetadataEntry
 }
 var file_vectorization_v1_ingestion_proto_depIdxs = []int32{
-	4, // 0: vectorization.v1.UploadFileRequest.metadata:type_name -> vectorization.v1.UploadFileRequest.MetadataEntry
-	0, // 1: vectorization.v1.IngestionService.UploadFile:input_type -> vectorization.v1.UploadFileRequest
-	2, // 2: vectorization.v1.IngestionService.GetTaskStatus:input_type -> vectorization.v1.GetTaskStatusRequest
-	1, // 3: vectorization.v1.IngestionService.UploadFile:output_type -> vectorization.v1.UploadFileResponse
-	3, // 4: vectorization.v1.IngestionService.GetTaskStatus:output_type -> vectorization.v1.GetTaskStatusResponse
-	3, // [3:5] is the sub-list for method output_type
-	1, // [1:3] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	7, // 0: vectorization.v1.UploadFileRequest.metadata:type_name -> vectorization.v1.UploadFileRequest.MetadataEntry
+	1, // 1: vectorization.v1.ListTasksResponse.tasks:type_name -> vectorization.v1.TaskSummary
+	0, // 2: vectorization.v1.IngestionService.UploadFile:input_type -> vectorization.v1.UploadFileRequest
+	5, // 3: vectorization.v1.IngestionService.GetTaskStatus:input_type -> vectorization.v1.GetTaskStatusRequest
+	2, // 4: vectorization.v1.IngestionService.ListTasks:input_type -> vectorization.v1.ListTasksRequest
+	4, // 5: vectorization.v1.IngestionService.UploadFile:output_type -> vectorization.v1.UploadFileResponse
+	6, // 6: vectorization.v1.IngestionService.GetTaskStatus:output_type -> vectorization.v1.GetTaskStatusResponse
+	3, // 7: vectorization.v1.IngestionService.ListTasks:output_type -> vectorization.v1.ListTasksResponse
+	5, // [5:8] is the sub-list for method output_type
+	2, // [2:5] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_vectorization_v1_ingestion_proto_init() }
@@ -343,7 +618,7 @@ func file_vectorization_v1_ingestion_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_vectorization_v1_ingestion_proto_rawDesc), len(file_vectorization_v1_ingestion_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

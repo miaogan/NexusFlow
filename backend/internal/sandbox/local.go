@@ -91,6 +91,9 @@ func (i *localInstance) RunCode(ctx context.Context, code, entryFile string, arg
 	rewritten = strings.ReplaceAll(rewritten, "/tmp/output.json", outputPath)
 	rewritten = strings.ReplaceAll(rewritten, "/tmp/main.py", full)
 
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return RunResult{}, err
+	}
 	if err := os.WriteFile(full, []byte(rewritten), 0o644); err != nil {
 		return RunResult{}, err
 	}

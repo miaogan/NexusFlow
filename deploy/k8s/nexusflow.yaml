@@ -28,6 +28,7 @@ data:
   METRICS_ADDR: ":9100"
   INGESTION_TARGET: "ingestion:9095"
   QUERY_TARGET: "query-service:9094"
+  SANDBOX_TARGET: "sandbox-execution:9093"
 ---
 apiVersion: v1
 kind: Secret

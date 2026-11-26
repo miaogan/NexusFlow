@@ -56,4 +56,62 @@ export interface ValidationResult {
   order: string[];
 }
 
+export interface TaskSummary {
+  task_id: string;
+  status: string;
+  progress: number;
+  file_name: string;
+  file_type: string;
+  file_size: number;
+  content_hash?: string;
+  error_msg?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TaskListResponse {
+  tasks: TaskSummary[];
+  total: number;
+}
+
+export interface TaskDetail {
+  task_id: string;
+  status: string;
+  progress: number;
+  error_msg?: string;
+}
+
+export interface UploadResult {
+  task_id: string;
+  status: string;
+  message: string;
+  content_hash?: string;
+  object_key?: string;
+}
+
+export interface SandboxExecuteRequest {
+  code: string;
+  runtime?: "python" | "node";
+  packages?: string[];
+  env_vars?: Record<string, string>;
+  input_json?: string;
+  timeout_seconds?: number;
+}
+
+export interface SandboxResult {
+  success: boolean;
+  output_json?: string;
+  stdout?: string;
+  stderr?: string;
+  sandbox_id?: string;
+  error_msg?: string;
+}
+
+export interface MeInfo {
+  tenant_id: string;
+  user_id: string;
+  roles: string[];
+  departments?: string[];
+}
+
 export type { Edge };

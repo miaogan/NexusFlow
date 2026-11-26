@@ -22,6 +22,7 @@ type Config struct {
 	// Downstream endpoints used by the gateway / workers.
 	IngestionTarget string
 	QueryTarget     string
+	SandboxTarget   string
 	MinerUTarget    string
 	RerankURL       string
 	RerankModel     string
@@ -68,6 +69,7 @@ func Load() Config {
 
 		IngestionTarget: env("INGESTION_TARGET", "127.0.0.1:9095"),
 		QueryTarget:     env("QUERY_TARGET", "127.0.0.1:9094"),
+		SandboxTarget:   env("SANDBOX_TARGET", "127.0.0.1:9093"),
 		MinerUTarget:    env("MINERU_TARGET", ""),
 		RerankURL:       env("RERANK_URL", ""),
 		RerankModel:     env("RERANK_MODEL", "bge-reranker-v2-m3"),

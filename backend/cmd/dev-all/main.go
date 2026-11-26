@@ -21,6 +21,7 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/sandbox"
 	"github.com/nexusflow/nexusflow/backend/internal/state"
 	"github.com/nexusflow/nexusflow/backend/internal/store"
+	"github.com/nexusflow/nexusflow/backend/internal/workflow"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -86,7 +87,15 @@ func main() {
 	sandboxSvc := sandbox.NewGRPCService(sandbox.NewService(sandbox.NewLocalBackend(cfg.SandboxWorkDir), logger))
 	querySvc := query.NewGRPCService(engine)
 
-	errCh := make(chan error, 6)
+	wfRegistry := workflow.NewRegistry()
+	wfRegistry.Register(workflow.NoopNode{})
+	wfRegistry.Register(workflow.SetNode{})
+	for _, stage := range []string{"ingest", "parse", "index", "sandbox", "query"} {
+		wfRegistry.Register(workflow.StageNode{Name: stage})
+	}
+	wfEngine := workflow.NewEngine(wfRegistry, logger)
+
+	errCh := make(chan error, 8)
 	go func() {
 		errCh <- grpcserver.Serve(ctx, cfg.IngestionGRPCAddr, func(s *grpc.Server) {
 			pb.RegisterIngestionServiceServer(s, ingestSvc)
@@ -121,9 +130,18 @@ func main() {
 	}
 	defer queryConn.Close()
 
+	sandboxConn, err := grpc.NewClient(cfg.SandboxTarget, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		logger.Error("connect sandbox", "error", err)
+		os.Exit(1)
+	}
+	defer sandboxConn.Close()
+
 	gw := gateway.New(
 		pb.NewIngestionServiceClient(ingestConn),
 		pb.NewQueryServiceClient(queryConn),
+		pb.NewSandboxExecutionServiceClient(sandboxConn),
+		objects,
 		logger, cfg.JWTSecret, cfg.AllowAnonymous,
 	)
 	srv := &http.Server{
@@ -133,6 +151,15 @@ func main() {
 	}
 	go func() {
 		errCh <- httpserver.Serve(ctx, srv, logger)
+	}()
+
+	wfSrv := &http.Server{
+		Addr:              cfg.WorkflowHTTPAddr,
+		Handler:           workflow.NewHTTPHandler(wfEngine, wfRegistry),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go func() {
+		errCh <- httpserver.Serve(ctx, wfSrv, logger)
 	}()
 
 	select {
