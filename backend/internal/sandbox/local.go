@@ -85,11 +85,15 @@ func (i *localInstance) RunCode(ctx context.Context, code, entryFile string, arg
 	// the sandbox. The local backend has no mount namespace, so it rewrites
 	// those contract paths to the temp directory before running. Only the
 	// contract paths are rewritten; this backend is for development only.
+	//
+	// Paths are normalised to forward slashes: on Windows the raw form contains
+	// backslashes, which corrupt string literals in the rewritten user code
+	// (e.g. Python "\U..." escapes). Both Python and Node accept "/" on Windows.
 	inputPath, _ := i.resolve("/tmp/input.json")
 	outputPath, _ := i.resolve("/tmp/output.json")
-	rewritten := strings.ReplaceAll(code, "/tmp/input.json", inputPath)
-	rewritten = strings.ReplaceAll(rewritten, "/tmp/output.json", outputPath)
-	rewritten = strings.ReplaceAll(rewritten, "/tmp/main.py", full)
+	rewritten := strings.ReplaceAll(code, "/tmp/input.json", filepath.ToSlash(inputPath))
+	rewritten = strings.ReplaceAll(rewritten, "/tmp/output.json", filepath.ToSlash(outputPath))
+	rewritten = strings.ReplaceAll(rewritten, "/tmp/main.py", filepath.ToSlash(full))
 
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return RunResult{}, err
