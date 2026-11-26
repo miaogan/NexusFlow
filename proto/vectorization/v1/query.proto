@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package vectorization.v1;
+
+option go_package = "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1;vectorizationv1";
+
+// ========== 查询服务（多路召回 + RRF + Rerank）==========
+service QueryService {
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc Answer(AnswerRequest) returns (stream AnswerChunk);
+}
+
+message RecallRoute {
+  string type = 1;  // vector | bm25 | filter | parent | graph
+  int32 top_k = 2;
+  string filter_expr = 3;  // metadata 过滤表达式
+}
+
+message SearchRequest {
+  string query = 1;
+  repeated RecallRoute routes = 2;  // 多路召回配置
+  string rerank_model = 3;          // 空则不重排，Fail-open
+  int32 final_top_n = 4;
+  string kb_id = 5;  // 知识库/命名空间
+  map<string, string> filters = 6;
+}
+
+message RetrievedChunk {
+  string chunk_id = 1;
+  string content = 2;
+  float score = 3;  // 重排后相关性
+  map<string, string> meta = 4;  // 来源/页码/标题层级
+}
+
+message SearchResponse {
+  repeated RetrievedChunk chunks = 1;
+  string trace_id = 2;
+  int32 recall_count = 3;
+  int32 rerank_applied = 4;
+}
+
+message AnswerRequest {
+  string query = 1;
+  repeated RecallRoute routes = 2;
+  string kb_id = 3;
+  string session_id = 4;
+  map<string, string> filters = 5;
+}
+
+message AnswerChunk {
+  string delta = 1;
+  bool done = 2;
+  string trace_id = 3;
+  repeated RetrievedChunk citations = 4;
+}

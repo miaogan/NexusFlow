@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package vectorization.v1;
+
+option go_package = "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1;vectorizationv1";
+
+// ========== 数据加工服务（Python: LlamaIndex 切块/索引/向量化）==========
+service LlamaIndexService {
+  rpc ProcessAndIndex(IndexRequest) returns (IndexResponse);
+}
+
+message IndexRequest {
+  string task_id = 1;
+  string markdown = 2;           // MinerU 解析产出的结构化文本
+  string split_strategy = 3;     // semantic / markdown / fixed
+  string embedding_model = 4;    // 外部 Embedding 模型名
+  string vector_store = 5;       // milvus / qdrant
+  map<string, string> metadata = 6;
+}
+
+message IndexResponse {
+  bool success = 1;
+  int32 chunk_count = 2;
+  int32 indexed_count = 3;
+  string collection = 4;
+  string error_msg = 5;
+}

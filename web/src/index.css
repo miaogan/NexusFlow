@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-ink-950 text-slate-200 antialiased;
+  background-image: radial-gradient(circle at 20% 0%, rgba(56, 232, 198, 0.08), transparent 45%),
+    radial-gradient(circle at 80% 100%, rgba(59, 130, 246, 0.07), transparent 40%);
+}
+
+.panel {
+  @apply rounded-2xl border border-white/5 bg-ink-900/70 backdrop-blur;
+}
+
+.panel-title {
+  @apply text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400;
+}
+
+.react-flow__attribution {
+  background: transparent;
+  color: #334155;
+}
+
+.react-flow__controls-button {
+  background: #111a2c;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: #94a3b8;
+}
+
+.react-flow__controls-button:hover {
+  background: #1a263c;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 999px;
+}

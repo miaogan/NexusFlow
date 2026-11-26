@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package vectorization.v1;
+
+option go_package = "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1;vectorizationv1";
+
+// ========== 解析服务（Go: 调用 MinerU）==========
+service ProcessingService {
+  rpc SubmitParseTask(SubmitParseTaskRequest) returns (SubmitParseTaskResponse);
+}
+
+message SubmitParseTaskRequest {
+  string task_id = 1;
+  string file_url = 2;
+  string file_type = 3;
+}
+
+message SubmitParseTaskResponse {
+  bool success = 1;
+  string mineru_task_id = 2;
+  string markdown = 3;
+}

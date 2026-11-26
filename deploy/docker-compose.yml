@@ -1,0 +1,159 @@
+name: nexusflow
+
+x-app-env: &app-env
+  APP_ENV: prod
+  LOG_LEVEL: info
+  STATE_DRIVER: redis
+  REDIS_ADDR: redis:6379
+  QUEUE_DRIVER: rabbitmq
+  QUEUE_URL: amqp://guest:guest@rabbitmq:5672/
+  JWT_SECRET: ${JWT_SECRET:-nexusflow-dev-secret}
+  ALLOW_ANONYMOUS: "true"
+  OBJECT_STORE_DIR: /data/objects
+  OBJECT_STORE_BASE: http://minio:9000/nexusflow
+  SANDBOX_BACKEND: local
+  SANDBOX_WORK_DIR: /tmp/nexusflow-sandboxes
+  METRICS_ADDR: ":9100"
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    ports: ["5672:5672", "15672:15672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    ports: ["6333:6333"]
+    volumes: ["qdrant-data:/qdrant/storage"]
+
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["minio-data:/data"]
+
+  gateway:
+    build:
+      context: ../backend
+      args:
+        SERVICE: gateway
+    environment:
+      <<: *app-env
+      GATEWAY_HTTP_ADDR: ":8080"
+      INGESTION_TARGET: "ingestion:9095"
+      QUERY_TARGET: "query-service:9094"
+      METRICS_ADDR: ""
+    depends_on: [ingestion, query-service]
+    ports: ["8080:8080"]
+
+  ingestion:
+    build:
+      context: ../backend
+      args:
+        SERVICE: ingestion
+    environment:
+      <<: *app-env
+      INGESTION_GRPC_ADDR: ":9095"
+    depends_on: [redis, rabbitmq]
+    volumes: ["objects:/data/objects"]
+
+  processing-worker:
+    build:
+      context: ../backend
+      args:
+        SERVICE: processing-worker
+    environment:
+      <<: *app-env
+      PROCESSING_GRPC_ADDR: ":9092"
+      MINERU_TARGET: ${MINERU_TARGET:-}
+      PARSE_MAX_ATTEMPTS: "3"
+    depends_on: [redis, rabbitmq]
+    volumes: ["objects:/data/objects"]
+
+  sandbox-execution:
+    build:
+      context: ../backend
+      args:
+        SERVICE: sandbox-execution
+        # Local sandbox needs interpreter runtimes; production uses OpenSandbox.
+        INSTALL_RUNTIMES: "true"
+    environment:
+      <<: *app-env
+      SANDBOX_GRPC_ADDR: ":9093"
+    ports: ["9093:9093"]
+
+  query-service:
+    build:
+      context: ../backend
+      args:
+        SERVICE: query-service
+    environment:
+      <<: *app-env
+      QUERY_GRPC_ADDR: ":9094"
+      RERANK_URL: ${RERANK_URL:-}
+    depends_on: [redis]
+
+  workflow-engine:
+    build:
+      context: ../backend
+      args:
+        SERVICE: workflow-engine
+    environment:
+      <<: *app-env
+      WORKFLOW_HTTP_ADDR: ":8081"
+    ports: ["8081:8081"]
+
+  llamaindex:
+    build:
+      context: ../services/llamaindex
+    environment:
+      LLAMAINDEX_APP_ENV: prod
+      LLAMAINDEX_QDRANT_URL: http://qdrant:6333
+      LLAMAINDEX_EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      LLAMAINDEX_EMBEDDING_API_BASE: ${EMBEDDING_API_BASE:-https://api.openai.com/v1}
+      LLAMAINDEX_RERANK_URL: ${RERANK_URL:-}
+    depends_on: [qdrant]
+    ports: ["8000:8000"]
+
+  web:
+    build:
+      context: ../web
+    depends_on: [gateway, workflow-engine]
+    ports: ["8088:80"]
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ["9090:9090"]
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports: ["3000:3000"]
+    depends_on: [prometheus]
+
+volumes:
+  redis-data:
+  qdrant-data:
+  minio-data:
+  objects:

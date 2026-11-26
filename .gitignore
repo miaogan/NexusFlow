@@ -1,0 +1,25 @@
+# Go
+backend/bin/
+backend/coverage.out
+*.test
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+services/llamaindex/.env
+
+# Node
+web/node_modules/
+web/dist/
+
+# Local data & env
+.env
+.env.local
+*.local
+/tmp/
+.DS_Store
+
+# Python test cache
+.pytest_cache/
+*.egg-info/

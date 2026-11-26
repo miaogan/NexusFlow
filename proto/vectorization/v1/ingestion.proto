@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package vectorization.v1;
+
+option go_package = "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1;vectorizationv1";
+
+// ========== 摄入服务（Go）==========
+service IngestionService {
+  rpc UploadFile(UploadFileRequest) returns (UploadFileResponse);
+  rpc GetTaskStatus(GetTaskStatusRequest) returns (GetTaskStatusResponse);
+}
+
+message UploadFileRequest {
+  string file_name = 1;
+  string file_type = 2;  // pdf / docx / txt
+  int64 file_size = 3;
+  string presigned_url = 4;  // 预签名直传地址
+  map<string, string> metadata = 5;
+}
+
+message UploadFileResponse {
+  string task_id = 1;
+  string status = 2;
+  string message = 3;
+}
+
+message GetTaskStatusRequest {
+  string task_id = 1;
+}
+
+message GetTaskStatusResponse {
+  string task_id = 1;
+  string status = 2;
+  int32 progress = 3;
+  string error_msg = 4;
+}

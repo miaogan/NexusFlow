@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package vectorization.v1;
+
+option go_package = "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1;vectorizationv1";
+
+// ========== 沙箱执行服务（自定义代码节点）==========
+service SandboxExecutionService {
+  rpc Execute(CodeExecuteRequest) returns (CodeExecuteResponse);
+}
+
+enum Runtime {
+  RUNTIME_UNSPECIFIED = 0;
+  PYTHON_311 = 1;
+  NODE_18 = 2;
+}
+
+message CodeExecuteRequest {
+  string task_id = 1;
+  string node_id = 2;
+  Runtime runtime = 3;
+  string code = 4;
+  repeated string packages = 5;
+  map<string, string> env_vars = 6;
+  string input_json = 7;
+  int32 timeout_seconds = 8;
+}
+
+message CodeExecuteResponse {
+  bool success = 1;
+  string output_json = 2;
+  string stdout = 3;
+  string stderr = 4;
+  string sandbox_id = 5;
+  string error_msg = 6;
+}

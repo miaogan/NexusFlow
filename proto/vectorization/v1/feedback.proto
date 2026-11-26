@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package vectorization.v1;
+
+option go_package = "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1;vectorizationv1";
+
+// 由 Query Service 异步落库，经 MQ 进入反馈流水线
+message FeedbackEvent {
+  string trace_id = 1;  // 关联一次查询全链路
+  string query = 2;
+  string answer = 3;
+  repeated string cited_chunk_ids = 4;  // 被引用片段
+  int32 rating = 5;                     // +1 赞 / -1 踩 / 0 无
+  string corrected_answer = 6;          // 人工纠错文本，可空
+  float faithfulness = 7;               // RAGAS 忠实度，可空
+  int64 ts = 8;
+  map<string, string> meta = 9;
+}

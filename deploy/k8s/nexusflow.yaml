@@ -1,0 +1,497 @@
+# NexusFlow Kubernetes manifests.
+#
+# External dependencies are expected to be provisioned separately and reachable
+# by DNS name: redis, rabbitmq, minio, qdrant and opensandbox. Replace image
+# tags and the Secret values before applying.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nexusflow
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: nexusflow
+data:
+  APP_ENV: "prod"
+  LOG_LEVEL: "info"
+  STATE_DRIVER: "redis"
+  REDIS_ADDR: "redis.nexusflow.svc:6379"
+  QUEUE_DRIVER: "rabbitmq"
+  QUEUE_URL: "amqp://nexusflow:change-me@rabbitmq.nexusflow.svc:5672/"
+  OBJECT_STORE_DIR: "/data/objects"
+  OBJECT_STORE_BASE: "http://minio.nexusflow.svc:9000/nexusflow"
+  SANDBOX_BACKEND: "remote"
+  OPENSANDBOX_URL: "http://opensandbox.nexusflow.svc:8080"
+  METRICS_ADDR: ":9100"
+  INGESTION_TARGET: "ingestion:9095"
+  QUERY_TARGET: "query-service:9094"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secret
+  namespace: nexusflow
+type: Opaque
+stringData:
+  JWT_SECRET: "change-me-in-production"
+  OPENSANDBOX_TOKEN: ""
+  LLAMAINDEX_EMBEDDING_API_KEY: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: nexusflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      containers:
+        - name: gateway
+          image: ghcr.io/nexusflow/gateway:4.0.0
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secret
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: nexusflow
+spec:
+  type: LoadBalancer
+  selector:
+    app: gateway
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingestion
+  namespace: nexusflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ingestion
+  template:
+    metadata:
+      labels:
+        app: ingestion
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+    spec:
+      containers:
+        - name: ingestion
+          image: ghcr.io/nexusflow/ingestion:4.0.0
+          ports:
+            - containerPort: 9095
+            - containerPort: 9100
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secret
+          readinessProbe:
+            tcpSocket:
+              port: 9095
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingestion
+  namespace: nexusflow
+spec:
+  selector:
+    app: ingestion
+  ports:
+    - port: 9095
+      targetPort: 9095
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: processing-worker
+  namespace: nexusflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: processing-worker
+  template:
+    metadata:
+      labels:
+        app: processing-worker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+    spec:
+      containers:
+        - name: processing-worker
+          image: ghcr.io/nexusflow/processing-worker:4.0.0
+          ports:
+            - containerPort: 9092
+            - containerPort: 9100
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secret
+          env:
+            - name: PROCESSING_GRPC_ADDR
+              value: ":9092"
+            - name: MINERU_TARGET
+              value: "http://mineru.nexusflow.svc:8080"
+          readinessProbe:
+            tcpSocket:
+              port: 9092
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: processing-worker
+  namespace: nexusflow
+spec:
+  selector:
+    app: processing-worker
+  ports:
+    - port: 9092
+      targetPort: 9092
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: processing-worker
+  namespace: nexusflow
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: processing-worker
+  minReplicas: 2
+  maxReplicas: 12
+  metrics:
+    # Requires prometheus-adapter to expose nexusflow_queue_length as a
+    # custom Pods metric (see design doc chapter 7).
+    - type: Pods
+      pods:
+        metric:
+          name: nexusflow_queue_length
+        target:
+          type: AverageValue
+          averageValue: "50"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox-execution
+  namespace: nexusflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sandbox-execution
+  template:
+    metadata:
+      labels:
+        app: sandbox-execution
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+    spec:
+      containers:
+        - name: sandbox-execution
+          image: ghcr.io/nexusflow/sandbox-execution:4.0.0
+          ports:
+            - containerPort: 9093
+            - containerPort: 9100
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secret
+          readinessProbe:
+            tcpSocket:
+              port: 9093
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox-execution
+  namespace: nexusflow
+spec:
+  selector:
+    app: sandbox-execution
+  ports:
+    - port: 9093
+      targetPort: 9093
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: query-service
+  namespace: nexusflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: query-service
+  template:
+    metadata:
+      labels:
+        app: query-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+    spec:
+      containers:
+        - name: query-service
+          image: ghcr.io/nexusflow/query-service:4.0.0
+          ports:
+            - containerPort: 9094
+            - containerPort: 9100
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secret
+          readinessProbe:
+            tcpSocket:
+              port: 9094
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: query-service
+  namespace: nexusflow
+spec:
+  selector:
+    app: query-service
+  ports:
+    - port: 9094
+      targetPort: 9094
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workflow-engine
+  namespace: nexusflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: workflow-engine
+  template:
+    metadata:
+      labels:
+        app: workflow-engine
+    spec:
+      containers:
+        - name: workflow-engine
+          image: ghcr.io/nexusflow/workflow-engine:4.0.0
+          ports:
+            - containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secret
+          env:
+            - name: WORKFLOW_HTTP_ADDR
+              value: ":8081"
+            - name: METRICS_ADDR
+              value: ""
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workflow-engine
+  namespace: nexusflow
+spec:
+  selector:
+    app: workflow-engine
+  ports:
+    - port: 8081
+      targetPort: 8081
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llamaindex
+  namespace: nexusflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: llamaindex
+  template:
+    metadata:
+      labels:
+        app: llamaindex
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+    spec:
+      containers:
+        - name: llamaindex
+          image: ghcr.io/nexusflow/llamaindex:4.0.0
+          ports:
+            - containerPort: 8000
+          env:
+            - name: LLAMAINDEX_QDRANT_URL
+              value: "http://qdrant.nexusflow.svc:6333"
+            - name: LLAMAINDEX_EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: LLAMAINDEX_EMBEDDING_API_KEY
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llamaindex
+  namespace: nexusflow
+spec:
+  selector:
+    app: llamaindex
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: nexusflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: ghcr.io/nexusflow/web:4.0.0
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: nexusflow
+spec:
+  type: LoadBalancer
+  selector:
+    app: web
+  ports:
+    - port: 80
+      targetPort: 80
