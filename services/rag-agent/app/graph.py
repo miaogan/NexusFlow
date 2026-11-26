@@ -34,6 +34,20 @@ class GeneratorLike(Protocol):
         chunks: list[dict[str, Any]],
     ) -> AsyncIterator[str]: ...
 
+    def generate_intent(
+        self,
+        intent: str,
+        message: str,
+        history: list[dict[str, str]],
+    ) -> str: ...
+
+    def astream_intent(
+        self,
+        intent: str,
+        message: str,
+        history: list[dict[str, str]],
+    ) -> AsyncIterator[str]: ...
+
 
 class ChatState(TypedDict, total=False):
     tenant_id: str
@@ -124,6 +138,23 @@ class ChatGraph:
         chunks: list[dict[str, Any]],
     ) -> AsyncIterator[str]:
         async for piece in self._generator.astream(query, history, chunks):
+            yield piece
+
+    def generate_intent_answer(
+        self,
+        intent: str,
+        message: str,
+        history: list[dict[str, str]],
+    ) -> str:
+        return self._generator.generate_intent(intent, message, history)
+
+    async def stream_intent_answer(
+        self,
+        intent: str,
+        message: str,
+        history: list[dict[str, str]],
+    ) -> AsyncIterator[str]:
+        async for piece in self._generator.astream_intent(intent, message, history):
             yield piece
 
     def invoke(self, **state: Any) -> ChatState:

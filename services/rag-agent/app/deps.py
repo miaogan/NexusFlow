@@ -5,6 +5,7 @@ from functools import lru_cache
 from app.core.config import get_settings
 from app.graph import ChatGraph
 from app.services.chat import ChatService
+from app.services.intent import HttpIntentClassifier
 from app.services.llm import AnswerGenerator
 from app.services.retrieval import GatewayRetriever
 from app.services.store import (
@@ -37,5 +38,13 @@ def get_chat_graph() -> ChatGraph:
 
 
 @lru_cache
+def get_intent_classifier() -> HttpIntentClassifier:
+    settings = get_settings()
+    return HttpIntentClassifier(settings.intent_url, settings.intent_timeout_seconds)
+
+
+@lru_cache
 def get_service() -> ChatService:
-    return ChatService(get_store(), get_chat_graph(), get_settings())
+    return ChatService(
+        get_store(), get_chat_graph(), get_settings(), get_intent_classifier()
+    )

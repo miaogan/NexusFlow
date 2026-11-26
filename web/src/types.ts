@@ -176,6 +176,14 @@ export interface Citation {
   meta?: Record<string, string>;
 }
 
+export interface IntentInfo {
+  intent: "knowledge_qa" | "chitchat" | "clarify" | string;
+  confidence: number;
+  need_retrieval: boolean;
+  reason?: string;
+  source?: string;
+}
+
 export interface ChatResponse {
   conversation_id: string;
   message_id: string;

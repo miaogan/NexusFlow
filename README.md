@@ -50,7 +50,8 @@ flowchart TB
 | Sandbox Execution | Go | `backend/cmd/sandbox-execution` | 9093 | 自定义代码节点强隔离执行 |
 | Query Service | Go | `backend/cmd/query-service` | 9094 | 多路召回、RRF、重排、流式回答 |
 | LlamaIndex Service | Python | `services/llamaindex` | 8000 | 切块、索引、Embedding、检索策略 |
-| RAG Agent | Python | `services/rag-agent` | 8001 | LangGraph 多轮问答、引用、会话持久化 |
+| RAG Agent | Python | `services/rag-agent` | 8001 | LangGraph 多轮问答、意图路由、引用、会话持久化 |
+| Intent Agent | Python | `services/intent-agent` | 8002 | 独立意图识别服务（Supervisor 第一步），LLM + 规则降级 |
 | Web Console | React | `web` | 5173 / 8088 | 控制台：文件管理 / 任务中心 / 检索 / 沙箱 / DAG 编排 |
 
 ```text
@@ -71,6 +72,7 @@ flowchart TB
 │   └── pb/                        # protoc 生成代码
 ├── services/llamaindex/           # FastAPI + LlamaIndex 数据加工服务
 ├── services/rag-agent/            # FastAPI + LangGraph 多轮 RAG 问答服务
+├── services/intent-agent/         # FastAPI + LangGraph 意图识别服务（独立部署）
 ├── web/                           # React + TS 控制台（路由 + 多页面 + React Flow）
 ├── deploy/
 │   ├── docker-compose.yml         # 完整本地编排
@@ -226,24 +228,43 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 
 ## RAG 对话服务（LangGraph）
 
-`services/rag-agent` 打通「用户身份」与「检索」，提供多轮问答、答案引用与会话历史：
+`services/rag-agent` 打通「用户身份」与「检索」，提供多轮问答、答案引用与会话历史；意图识别拆分为独立的 `services/intent-agent`，通过 HTTP 通信：
 
 - **身份联动**：网关校验 JWT 后将 `x-tenant-id` / `x-user-id` / `Authorization` 透传给 rag-agent；会话与消息按「租户 + 用户」隔离，匿名调用者落在 `default/anonymous`。
+- **意图路由（multi-agent 第一步）**：rag-agent 调用独立 intent-agent（`RAG_INTENT_URL`）做 `knowledge_qa | chitchat | clarify` 分类；`chitchat` / `clarify` 跳过检索直接回答，服务不可用时降级为知识问答。
 - **检索复用**：rag-agent 通过 `RAG_GATEWAY_URL` 调用网关 `/v1/search`，复用统一的多路召回 + RRF + 重排链路与 trace，而不是自建第二套检索。
 - **LangGraph 生成**：`retrieve → generate` 两节点状态图；配置 `RAG_LLM_BASE_URL` + `RAG_LLM_API_KEY`（OpenAI 兼容）时调用大模型，未配置时降级为抽取式片段摘要，保证无 Key 也能演示。
-- **流式过程事件**：`/v1/chat/stream` 以 SSE 依次推送 `stage(retrieve) → sources → stage(generate) → token* → done`；控制台据此渲染「检索 → 生成 → 回答」节点、检索知识面板，并支持正文 `[n]` 标记点击跳转到对应来源。
+- **流式过程事件**：`/v1/chat/stream` 以 SSE 依次推送 `stage(intent) → intent → stage(retrieve) → sources → stage(generate) → token* → done`；控制台据此渲染「意图 → 检索 → 生成 → 回答」节点、检索知识面板，并支持正文 `[n]` 标记点击跳转到对应来源。非检索意图的「检索」节点显示为跳过。
 - **会话存储**：`RAG_DATABASE_URL` 指向 Postgres 时持久化到 `rag_conversations` / `rag_messages`；为空则使用进程内存储（仅开发）。
 
-本地运行（先启动 dev-all 提供网关与检索，再启动 rag-agent）：
+本地运行（先启动 dev-all 提供网关与检索，再分别启动两个 Python 服务）：
 
 ```bash
 # 终端 1：Go 全链路（含 Gateway :8080 与查询服务）
 make run-dev-all
 
-# 终端 2：RAG agent（内存会话 + 抽取式回答，无需外部依赖）
+# 终端 2：意图识别服务（无 Key 时走规则）
+cd services/intent-agent
+pip install -e ".[test]"
+uvicorn app.main:app --port 8002
+
+# 终端 3：RAG agent（内存会话 + 抽取式回答）
 cd services/rag-agent
 pip install -e ".[dev]"
-RAG_GATEWAY_URL=http://127.0.0.1:8080 uvicorn app.main:app --port 8001
+RAG_GATEWAY_URL=http://127.0.0.1:8080 \
+RAG_INTENT_URL=http://127.0.0.1:8002 \
+uvicorn app.main:app --port 8001
+```
+
+接入 DeepSeek（OpenAI 兼容，两个服务分别配置）：
+
+```bash
+RAG_LLM_BASE_URL=https://api.deepseek.com/v1
+RAG_LLM_API_KEY=sk-...
+RAG_LLM_MODEL=deepseek-chat
+INTENT_LLM_BASE_URL=https://api.deepseek.com/v1
+INTENT_LLM_API_KEY=sk-...
+INTENT_LLM_MODEL=deepseek-chat
 ```
 
 网关端点（`RAG_AGENT_URL` 为空会关闭代理）：
@@ -254,6 +275,21 @@ RAG_GATEWAY_URL=http://127.0.0.1:8080 uvicorn app.main:app --port 8001
 | POST | `/v1/chat/stream` | `search:use` | 同上，SSE 流式返回过程事件与回答 |
 | GET | `/v1/conversations` | `search:use` | 当前用户的会话列表（分页） |
 | GET | `/v1/conversations/:id` | `search:use` | 会话详情（消息 + 引用） |
+
+### 多智能体路线
+
+| 阶段 | 服务 | 内容 | 状态 |
+| --- | --- | --- | --- |
+| P1 | `intent-agent` :8002 | 意图识别与路由（`knowledge_qa / chitchat / clarify`），LLM + 规则降级 | 已完成 |
+| P2 | `summary-agent` :8003 | 上下文总结、自动压缩（滚动摘要 + 最近 N 轮），按字符预算裁剪 | 规划中 |
+| P3 | `memory-agent` :8004 | 长期记忆抽取、去重合并、召回注入；Postgres + pgvector | 规划中 |
+
+P2/P3 约定：
+
+- 各 agent 独立部署、通过 HTTP 通信；rag-agent 保留 Supervisor 编排职责，新增 `RAG_SUMMARY_URL` / `RAG_MEMORY_URL` 接入。
+- 摘要写入 `rag_conversations.summary`，prompt 使用「摘要 + 最近 N 轮原文」；引用不因压缩丢失。
+- 记忆表 `rag_memories` 使用 pgvector（镜像切换为 `pgvector/pgvector:pg16` 并启用 `CREATE EXTENSION vector`），按 `tenant_id + user_id` 隔离；对话开始召回 top-k 注入，轮次结束异步抽取。
+- 所有 agent 统一使用 OpenAI 兼容配置（`RAG_LLM_*` / `INTENT_LLM_*`），DeepSeek 可直接接入。
 
 ## 安全与可靠性加固
 

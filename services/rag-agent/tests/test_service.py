@@ -52,6 +52,27 @@ class FakeStreamGraph:
         for piece in ("hello ", "world"):
             yield piece
 
+    def generate_intent(self, intent, message, history):
+        return f"{intent} answer"
+
+    async def stream_intent_answer(self, intent, message, history):
+        for piece in ("chat ", "reply"):
+            yield piece
+
+
+class StaticIntent:
+    def __init__(self, intent: str = "knowledge_qa") -> None:
+        self.intent = intent
+
+    def classify(self, message: str, history: list[dict[str, str]]) -> dict[str, Any]:
+        return {
+            "intent": self.intent,
+            "confidence": 0.9,
+            "need_retrieval": self.intent == "knowledge_qa",
+            "reason": "test",
+            "source": "test",
+        }
+
 
 def _service() -> tuple[ChatService, InMemoryConversationStore, FakeGraph]:
     store = InMemoryConversationStore()
@@ -121,7 +142,12 @@ def test_chat_stream_emits_pipeline_events_and_persists() -> None:
     events = _collect_stream(service, ChatRequest(message="hi"), "t1", "u1")
     types = [e["type"] for e in events]
 
-    assert events[0] == {"type": "stage", "stage": "retrieve", "status": "start"}
+    assert events[0] == {"type": "stage", "stage": "intent", "status": "start"}
+    assert events[1]["type"] == "intent"
+    assert events[1]["need_retrieval"] is True
+    assert any(
+        e == {"type": "stage", "stage": "retrieve", "status": "start"} for e in events
+    )
     assert "sources" in types and "token" in types
     assert types[-1] == "done"
 
@@ -148,3 +174,33 @@ def test_chat_stream_reports_unknown_conversation() -> None:
         service, ChatRequest(message="hi", conversation_id="missing"), "t1", "u1"
     )
     assert events == [{"type": "error", "error": "conversation not found"}]
+
+
+def test_chat_stream_skips_retrieval_for_chitchat() -> None:
+    store = InMemoryConversationStore()
+    graph = FakeStreamGraph()
+    service = ChatService(
+        store, graph, Settings(_env_file=None), StaticIntent("chitchat")
+    )
+
+    events = _collect_stream(service, ChatRequest(message="你好"), "t1", "u1")
+
+    assert graph.retrieve_calls == []
+    assert not any(e["type"] == "sources" for e in events)
+    intent_event = next(e for e in events if e["type"] == "intent")
+    assert intent_event["intent"] == "chitchat"
+    assert intent_event["need_retrieval"] is False
+
+    done = events[-1]
+    assert done["answer"] == "chat reply"
+    assert done["citations"] == []
+    assert done["trace_id"] is None
+
+
+def test_intent_classifier_falls_back_without_url() -> None:
+    from app.services.intent import HttpIntentClassifier
+
+    result = HttpIntentClassifier("").classify("hi", [])
+    assert result["intent"] == "knowledge_qa"
+    assert result["need_retrieval"] is True
+    assert result["source"] == "fallback"

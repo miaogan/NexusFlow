@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { chatStream, getConversation, listConversations } from "../api/client";
-import type { ChatMessage, Citation, ConversationSummary } from "../types";
+import type { ChatMessage, Citation, ConversationSummary, IntentInfo } from "../types";
 import { Button, EmptyState, PageHeader, Spinner } from "../components/ui";
 
-type Phase = "idle" | "retrieve" | "generate" | "done";
+type Phase = "idle" | "intent" | "retrieve" | "generate" | "done";
+
+const INTENT_LABELS: Record<string, string> = {
+  knowledge_qa: "知识问答",
+  chitchat: "闲聊",
+  clarify: "需澄清",
+};
 
 const STREAMING_ID = "__streaming__";
 
@@ -40,13 +46,21 @@ function renderInlineCitations(
   });
 }
 
-function StageChip({ label, state }: { label: string; state: "pending" | "active" | "done" }) {
+function StageChip({
+  label,
+  state,
+}: {
+  label: string;
+  state: "pending" | "active" | "done" | "skipped";
+}) {
   const cls =
     state === "active"
       ? "border-accent/40 bg-accent/10 text-accent"
       : state === "done"
         ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-        : "border-white/10 text-slate-500";
+        : state === "skipped"
+          ? "border-white/10 bg-transparent text-slate-600 line-through"
+          : "border-white/10 text-slate-500";
   return (
     <span className={`rounded-full border px-2 py-0.5 text-[9px] transition ${cls}`}>{label}</span>
   );
@@ -60,6 +74,7 @@ export default function Chat() {
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
+  const [intentInfo, setIntentInfo] = useState<IntentInfo | null>(null);
   const [stageMessageId, setStageMessageId] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -84,6 +99,7 @@ export default function Chat() {
 
   const resetStage = () => {
     setPhase("idle");
+    setIntentInfo(null);
     setStageMessageId(null);
   };
 
@@ -128,7 +144,8 @@ export default function Chat() {
     const now = new Date().toISOString();
     setSending(true);
     setError(null);
-    setPhase("retrieve");
+    setPhase("intent");
+    setIntentInfo(null);
     setStageMessageId(streamId);
     setInput("");
     setMessages((prev) => [
@@ -140,6 +157,10 @@ export default function Chat() {
     let answer = "";
     try {
       await chatStream(text, activeId ?? undefined, {
+        onIntent: (info) => {
+          setIntentInfo(info);
+          setPhase(info.need_retrieval ? "retrieve" : "generate");
+        },
         onStage: (stage, status) => {
           if (stage === "retrieve" && status === "start") setPhase("retrieve");
           if (stage === "generate") setPhase("generate");
@@ -179,6 +200,7 @@ export default function Chat() {
       setMessages((prev) => prev.filter((m) => m.id !== streamId));
       setInput(text);
       setStageMessageId(null);
+      setIntentInfo(null);
       setPhase("idle");
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -186,11 +208,22 @@ export default function Chat() {
     }
   };
 
-  const stageState = (target: "retrieve" | "generate" | "answer"): "pending" | "active" | "done" => {
-    if (phase === "done") return "done";
-    if (phase === "retrieve") return target === "retrieve" ? "active" : "pending";
+  const stageState = (
+    target: "intent" | "retrieve" | "generate" | "answer",
+  ): "pending" | "active" | "done" | "skipped" => {
+    const retrievalSkipped = Boolean(intentInfo && !intentInfo.need_retrieval);
+    if (phase === "done") {
+      if (target === "retrieve" && retrievalSkipped) return "skipped";
+      return "done";
+    }
+    if (phase === "intent") return target === "intent" ? "active" : "pending";
+    if (target === "intent") return "done";
+    if (phase === "retrieve") {
+      if (target === "retrieve") return "active";
+      return "pending";
+    }
     if (phase === "generate") {
-      if (target === "retrieve") return "done";
+      if (target === "retrieve") return retrievalSkipped ? "skipped" : "done";
       return target === "generate" ? "active" : "pending";
     }
     return "pending";
@@ -261,13 +294,33 @@ export default function Chat() {
                       }`}
                     >
                       {showStage && (
-                        <div className="mb-2 flex items-center gap-1.5 border-b border-white/5 pb-2">
-                          <StageChip label="检索" state={stageState("retrieve")} />
-                          <span className="text-slate-600">→</span>
-                          <StageChip label="生成" state={stageState("generate")} />
-                          <span className="text-slate-600">→</span>
-                          <StageChip label="回答" state={stageState("answer")} />
-                          {sending && <span className="ml-1 text-[9px] text-slate-500">进行中…</span>}
+                        <div className="mb-2 space-y-1 border-b border-white/5 pb-2">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <StageChip label="意图" state={stageState("intent")} />
+                            <span className="text-slate-600">→</span>
+                            <StageChip
+                              label={
+                                intentInfo && !intentInfo.need_retrieval
+                                  ? "检索（跳过）"
+                                  : "检索"
+                              }
+                              state={stageState("retrieve")}
+                            />
+                            <span className="text-slate-600">→</span>
+                            <StageChip label="生成" state={stageState("generate")} />
+                            <span className="text-slate-600">→</span>
+                            <StageChip label="回答" state={stageState("answer")} />
+                            {sending && (
+                              <span className="ml-1 text-[9px] text-slate-500">进行中…</span>
+                            )}
+                          </div>
+                          {intentInfo && (
+                            <p className="truncate text-[9px] text-slate-500" title={intentInfo.reason}>
+                              意图：{INTENT_LABELS[intentInfo.intent] ?? intentInfo.intent} ·
+                              置信度 {intentInfo.confidence.toFixed(2)}
+                              {intentInfo.reason ? ` · ${intentInfo.reason}` : ""}
+                            </p>
+                          )}
                         </div>
                       )}
 

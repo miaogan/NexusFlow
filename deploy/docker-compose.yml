@@ -177,6 +177,17 @@ services:
     depends_on: [qdrant]
     ports: ["8000:8000"]
 
+  intent-agent:
+    build:
+      context: ../services/intent-agent
+    environment:
+      INTENT_APP_ENV: prod
+      # OpenAI-compatible endpoint; DeepSeek works with https://api.deepseek.com/v1.
+      INTENT_LLM_BASE_URL: ${INTENT_LLM_BASE_URL:-}
+      INTENT_LLM_API_KEY: ${INTENT_LLM_API_KEY:-}
+      INTENT_LLM_MODEL: ${INTENT_LLM_MODEL:-deepseek-chat}
+    ports: ["8002:8002"]
+
   rag-agent:
     build:
       context: ../services/rag-agent
@@ -187,13 +198,17 @@ services:
       RAG_GATEWAY_URL: http://gateway:8080
       # Empty RAG_DATABASE_URL -> in-memory conversations (dev only).
       RAG_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
-      RAG_LLM_BASE_URL: ${LLM_BASE_URL:-}
-      RAG_LLM_API_KEY: ${LLM_API_KEY:-}
-      RAG_LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      # Independent intent agent (supervisor step); falls back to knowledge QA.
+      RAG_INTENT_URL: http://intent-agent:8002
+      RAG_LLM_BASE_URL: ${RAG_LLM_BASE_URL:-}
+      RAG_LLM_API_KEY: ${RAG_LLM_API_KEY:-}
+      RAG_LLM_MODEL: ${RAG_LLM_MODEL:-gpt-4o-mini}
       RAG_DEFAULT_TOP_K: "5"
     depends_on:
       postgres:
         condition: service_healthy
+      intent-agent:
+        condition: service_started
     ports: ["8001:8001"]
 
   web:

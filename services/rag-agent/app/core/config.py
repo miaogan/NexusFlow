@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     default_top_k: int = 5
     max_top_k: int = 50
 
+    # Independent intent agent (LangGraph supervisor step). Empty or
+    # unreachable -> fall back to knowledge QA so chat keeps working.
+    intent_url: str = "http://127.0.0.1:8002"
+    intent_timeout_seconds: float = 5.0
+
     # OpenAI-compatible chat model. Both base URL and key are required; when
     # either is missing the service falls back to an extractive answer.
     llm_base_url: str = ""

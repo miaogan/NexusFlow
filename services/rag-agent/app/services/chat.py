@@ -14,6 +14,7 @@ from app.schemas import (
     ConversationListResponse,
     MessageOut,
 )
+from app.services.intent import HttpIntentClassifier, IntentClassifier
 from app.services.retrieval import RetrievalUnavailable
 from app.services.store import ConversationNotFound, ConversationStore
 
@@ -22,11 +23,17 @@ class ChatService:
     """Coordinates conversation persistence with the LangGraph pipeline."""
 
     def __init__(
-        self, store: ConversationStore, graph: ChatGraph, settings: Settings
+        self,
+        store: ConversationStore,
+        graph: ChatGraph,
+        settings: Settings,
+        intent: IntentClassifier | None = None,
     ) -> None:
         self._store = store
         self._graph = graph
         self._settings = settings
+        # Default classifier degrades to knowledge QA without a configured URL.
+        self._intent: IntentClassifier = intent or HttpIntentClassifier("")
 
     def chat(
         self,
@@ -54,19 +61,29 @@ class ChatService:
 
         top_k = req.top_k or self._settings.default_top_k
         top_k = max(1, min(top_k, self._settings.max_top_k))
-        state = self._graph.invoke(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            query=message,
-            history=history,
-            top_k=top_k,
-            kb_id=req.kb_id,
-            filters=req.filters,
-            auth_header=auth_header,
-        )
 
-        answer = state.get("answer") or ""
-        citations: list[dict[str, Any]] = state.get("citations") or []
+        intent = self._intent.classify(message, history)
+        if intent.get("need_retrieval", True):
+            state = self._graph.invoke(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                query=message,
+                history=history,
+                top_k=top_k,
+                kb_id=req.kb_id,
+                filters=req.filters,
+                auth_header=auth_header,
+            )
+            answer = state.get("answer") or ""
+            citations: list[dict[str, Any]] = state.get("citations") or []
+            trace_id = state.get("trace_id")
+        else:
+            answer = self._graph.generate_intent_answer(
+                str(intent.get("intent") or "clarify"), message, history
+            )
+            citations = []
+            trace_id = None
+
         msg = self._store.append(conv["id"], "assistant", answer, citations)
 
         return ChatResponse(
@@ -74,7 +91,7 @@ class ChatService:
             message_id=msg["id"],
             answer=answer,
             citations=citations,
-            trace_id=state.get("trace_id"),
+            trace_id=trace_id,
             created_at=msg["created_at"],
         )
 
@@ -111,6 +128,40 @@ class ChatService:
 
         top_k = req.top_k or self._settings.default_top_k
         top_k = max(1, min(top_k, self._settings.max_top_k))
+
+        yield {"type": "stage", "stage": "intent", "status": "start"}
+        intent = await run_in_threadpool(self._intent.classify, message, history)
+        yield {"type": "intent", **intent}
+        yield {"type": "stage", "stage": "intent", "status": "done"}
+
+        # chitchat/clarify turns answer directly; only knowledge QA retrieves.
+        if not intent.get("need_retrieval", True):
+            yield {"type": "stage", "stage": "generate", "status": "start"}
+            intent_parts: list[str] = []
+            try:
+                async for piece in self._graph.stream_intent_answer(
+                    str(intent.get("intent") or "clarify"), message, history
+                ):
+                    intent_parts.append(piece)
+                    yield {"type": "token", "content": piece}
+            except Exception as exc:  # noqa: BLE001 - surface upstream LLM failures
+                yield {"type": "error", "error": f"generation failed: {exc}"}
+                return
+
+            answer = "".join(intent_parts)
+            msg = await run_in_threadpool(
+                self._store.append, conv["id"], "assistant", answer, []
+            )
+            yield {
+                "type": "done",
+                "conversation_id": conv["id"],
+                "message_id": msg["id"],
+                "answer": answer,
+                "citations": [],
+                "trace_id": None,
+                "created_at": msg["created_at"],
+            }
+            return
 
         yield {"type": "stage", "stage": "retrieve", "status": "start"}
         try:

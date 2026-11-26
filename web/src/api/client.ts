@@ -5,6 +5,7 @@ import type {
   ConversationDetail,
   ConversationListResponse,
   Dag,
+  IntentInfo,
   JwtClaims,
   LoginResponse,
   MeInfo,
@@ -255,6 +256,7 @@ export async function chat(
 
 export interface ChatStreamHandlers {
   onStage?: (stage: string, status: string, count?: number) => void;
+  onIntent?: (intent: IntentInfo) => void;
   onSources?: (citations: Citation[]) => void;
   onToken?: (text: string) => void;
   onDone?: (res: ChatResponse) => void;
@@ -324,6 +326,9 @@ export async function chatStream(
                 String(event.status ?? ""),
                 typeof event.count === "number" ? event.count : undefined,
               );
+              break;
+            case "intent":
+              handlers.onIntent?.(event as unknown as IntentInfo);
               break;
             case "sources":
               handlers.onSources?.((event.citations as Citation[]) ?? []);
