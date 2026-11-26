@@ -7,6 +7,7 @@ import (
 
 	"github.com/nexusflow/nexusflow/backend/internal/platform/prompt"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/tracing"
+	"github.com/nexusflow/nexusflow/backend/internal/tenant"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 )
 
@@ -55,6 +56,7 @@ func (s *GRPCService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 		Routes:    routes,
 		FinalTopN: int(req.GetFinalTopN()),
 		Filters:   req.GetFilters(),
+		TenantID:  tenant.FromIncoming(ctx).TenantID,
 	})
 	if err != nil {
 		return nil, err
@@ -100,9 +102,10 @@ func (s *GRPCService) Answer(req *pb.AnswerRequest, stream pb.QueryService_Answe
 		routes = append(routes, Route{Type: r.GetType(), TopK: int(r.GetTopK()), FilterExpr: r.GetFilterExpr()})
 	}
 	res, err := s.engine.Search(ctx, SearchOptions{
-		Query:   req.GetQuery(),
-		Routes:  routes,
-		Filters: req.GetFilters(),
+		Query:    req.GetQuery(),
+		Routes:   routes,
+		Filters:  req.GetFilters(),
+		TenantID: tenant.FromIncoming(ctx).TenantID,
 	})
 	if err != nil {
 		span.RecordError(err)

@@ -217,11 +217,17 @@ services:
       <<: *app-env
       QUERY_GRPC_ADDR: ":9094"
       RERANK_URL: ${RERANK_URL:-}
+      # Read the same feedback table as the gateway so online down-ranking sees
+      # ratings submitted against cited chunks.
+      FEEDBACK_DRIVER: postgres
+      FEEDBACK_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9100/healthz"]
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
 
   workflow-engine:

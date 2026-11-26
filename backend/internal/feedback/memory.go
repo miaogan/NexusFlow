@@ -52,6 +52,9 @@ func (s *MemoryStore) List(_ context.Context, f Filter) ([]Entry, error) {
 		if f.Rating != nil && e.Rating != *f.Rating {
 			continue
 		}
+		if f.NegativeOnly && e.Rating >= 0 {
+			continue
+		}
 		out = append(out, e)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })

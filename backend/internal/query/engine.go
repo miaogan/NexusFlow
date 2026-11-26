@@ -18,6 +18,7 @@ type Engine struct {
 	store      *DocStore
 	logger     *slog.Logger
 	tracer     tracing.Tracer
+	penalty    *FeedbackPenalty
 }
 
 // EngineOption configures an Engine at construction time.
@@ -26,6 +27,12 @@ type EngineOption func(*Engine)
 // WithTracer attaches an observability tracer. Defaults to NoopTracer.
 func WithTracer(t tracing.Tracer) EngineOption {
 	return func(e *Engine) { e.tracer = t }
+}
+
+// WithFeedbackPenalty enables online down-ranking of chunks with accumulated
+// negative feedback. Applied after rerank and before the final top-N cut.
+func WithFeedbackPenalty(p *FeedbackPenalty) EngineOption {
+	return func(e *Engine) { e.penalty = p }
 }
 
 func NewEngine(logger *slog.Logger, reranker Reranker, opts ...EngineOption) *Engine {
@@ -191,9 +198,31 @@ func (e *Engine) Search(ctx context.Context, opts SearchOptions) (Result, error)
 		rspan.End()
 	}
 
+	// Online down-ranking: negative feedback accumulated across users sinks
+	// chunks that repeatedly failed to answer. It runs before the final cut so
+	// a penalised chunk can be replaced by the next best candidate. Failures
+	// inside the stage fail open, so this never blocks retrieval.
+	if e.penalty != nil && len(fused) > 0 {
+		tenantID := opts.TenantID
+		if tenantID == "" {
+			tenantID = opts.Filters["tenant_id"]
+		}
+		pspan, _ := e.tracer.Start(ctx, "penalty.feedback",
+			tracing.WithAttributes(map[string]any{
+				"tenant_id": tenantID,
+				"threshold": e.penalty.Threshold,
+				"factor":    e.penalty.Factor,
+			}),
+		)
+		fused = e.penalty.Apply(ctx, tenantID, fused)
+		pspan.SetOutput(map[string]any{"output_count": len(fused), "top_chunk": fused[0].ID})
+		pspan.End()
+	}
+
 	if len(fused) > topN {
 		fused = fused[:topN]
 	}
+
 	out.Chunks = fused
 	root.SetOutput(map[string]any{
 		"recall_count":   recallCount,

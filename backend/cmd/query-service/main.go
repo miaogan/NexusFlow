@@ -7,6 +7,7 @@ import (
 	"syscall"
 
 	"github.com/nexusflow/nexusflow/backend/internal/config"
+	"github.com/nexusflow/nexusflow/backend/internal/feedback"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/grpcserver"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/log"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/metrics"
@@ -47,7 +48,18 @@ func main() {
 		reranker = query.NewHTTPReranker(cfg.RerankURL, cfg.RerankModel, 0)
 	}
 
-	engine := query.NewEngine(logger, reranker)
+	// Feedback drives online down-ranking; a failed backend disables only that
+	// stage (memory fallback keeps the service usable).
+	feedbackStore, err := feedback.NewStore(cfg.FeedbackDriver, cfg.FeedbackDatabaseURL)
+	if err != nil {
+		logger.Warn("feedback store unavailable, supporting down-ranking with memory", "error", err)
+		feedbackStore = feedback.NewMemoryStore()
+	}
+	defer feedbackStore.Close()
+
+	engine := query.NewEngine(logger, reranker,
+		query.WithFeedbackPenalty(query.NewFeedbackPenalty(feedback.NewNegativeCounter(feedbackStore))),
+	)
 	docStore := engine.Store()
 	docStore.Add("seed", demoCorpus())
 	engine.Register(query.NewMemoryRetriever("vector", docStore))
@@ -61,7 +73,7 @@ func main() {
 		}
 	}()
 
-	err := grpcserver.Serve(ctx, cfg.QueryGRPCAddr, func(s *grpc.Server) {
+	err = grpcserver.Serve(ctx, cfg.QueryGRPCAddr, func(s *grpc.Server) {
 		pb.RegisterQueryServiceServer(s, svc)
 	}, logger)
 	if err != nil {

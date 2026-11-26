@@ -124,6 +124,9 @@ func (s *PostgresStore) List(ctx context.Context, f Filter) ([]Entry, error) {
 		args = append(args, *f.Rating)
 		query += fmt.Sprintf(" AND rating = $%d", len(args))
 	}
+	if f.NegativeOnly {
+		query += " AND rating < 0"
+	}
 	args = append(args, limit, offset)
 	query += fmt.Sprintf(" ORDER BY updated_at DESC LIMIT $%d OFFSET $%d", len(args)-1, len(args))
 

@@ -33,8 +33,10 @@ type Entry struct {
 type Filter struct {
 	TenantID string
 	Rating   *float64
-	Limit    int
-	Offset   int
+	// NegativeOnly keeps ratings below zero (used by retrieval down-ranking).
+	NegativeOnly bool
+	Limit        int
+	Offset       int
 }
 
 // Store persists feedback. Implementations must be safe for concurrent use.

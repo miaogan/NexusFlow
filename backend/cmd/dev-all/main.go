@@ -118,7 +118,10 @@ func main() {
 		{ID: "doc-2", Content: "查询链路使用向量召回、BM25 与 LightRAG 三路召回，经 RRF 融合后由 Cross-Encoder 精排。", Meta: map[string]string{"tenant_id": "default", "source": "retrieval"}},
 		{ID: "doc-3", Content: "自定义代码节点通过 OpenSandbox 执行，具备强隔离、强制 TTL、出口白名单与凭据不落盘。", Meta: map[string]string{"tenant_id": "default", "source": "sandbox"}},
 	}
-	engine := query.NewEngine(logger, nil, query.WithTracer(tracer))
+	engine := query.NewEngine(logger, nil,
+		query.WithTracer(tracer),
+		query.WithFeedbackPenalty(query.NewFeedbackPenalty(feedback.NewNegativeCounter(feedbackStore))),
+	)
 	docStore := engine.Store()
 	docStore.Add("seed", citations) // demo corpus; real uploads are indexed below
 	engine.Register(query.NewMemoryRetriever("vector", docStore))

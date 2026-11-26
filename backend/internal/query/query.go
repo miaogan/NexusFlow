@@ -38,6 +38,9 @@ type SearchOptions struct {
 	Routes    []Route
 	FinalTopN int
 	Filters   map[string]string
+	// TenantID scopes feedback-driven down-ranking. Callers that omit it fall
+	// back to Filters["tenant_id"].
+	TenantID string
 }
 
 type Result struct {
