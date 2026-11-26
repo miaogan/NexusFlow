@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nexusflow/nexusflow/backend/internal/revocation"
 	"github.com/nexusflow/nexusflow/backend/internal/tenant"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 	"google.golang.org/grpc/codes"
@@ -107,6 +108,65 @@ func TestAuthValidateAndRefreshRejectsAccessToken(t *testing.T) {
 	// An access token must not be usable as a refresh token.
 	if _, err := svc.Refresh(ctx, &pb.RefreshRequest{RefreshToken: login.Tokens.AccessToken}); status.Code(err) != codes.Unauthenticated {
 		t.Errorf("access-as-refresh code = %v, want Unauthenticated", status.Code(err))
+	}
+}
+
+func TestAuthLogoutRevokesRefreshToken(t *testing.T) {
+	m := seededStore(t)
+	bl := revocation.NewMemoryBlacklist()
+	svc := NewAuthService(m, AuthConfig{
+		Secret: "test-secret", AccessTTL: 5 * time.Minute, RefreshTTL: time.Hour,
+	}, WithRevocationList(bl))
+	ctx := context.Background()
+
+	login, err := svc.Login(ctx, &pb.LoginRequest{TenantId: "default", Username: "admin", Password: "admin123"})
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if _, err := svc.Refresh(ctx, &pb.RefreshRequest{RefreshToken: login.Tokens.RefreshToken}); err != nil {
+		t.Fatalf("refresh before logout: %v", err)
+	}
+
+	if _, err := svc.Logout(ctx, &pb.LogoutRequest{RefreshToken: login.Tokens.RefreshToken}); err != nil {
+		t.Fatalf("logout: %v", err)
+	}
+	_, err = svc.Refresh(ctx, &pb.RefreshRequest{RefreshToken: login.Tokens.RefreshToken})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Errorf("refresh after logout code = %v, want Unauthenticated", status.Code(err))
+	}
+
+	// Logout stays idempotent when the body is empty or unparsable.
+	if _, err := svc.Logout(ctx, &pb.LogoutRequest{}); err != nil {
+		t.Errorf("logout without token: %v", err)
+	}
+}
+
+func TestAuthValidateRejectsRevokedAccessToken(t *testing.T) {
+	m := seededStore(t)
+	bl := revocation.NewMemoryBlacklist()
+	svc := NewAuthService(m, AuthConfig{
+		Secret: "test-secret", AccessTTL: 5 * time.Minute, RefreshTTL: time.Hour,
+	}, WithRevocationList(bl))
+	ctx := context.Background()
+
+	login, err := svc.Login(ctx, &pb.LoginRequest{TenantId: "default", Username: "admin", Password: "admin123"})
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	info, err := tenant.ParseTokenInfo("test-secret", login.Tokens.AccessToken, tenant.TokenTypeAccess)
+	if err != nil {
+		t.Fatalf("parse access: %v", err)
+	}
+	if err := bl.Revoke(ctx, info.ID, time.Until(info.ExpiresAt)); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	v, err := svc.Validate(ctx, &pb.ValidateRequest{AccessToken: login.Tokens.AccessToken})
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if v.Valid {
+		t.Error("revoked access token reported as valid")
 	}
 }
 

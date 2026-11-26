@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/nexusflow/nexusflow/backend/internal/revocation"
 	"github.com/nexusflow/nexusflow/backend/internal/tenant"
 	"golang.org/x/time/rate"
 )
@@ -24,8 +25,9 @@ func Trace() gin.HandlerFunc {
 	}
 }
 
-// Auth validates the JWT and injects the tenant principal into the context.
-func Auth(secret string, allowAnonymous bool) gin.HandlerFunc {
+// Auth validates the JWT, rejects revoked tokens and injects the tenant
+// principal into the context. A nil blacklist disables the revocation check.
+func Auth(secret string, allowAnonymous bool, blacklist revocation.Blacklist) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
 		if header == "" {
@@ -46,15 +48,23 @@ func Auth(secret string, allowAnonymous bool) gin.HandlerFunc {
 			return
 		}
 
-		raw := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
-		p, err := tenant.ParseToken(secret, raw)
+		info, err := tenant.ParseTokenInfo(secret, bearerToken(header), tenant.TokenTypeAccess)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 			return
 		}
-		c.Request = c.Request.WithContext(tenant.With(c.Request.Context(), p))
+		if revocation.Check(c.Request.Context(), blacklist, info.ID) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "token revoked"})
+			return
+		}
+		c.Request = c.Request.WithContext(tenant.With(c.Request.Context(), info.Principal))
 		c.Next()
 	}
+}
+
+// bearerToken extracts the credentials from an Authorization header.
+func bearerToken(header string) string {
+	return strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
 }
 
 // RequirePermission gates a route on a permission key carried by the caller's

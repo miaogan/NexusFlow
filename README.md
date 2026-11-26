@@ -200,7 +200,7 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 - **Auth Service（:9096）**：`Register` / `Login` / `Refresh` / `Logout` / `Validate`，负责密码校验与 JWT 签发。
 - **User Service（:9097）**：租户隔离的用户 CRUD，以及全局角色、权限点的管理。
 
-**令牌模型**：HS256 JWT，claims 携带 `tenant_id` / `user_id` / `roles` / `permissions` / `token_type`。access token 默认 15 分钟（`ACCESS_TOKEN_TTL`），refresh token 默认 168 小时（`REFRESH_TOKEN_TTL`）；`token_type` 区分用途，refresh token 不能当 access 用。权限点在登录时由角色展开并写入 token，网关据此零开销判定，无需每次回调鉴权服务。控制台在 access token 过期（401）时用 refresh token 自动换新并重试原请求，刷新失败则清理登录态并回到 `/login`。
+**令牌模型**：HS256 JWT，claims 携带 `tenant_id` / `user_id` / `roles` / `permissions` / `token_type` / `jti`。access token 默认 15 分钟（`ACCESS_TOKEN_TTL`），refresh token 默认 168 小时（`REFRESH_TOKEN_TTL`）；`token_type` 区分用途，refresh token 不能当 access 用。权限点在登录时由角色展开并写入 token，网关据此本地判定权限，无需每次回调鉴权服务；仅额外查询一次吊销名单以拦截已登出的 `jti`。控制台在 access token 过期（401）时用 refresh token 自动换新并重试原请求，刷新失败则清理登录态并回到 `/login`。
 
 **存储**：`IDENTITY_DRIVER=memory`（默认，dev-all 单进程）、`redis` 或 `postgres`（独立部署时 Auth / User 服务共享同一份用户与角色数据；postgres 使用 `IDENTITY_DATABASE_URL`，启动时自动建 `identity_users` / `identity_roles` 表）。
 
@@ -221,7 +221,7 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 | POST | `/v1/auth/register` | 公开 | 自助注册（`ALLOW_SELF_REGISTER` 可关），默认分配 viewer |
 | POST | `/v1/auth/login` | 公开 | 用户名 + 密码 → 令牌对 + 用户信息 |
 | POST | `/v1/auth/refresh` | 公开 | refresh token 换新令牌对 |
-| POST | `/v1/auth/logout` | 需登录 | 无状态登出（生产可接吊销名单） |
+| POST | `/v1/auth/logout` | 需登录 | 吊销当前 access token 与请求体中的 refresh token（`TOKEN_BLACKLIST_DRIVER`：memory/redis） |
 | GET/POST | `/v1/users` | `user:read` / `user:write` | 列表 / 创建 |
 | GET/PATCH/DELETE | `/v1/users/:id` | `user:read` / `user:write` / `user:delete` | 详情 / 更新 / 删除 |
 | GET/POST | `/v1/roles` | `role:read` / `role:write` | 角色列表 / 新建或更新 |
@@ -450,4 +450,4 @@ make up / down     # 容器编排启停
 - K8s HPA 使用自定义指标 `nexusflow_queue_length`，需部署 prometheus-adapter 将指标转换为 Custom Metrics API。
 - 设计文档中的 LightRAG、NL2SQL 章节属于目标架构，当前代码骨架预留了对应扩展位，尚未实现端到端链路；长期记忆已由 `memory-agent` 落地（抽取/去重/召回/注入）。（可观测性 / Langfuse 导出与 dev trace viewer 已实现，见上节。）
 - 用户与角色支持三种存储：`memory`（dev-all 单进程默认）、`redis`（`IDENTITY_DRIVER=redis`）与 `postgres`（`IDENTITY_DRIVER=postgres` + `IDENTITY_DATABASE_URL`），后两者供独立部署的 Auth / User 服务跨进程共享；postgres 启动时自动建表并复用内置角色种子。沙箱环境无 Postgres，该路径尚未做运行时验证。
-- 登出为无状态实现（不吊销已签发的 JWT），refresh token 到期自然失效；生产环境如需即时失效需引入令牌吊销名单。
+- 登出通过令牌吊销名单即时生效：JWT 携带 `jti`，登出时将该 id 写入 `TOKEN_BLACKLIST_DRIVER`（`memory` 单进程 / `redis` 供 gateway 与 auth-service 共享）并设置剩余有效期 TTL；网关在每次鉴权时拦截已吊销的 access token，auth-service 在 validate/refresh 时拒绝已吊销的 refresh token。Redis 不可用时自动降级为内存名单并告警。

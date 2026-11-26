@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 // Token types carried in the "token_type" claim.
@@ -24,18 +25,31 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
+// TokenInfo is a verified token payload plus the metadata needed for
+// revocation: the jti claim (ID) and the expiry.
+type TokenInfo struct {
+	Principal
+	ID        string
+	Type      string
+	ExpiresAt time.Time
+}
+
 // ParseToken validates an HS256 token and converts it into a Principal.
 func ParseToken(secret, raw string) (Principal, error) {
-	return parse(secret, raw, "")
+	info, err := ParseTokenInfo(secret, raw, "")
+	return info.Principal, err
 }
 
 // ParseTypedToken validates the token and asserts its "token_type" claim.
 // Tokens without a token_type (legacy) are accepted when expected is access.
 func ParseTypedToken(secret, raw, expected string) (Principal, error) {
-	return parse(secret, raw, expected)
+	info, err := ParseTokenInfo(secret, raw, expected)
+	return info.Principal, err
 }
 
-func parse(secret, raw, expected string) (Principal, error) {
+// ParseTokenInfo verifies the token signature and expiry, then returns the
+// principal together with the jti and expiry used by the revocation list.
+func ParseTokenInfo(secret, raw, expected string) (TokenInfo, error) {
 	claims := &Claims{}
 	tok, err := jwt.ParseWithClaims(raw, claims, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -44,27 +58,33 @@ func parse(secret, raw, expected string) (Principal, error) {
 		return []byte(secret), nil
 	}, jwt.WithExpirationRequired())
 	if err != nil {
-		return Principal{}, err
+		return TokenInfo{}, err
 	}
 	if !tok.Valid || claims.TenantID == "" {
-		return Principal{}, errors.New("invalid token")
+		return TokenInfo{}, errors.New("invalid token")
 	}
-	if expected != "" {
-		typ := claims.TokenType
-		if typ == "" {
-			typ = TokenTypeAccess // legacy tokens are access tokens
-		}
-		if typ != expected {
-			return Principal{}, errors.New("unexpected token type")
-		}
+	typ := claims.TokenType
+	if typ == "" {
+		typ = TokenTypeAccess // legacy tokens are access tokens
 	}
-	return Principal{
-		TenantID:    claims.TenantID,
-		UserID:      claims.UserID,
-		Roles:       claims.Roles,
-		Departments: claims.Departments,
-		Permissions: claims.Permissions,
-	}, nil
+	if expected != "" && typ != expected {
+		return TokenInfo{}, errors.New("unexpected token type")
+	}
+	info := TokenInfo{
+		Principal: Principal{
+			TenantID:    claims.TenantID,
+			UserID:      claims.UserID,
+			Roles:       claims.Roles,
+			Departments: claims.Departments,
+			Permissions: claims.Permissions,
+		},
+		ID:   claims.ID,
+		Type: typ,
+	}
+	if claims.ExpiresAt != nil {
+		info.ExpiresAt = claims.ExpiresAt.Time
+	}
+	return info, nil
 }
 
 // IssueToken mints an access token for local development and tests.
@@ -86,6 +106,7 @@ func issue(secret string, p Principal, ttl time.Duration, typ string) (string, e
 		Permissions: p.Permissions,
 		TokenType:   typ,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        uuid.NewString(), // jti: revocation key
 			Subject:   p.UserID,
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),

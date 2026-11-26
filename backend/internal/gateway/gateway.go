@@ -19,6 +19,7 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/feedback"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/metrics"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/tracing"
+	"github.com/nexusflow/nexusflow/backend/internal/revocation"
 	"github.com/nexusflow/nexusflow/backend/internal/store"
 	"github.com/nexusflow/nexusflow/backend/internal/tenant"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
@@ -49,6 +50,8 @@ type Gateway struct {
 	feedbackStore feedback.Store
 	// rag proxies chat/conversation calls to the Python RAG agent.
 	rag *ragProxy
+	// blacklist rejects revoked access tokens at the edge.
+	blacklist revocation.Blacklist
 	// allowedUploadHosts restricts presigned upload URLs; empty disables the check.
 	allowedUploadHosts map[string]struct{}
 }
@@ -98,6 +101,15 @@ func WithFeedbackStore(s feedback.Store) Option {
 	}
 }
 
+// WithTokenBlacklist enables access-token revocation checks on every request.
+func WithTokenBlacklist(b revocation.Blacklist) Option {
+	return func(g *Gateway) {
+		if b != nil {
+			g.blacklist = b
+		}
+	}
+}
+
 func New(
 	ingestion pb.IngestionServiceClient,
 	query pb.QueryServiceClient,
@@ -141,7 +153,7 @@ func (g *Gateway) Router() *gin.Engine {
 	pub.POST("/register", g.register)
 	pub.POST("/refresh", g.refresh)
 
-	v1 := r.Group("/v1", Auth(g.secret, g.allowAnon), RateLimit(50, 100))
+	v1 := r.Group("/v1", Auth(g.secret, g.allowAnon, g.blacklist), RateLimit(50, 100))
 	v1.POST("/auth/logout", g.logout)
 	v1.POST("/files", g.uploadFile)
 	v1.GET("/tasks", g.listTasks)

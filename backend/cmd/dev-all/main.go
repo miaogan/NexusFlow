@@ -24,6 +24,7 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/processing"
 	"github.com/nexusflow/nexusflow/backend/internal/query"
 	"github.com/nexusflow/nexusflow/backend/internal/queue"
+	"github.com/nexusflow/nexusflow/backend/internal/revocation"
 	"github.com/nexusflow/nexusflow/backend/internal/sandbox"
 	"github.com/nexusflow/nexusflow/backend/internal/state"
 	"github.com/nexusflow/nexusflow/backend/internal/store"
@@ -142,12 +143,17 @@ func main() {
 		logger.Error("seed identity store", "error", err)
 		os.Exit(1)
 	}
+	blacklist, err := revocation.New(cfg.TokenBlacklistDriver, cfg.RedisAddr)
+	if err != nil {
+		logger.Warn("token blacklist backend unavailable, falling back to memory", "error", err)
+	}
+	defer blacklist.Close()
 	authSvc := identity.NewAuthService(identityStore, identity.AuthConfig{
 		Secret:            cfg.JWTSecret,
 		AccessTTL:         cfg.AccessTokenTTL,
 		RefreshTTL:        cfg.RefreshTokenTTL,
 		AllowSelfRegister: cfg.AllowSelfRegister,
-	})
+	}, identity.WithRevocationList(blacklist))
 	userSvc := identity.NewUserService(identityStore)
 
 	wfRegistry := workflow.NewRegistry()
@@ -237,6 +243,7 @@ func main() {
 		),
 		gateway.WithRAGAgent(cfg.RAGAgentURL),
 		gateway.WithFeedbackStore(feedbackStore),
+		gateway.WithTokenBlacklist(blacklist),
 	)
 	srv := &http.Server{
 		Addr:              cfg.GatewayHTTPAddr,

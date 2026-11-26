@@ -13,6 +13,7 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/gateway"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/httpserver"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/log"
+	"github.com/nexusflow/nexusflow/backend/internal/revocation"
 	"github.com/nexusflow/nexusflow/backend/internal/store"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 	"google.golang.org/grpc"
@@ -38,6 +39,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer feedbackStore.Close()
+
+	blacklist, err := revocation.New(cfg.TokenBlacklistDriver, cfg.RedisAddr)
+	if err != nil {
+		logger.Warn("token blacklist backend unavailable, falling back to memory", "error", err)
+	}
+	defer blacklist.Close()
 
 	ingestConn, err := grpc.NewClient(cfg.IngestionTarget, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -86,6 +93,7 @@ func main() {
 		),
 		gateway.WithRAGAgent(cfg.RAGAgentURL),
 		gateway.WithFeedbackStore(feedbackStore),
+		gateway.WithTokenBlacklist(blacklist),
 	)
 
 	srv := &http.Server{

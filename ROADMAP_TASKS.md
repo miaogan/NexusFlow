@@ -9,7 +9,7 @@
 * **[x] Task 1.1: 验证并修复 Postgres 身份认证存储链路**
   * **目标**：确保 `IDENTITY_DRIVER=postgres` 下自动建表与种子用户初始化幂等，补充集成测试 `backend/internal/identity/postgres_test.go`，对齐 `deploy/docker-compose.yml` 默认配置。
   * **验证命令**：`make vet && go test ./backend/internal/identity/...`
-* **[ ] Task 1.2: 实现基于 Redis 的 JWT 令牌吊销名单（Token Revocation）**
+* **[x] Task 1.2: 实现基于 Redis 的 JWT 令牌吊销名单（Token Revocation）**
   * **目标**：设计 `TokenBlacklist` 接口（支持 memory/redis），在 `/v1/auth/logout` 时写入黑名单并设置 TTL，改造网关与鉴权逻辑拦截失效 Token。
   * **验证命令**：`make vet && go test ./backend/internal/gateway/... ./backend/internal/identity/...`
 * **[ ] Task 1.3: 生产级 Docker Compose 配置与健康检查收敛**

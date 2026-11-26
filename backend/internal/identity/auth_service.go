@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nexusflow/nexusflow/backend/internal/revocation"
 	"github.com/nexusflow/nexusflow/backend/internal/tenant"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 	"google.golang.org/grpc/codes"
@@ -39,12 +40,26 @@ func (c AuthConfig) refreshTTL() time.Duration {
 // token refresh, logout and token validation.
 type AuthService struct {
 	pb.UnimplementedAuthServiceServer
-	store Store
-	cfg   AuthConfig
+	store   Store
+	cfg     AuthConfig
+	revoked revocation.Blacklist
 }
 
-func NewAuthService(store Store, cfg AuthConfig) *AuthService {
-	return &AuthService{store: store, cfg: cfg}
+// AuthOption configures optional AuthService collaborators.
+type AuthOption func(*AuthService)
+
+// WithRevocationList attaches the token blacklist consulted on validate and
+// refresh, and written on logout. Without it revocation checks are skipped.
+func WithRevocationList(b revocation.Blacklist) AuthOption {
+	return func(s *AuthService) { s.revoked = b }
+}
+
+func NewAuthService(store Store, cfg AuthConfig, opts ...AuthOption) *AuthService {
+	s := &AuthService{store: store, cfg: cfg}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 func (s *AuthService) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
@@ -83,10 +98,14 @@ func (s *AuthService) Login(ctx context.Context, req *pb.LoginRequest) (*pb.Logi
 }
 
 func (s *AuthService) Refresh(ctx context.Context, req *pb.RefreshRequest) (*pb.LoginResponse, error) {
-	p, err := tenant.ParseTypedToken(s.cfg.Secret, req.GetRefreshToken(), tenant.TokenTypeRefresh)
+	info, err := tenant.ParseTokenInfo(s.cfg.Secret, req.GetRefreshToken(), tenant.TokenTypeRefresh)
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, ErrInvalidToken.Error())
 	}
+	if revocation.Check(ctx, s.revoked, info.ID) {
+		return nil, status.Error(codes.Unauthenticated, ErrInvalidToken.Error())
+	}
+	p := info.Principal
 	u, ok, err := s.store.GetUser(ctx, p.TenantID, p.UserID)
 	if err != nil {
 		return nil, toStatus(err)
@@ -100,17 +119,39 @@ func (s *AuthService) Refresh(ctx context.Context, req *pb.RefreshRequest) (*pb.
 	return s.issue(ctx, u)
 }
 
-// Logout is a no-op for stateless JWTs; refresh tokens expire on their own.
-// A production deployment would push the token id onto a revocation list.
-func (s *AuthService) Logout(_ context.Context, _ *pb.LogoutRequest) (*pb.LogoutResponse, error) {
+// Logout revokes the presented refresh token until its natural expiry, so a
+// stolen refresh token cannot mint new access tokens after logout. Access
+// tokens are revoked by the gateway that received them. Tokens that fail to
+// parse are ignored: logout stays idempotent.
+func (s *AuthService) Logout(ctx context.Context, req *pb.LogoutRequest) (*pb.LogoutResponse, error) {
+	if raw := strings.TrimSpace(req.GetRefreshToken()); raw != "" && s.revoked != nil {
+		if info, err := tenant.ParseTokenInfo(s.cfg.Secret, raw, tenant.TokenTypeRefresh); err == nil {
+			revokeToken(ctx, s.revoked, info)
+		}
+	}
 	return &pb.LogoutResponse{Success: true}, nil
 }
 
+// revokeToken records the token id for the remaining lifetime of the token.
+// Failures are ignored so a blacklist outage never blocks logout.
+func revokeToken(ctx context.Context, b revocation.Blacklist, info tenant.TokenInfo) {
+	if b == nil || info.ID == "" {
+		return
+	}
+	if ttl := time.Until(info.ExpiresAt); ttl > 0 {
+		_ = b.Revoke(ctx, info.ID, ttl)
+	}
+}
+
 func (s *AuthService) Validate(ctx context.Context, req *pb.ValidateRequest) (*pb.ValidateResponse, error) {
-	p, err := tenant.ParseTypedToken(s.cfg.Secret, req.GetAccessToken(), tenant.TokenTypeAccess)
+	info, err := tenant.ParseTokenInfo(s.cfg.Secret, req.GetAccessToken(), tenant.TokenTypeAccess)
 	if err != nil {
 		return &pb.ValidateResponse{Valid: false}, nil
 	}
+	if revocation.Check(ctx, s.revoked, info.ID) {
+		return &pb.ValidateResponse{Valid: false}, nil
+	}
+	p := info.Principal
 	u, ok, err := s.store.GetUser(ctx, p.TenantID, p.UserID)
 	if err != nil {
 		return nil, toStatus(err)

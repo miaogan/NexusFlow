@@ -10,6 +10,7 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/identity"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/grpcserver"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/log"
+	"github.com/nexusflow/nexusflow/backend/internal/revocation"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 	"google.golang.org/grpc"
 )
@@ -27,6 +28,12 @@ func main() {
 		logger.Error("init identity store", "error", err)
 		os.Exit(1)
 	}
+
+	blacklist, err := revocation.New(cfg.TokenBlacklistDriver, cfg.RedisAddr)
+	if err != nil {
+		logger.Warn("token blacklist backend unavailable, falling back to memory", "error", err)
+	}
+	defer blacklist.Close()
 	if err := store.Seed(identity.SeedOptions{
 		TenantID:      cfg.SeedTenantID,
 		AdminUsername: cfg.SeedAdminUsername,
@@ -41,7 +48,7 @@ func main() {
 		AccessTTL:         cfg.AccessTokenTTL,
 		RefreshTTL:        cfg.RefreshTokenTTL,
 		AllowSelfRegister: cfg.AllowSelfRegister,
-	})
+	}, identity.WithRevocationList(blacklist))
 
 	if err := grpcserver.Serve(ctx, cfg.AuthGRPCAddr, func(s *grpc.Server) {
 		pb.RegisterAuthServiceServer(s, svc)

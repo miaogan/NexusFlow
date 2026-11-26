@@ -3,8 +3,10 @@ package gateway
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nexusflow/nexusflow/backend/internal/tenant"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -89,13 +91,39 @@ func (g *Gateway) logout(c *gin.Context) {
 		return
 	}
 	var body refreshReq
-	_ = c.ShouldBindJSON(&body) // body optional: logout is stateless
+	_ = c.ShouldBindJSON(&body) // body optional: only refresh tokens are revoked upstream
 	ctx, _ := g.callerContext(c)
 	if _, err := g.auth.Logout(ctx, &pb.LogoutRequest{RefreshToken: body.RefreshToken}); err != nil {
 		writeIdentityError(c, err)
 		return
 	}
+	g.revokeAccessToken(c)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// revokeAccessToken blacklists the caller's access token until it expires, so
+// it stops working immediately after logout instead of living out its TTL.
+// With the Redis backend the auth-service shares the same list; with the
+// in-memory backend the gateway edge enforces it for this process.
+func (g *Gateway) revokeAccessToken(c *gin.Context) {
+	if g.blacklist == nil {
+		return
+	}
+	header := c.GetHeader("Authorization")
+	if header == "" {
+		return
+	}
+	info, err := tenant.ParseTokenInfo(g.secret, bearerToken(header), tenant.TokenTypeAccess)
+	if err != nil || info.ID == "" {
+		return
+	}
+	ttl := time.Until(info.ExpiresAt)
+	if ttl <= 0 {
+		return
+	}
+	if err := g.blacklist.Revoke(c.Request.Context(), info.ID, ttl); err != nil {
+		g.logger.Warn("revoke access token failed", "error", err)
+	}
 }
 
 func loginBody(res *pb.LoginResponse) gin.H {

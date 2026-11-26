@@ -56,6 +56,9 @@ type Config struct {
 
 	JWTSecret      string
 	AllowAnonymous bool
+	// TokenBlacklistDriver selects the JWT revocation store: memory | redis.
+	// Redis shares revocations between the gateway and auth-service.
+	TokenBlacklistDriver string
 
 	// Identity: authentication and RBAC.
 	AccessTokenTTL    time.Duration
@@ -122,6 +125,8 @@ func Load() Config {
 
 		JWTSecret:      env("JWT_SECRET", "nexusflow-dev-secret"),
 		AllowAnonymous: envBool("ALLOW_ANONYMOUS", true),
+
+		TokenBlacklistDriver: env("TOKEN_BLACKLIST_DRIVER", "memory"),
 
 		AccessTokenTTL:    envDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
 		RefreshTokenTTL:   envDuration("REFRESH_TOKEN_TTL", 7*24*time.Hour),

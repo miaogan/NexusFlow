@@ -9,6 +9,8 @@ x-app-env: &app-env
   QUEUE_URL: amqp://guest:guest@rabbitmq:5672/
   JWT_SECRET: ${JWT_SECRET:-nexusflow-dev-secret}
   ALLOW_ANONYMOUS: "true"
+  # Share the JWT revocation list between gateway and auth-service.
+  TOKEN_BLACKLIST_DRIVER: redis
   OBJECT_STORE_DIR: /data/objects
   OBJECT_STORE_BASE: http://minio:9000/nexusflow
   SANDBOX_BACKEND: local
@@ -98,6 +100,8 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes: ["objects:/data/objects"]
     ports: ["8080:8080"]
 
@@ -115,6 +119,8 @@ services:
       IDENTITY_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     ports: ["9096:9096"]
 

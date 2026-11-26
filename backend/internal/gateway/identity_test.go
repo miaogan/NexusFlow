@@ -13,6 +13,7 @@ import (
 
 	"github.com/nexusflow/nexusflow/backend/internal/identity"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/log"
+	"github.com/nexusflow/nexusflow/backend/internal/revocation"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -32,9 +33,10 @@ func newIdentityGateway(t *testing.T) *Gateway {
 
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer()
+	blacklist := revocation.NewMemoryBlacklist()
 	pb.RegisterAuthServiceServer(srv, identity.NewAuthService(store, identity.AuthConfig{
 		Secret: "test-secret", AccessTTL: 5 * time.Minute, RefreshTTL: time.Hour, AllowSelfRegister: true,
-	}))
+	}, identity.WithRevocationList(blacklist)))
 	pb.RegisterUserServiceServer(srv, identity.NewUserService(store))
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
@@ -51,6 +53,7 @@ func newIdentityGateway(t *testing.T) *Gateway {
 
 	return New(nil, nil, nil, nil, log.New("gateway-test"), "test-secret", true,
 		WithIdentity(pb.NewAuthServiceClient(conn), pb.NewUserServiceClient(conn)),
+		WithTokenBlacklist(blacklist),
 	)
 }
 
@@ -92,6 +95,22 @@ func TestIdentityAnonymousCannotManageUsers(t *testing.T) {
 	h := newIdentityGateway(t).Router()
 	if w := call(t, h, http.MethodGet, "/v1/users", "", nil); w.Code != http.StatusForbidden {
 		t.Errorf("anonymous GET /v1/users = %d, want 403", w.Code)
+	}
+}
+
+func TestIdentityLogoutRevokesAccessToken(t *testing.T) {
+	h := newIdentityGateway(t).Router()
+	token := loginToken(t, h, "admin", "admin123")
+
+	if w := call(t, h, http.MethodGet, "/v1/me", token, nil); w.Code != http.StatusOK {
+		t.Fatalf("me before logout: %d %s", w.Code, w.Body.String())
+	}
+	if w := call(t, h, http.MethodPost, "/v1/auth/logout", token, nil); w.Code != http.StatusOK {
+		t.Fatalf("logout: %d %s", w.Code, w.Body.String())
+	}
+	// The same access token must be rejected once it is on the blacklist.
+	if w := call(t, h, http.MethodGet, "/v1/me", token, nil); w.Code != http.StatusUnauthorized {
+		t.Errorf("me after logout = %d, want 401", w.Code)
 	}
 }
 
