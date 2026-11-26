@@ -7,15 +7,16 @@ import (
 )
 
 // MemoryRetriever is a lightweight in-process recall path for local demo and
-// tests. It scores documents by unigram/bigram overlap so that Chinese text
-// works without an external tokenizer.
+// tests. It reads from a shared DocStore so that newly indexed documents are
+// immediately retrievable by every registered route. Scoring uses
+// unigram/bigram overlap so Chinese text works without an external tokenizer.
 type MemoryRetriever struct {
-	name string
-	docs []Chunk
+	name  string
+	store *DocStore
 }
 
-func NewMemoryRetriever(name string, docs []Chunk) *MemoryRetriever {
-	return &MemoryRetriever{name: name, docs: docs}
+func NewMemoryRetriever(name string, store *DocStore) *MemoryRetriever {
+	return &MemoryRetriever{name: name, store: store}
 }
 
 func (m *MemoryRetriever) Name() string { return m.name }
@@ -32,7 +33,7 @@ func (m *MemoryRetriever) Retrieve(_ context.Context, query string, topK int, fi
 		score float64
 	}
 	var hits []scored
-	for _, doc := range m.docs {
+	for _, doc := range m.store.All() {
 		if !matchFilters(doc, filters) {
 			continue
 		}

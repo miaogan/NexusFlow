@@ -48,8 +48,10 @@ func main() {
 	}
 
 	engine := query.NewEngine(logger, reranker)
-	engine.Register(query.NewMemoryRetriever("vector", demoCorpus()))
-	engine.Register(query.NewMemoryRetriever("bm25", demoCorpus()))
+	docStore := engine.Store()
+	docStore.Add("seed", demoCorpus())
+	engine.Register(query.NewMemoryRetriever("vector", docStore))
+	engine.Register(query.NewMemoryRetriever("bm25", docStore))
 
 	svc := query.NewGRPCService(engine)
 

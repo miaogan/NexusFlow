@@ -62,18 +62,30 @@ export default function Search() {
               <ul className="space-y-3">
                 {result.chunks.map((chunk, idx) => (
                   <li key={chunk.chunk_id} className="rounded-lg border border-white/5 bg-white/[0.02] p-3">
-                    <div className="mb-1.5 flex items-center justify-between">
-                      <span className="text-[10px] font-mono text-slate-500">#{idx + 1} {chunk.chunk_id}</span>
-                      <span className="text-[10px] text-accent">score {chunk.score.toFixed(4)}</span>
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
+                      <span className="truncate text-[10px] font-mono text-slate-500">#{idx + 1} {chunk.chunk_id}</span>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {chunk.meta?.file_name && (
+                          <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[9px] text-accent" title="来源文件">
+                            📄 {chunk.meta.file_name}
+                          </span>
+                        )}
+                        {chunk.meta?.source && (
+                          <span className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] text-slate-400">{chunk.meta.source}</span>
+                        )}
+                        <span className="text-[10px] text-accent">score {chunk.score.toFixed(4)}</span>
+                      </div>
                     </div>
                     <p className="text-xs leading-relaxed text-slate-300">{chunk.content}</p>
-                    {chunk.meta && Object.keys(chunk.meta).length > 0 && (
+                    {chunk.meta && Object.keys(chunk.meta).filter((k) => k !== "file_name" && k !== "source").length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1">
-                        {Object.entries(chunk.meta).map(([k, v]) => (
-                          <span key={k} className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] text-slate-500">
-                            {k}: {v}
-                          </span>
-                        ))}
+                        {Object.entries(chunk.meta)
+                          .filter(([k]) => k !== "file_name" && k !== "source")
+                          .map(([k, v]) => (
+                            <span key={k} className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] text-slate-500">
+                              {k}: {v}
+                            </span>
+                          ))}
                       </div>
                     )}
                   </li>

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -134,15 +135,40 @@ func Parse(ctx context.Context, c Client, taskID, fileURL, fileType string, inte
 }
 
 // MockClient returns a fixed Markdown document and is used when no MinerU
-// endpoint is configured, so that local demos run end to end.
+// endpoint is configured, so that local demos run end to end. When ReadFile is
+// set, uploaded text-like files are indexed verbatim (making upload→retrieval
+// demos use real content); unsupported file types fall back to Markdown.
 type MockClient struct {
 	Markdown string
+	ReadFile func(fileURL, fileType string) (string, error)
+
+	mu   sync.Mutex
+	jobs map[string]fileRef
 }
 
-func (m *MockClient) Submit(_ context.Context, _, _, _ string) (string, error) {
-	return "mock-job", nil
+type fileRef struct {
+	url string
+	typ string
 }
 
-func (m *MockClient) Poll(_ context.Context, _ string) (string, bool, error) {
+func (m *MockClient) Submit(_ context.Context, taskID, fileURL, fileType string) (string, error) {
+	m.mu.Lock()
+	if m.jobs == nil {
+		m.jobs = make(map[string]fileRef)
+	}
+	m.jobs[taskID] = fileRef{url: fileURL, typ: fileType}
+	m.mu.Unlock()
+	return taskID, nil
+}
+
+func (m *MockClient) Poll(_ context.Context, jobID string) (string, bool, error) {
+	if m.ReadFile != nil {
+		m.mu.Lock()
+		ref := m.jobs[jobID]
+		m.mu.Unlock()
+		if content, err := m.ReadFile(ref.url, ref.typ); err == nil && content != "" {
+			return content, true, nil
+		}
+	}
 	return m.Markdown, true, nil
 }

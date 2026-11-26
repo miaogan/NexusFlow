@@ -192,8 +192,8 @@ make up / down     # 容器编排启停
 
 ## 当前实现边界
 
-- `MINERU_TARGET` 为空时使用内置 Mock 解析器，便于本地闭环；接入真实 MinerU 只需配置该地址。
-- Query Service 内置演示语料与内存召回；生产替换为 Qdrant/Milvus 召回器即可，RRF 与重排逻辑不变。
+- `MINERU_TARGET` 为空时使用内置 Mock 解析器；对 txt/md/csv/json 等文本类文件会回显真实内容，使"上传 → 检索"闭环可演示。接入真实 MinerU 只需配置该地址。
+- 单进程 dev-all 模式下，上传文件经解析、切块后写入共享内存索引（DocStore），检索可命中真实上传内容，任务状态推进至 COMPLETED。RRF 融合与重排逻辑与生产一致；生产将内存召回器替换为 Qdrant/Milvus 即可。
 - LlamaIndex Service 的切块、索引与检索依赖 Qdrant 与 Embedding API Key；未配置时相关接口返回 503。
 - K8s HPA 使用自定义指标 `nexusflow_queue_length`，需部署 prometheus-adapter 将指标转换为 Custom Metrics API。
 - 设计文档中的 LightRAG、NL2SQL、长期记忆、Langfuse 章节属于目标架构，当前代码骨架预留了对应扩展位，尚未实现端到端链路。

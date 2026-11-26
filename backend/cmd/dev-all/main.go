@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/nexusflow/nexusflow/backend/internal/config"
 	"github.com/nexusflow/nexusflow/backend/internal/gateway"
+	"github.com/nexusflow/nexusflow/backend/internal/indexing"
 	"github.com/nexusflow/nexusflow/backend/internal/ingestion"
 	"github.com/nexusflow/nexusflow/backend/internal/mineru"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/grpcserver"
@@ -64,7 +67,27 @@ func main() {
 	}
 
 	bus := queue.NewMemoryBus()
-	client := &mineru.MockClient{Markdown: mockMarkdown}
+	client := &mineru.MockClient{
+		Markdown: mockMarkdown,
+		ReadFile: func(fileURL, fileType string) (string, error) {
+			// Index uploaded text-like files verbatim so demos search real content.
+			key := strings.TrimPrefix(fileURL, cfg.ObjectStoreBase+"/")
+			rc, err := objects.Get(context.Background(), key)
+			if err != nil {
+				return "", err
+			}
+			defer rc.Close()
+			raw, err := io.ReadAll(rc)
+			if err != nil {
+				return "", err
+			}
+			switch fileType {
+			case "txt", "md", "markdown", "text", "csv", "json", "log":
+				return string(raw), nil
+			}
+			return "", nil // unsupported type → fall back to mock markdown
+		},
+	}
 
 	worker := processing.NewWorker(
 		client, st, bus, logger,
@@ -79,8 +102,15 @@ func main() {
 		{ID: "doc-3", Content: "自定义代码节点通过 OpenSandbox 执行，具备强隔离、强制 TTL、出口白名单与凭据不落盘。", Meta: map[string]string{"tenant_id": "default", "source": "sandbox"}},
 	}
 	engine := query.NewEngine(logger, nil)
-	engine.Register(query.NewMemoryRetriever("vector", citations))
-	engine.Register(query.NewMemoryRetriever("bm25", citations))
+	docStore := engine.Store()
+	docStore.Add("seed", citations) // demo corpus; real uploads are indexed below
+	engine.Register(query.NewMemoryRetriever("vector", docStore))
+	engine.Register(query.NewMemoryRetriever("bm25", docStore))
+
+	// Indexer turns parsed markdown into searchable chunks and advances the
+	// task from PARSED through CHUNKED/EMBEDDED/INDEXED to COMPLETED.
+	idxr := indexing.New(engine, st, logger)
+	bus.Subscribe(cfg.QueueTopicParsed, idxr.Handle)
 
 	ingestSvc := ingestion.NewService(objects, st, bus, logger, cfg.ObjectStoreBase, cfg.QueueTopicUploaded)
 	parseSvc := processing.NewParseService(client, st, logger)

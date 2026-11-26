@@ -2,6 +2,7 @@ package query
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sort"
 	"sync"
@@ -12,6 +13,7 @@ type Engine struct {
 	retrievers map[string]Retriever
 	reranker   Reranker
 	rrfK       int
+	store      *DocStore
 	logger     *slog.Logger
 }
 
@@ -20,8 +22,34 @@ func NewEngine(logger *slog.Logger, reranker Reranker) *Engine {
 		retrievers: make(map[string]Retriever),
 		reranker:   reranker,
 		rrfK:       60,
+		store:      NewDocStore(),
 		logger:     logger,
 	}
+}
+
+// Store returns the shared in-memory document store backing dev-mode retrievers.
+func (e *Engine) Store() *DocStore { return e.store }
+
+// IndexMarkdown chunks a parsed document and writes it into the shared store,
+// making it immediately searchable by every registered retriever. Re-indexing
+// the same docID replaces the previous chunks (idempotent). Returns the number
+// of chunks created.
+func (e *Engine) IndexMarkdown(_ context.Context, docID, markdown string, meta map[string]string) int {
+	chunks := ChunkMarkdown(markdown, 0)
+	if len(chunks) == 0 {
+		return 0
+	}
+	for i := range chunks {
+		if chunks[i].Meta == nil {
+			chunks[i].Meta = make(map[string]string, len(meta)+1)
+		}
+		for k, v := range meta {
+			chunks[i].Meta[k] = v
+		}
+		chunks[i].ID = fmt.Sprintf("%s-%d", docID, i)
+	}
+	e.store.Add(docID, chunks)
+	return len(chunks)
 }
 
 func (e *Engine) Register(r Retriever) {
