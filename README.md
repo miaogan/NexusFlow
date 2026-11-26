@@ -172,7 +172,7 @@ make up
 | RabbitMQ 控制台 | http://localhost:15672 |
 | Prometheus / Grafana | http://localhost:9090 / http://localhost:3000 |
 
-容器编排使用 `STATE_DRIVER=redis`、`QUEUE_DRIVER=rabbitmq`，服务间通过 gRPC 与消息队列解耦。
+容器编排使用 `STATE_DRIVER=redis`、`QUEUE_DRIVER=rabbitmq`，服务间通过 gRPC 与消息队列解耦。每个业务容器均提供 `/healthz`（Go 服务在 `METRICS_ADDR=:9100` 上同时暴露 `/metrics`，gateway/workflow/web 用各自 HTTP 端口），`docker compose` 依据健康检查状态控制启动顺序（如 gateway 等待 auth/user/ingestion/query/sandbox/rag-agent 健康后再启动）。
 
 ## 核心机制
 

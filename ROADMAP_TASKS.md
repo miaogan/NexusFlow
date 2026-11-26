@@ -12,7 +12,7 @@
 * **[x] Task 1.2: 实现基于 Redis 的 JWT 令牌吊销名单（Token Revocation）**
   * **目标**：设计 `TokenBlacklist` 接口（支持 memory/redis），在 `/v1/auth/logout` 时写入黑名单并设置 TTL，改造网关与鉴权逻辑拦截失效 Token。
   * **验证命令**：`make vet && go test ./backend/internal/gateway/... ./backend/internal/identity/...`
-* **[ ] Task 1.3: 生产级 Docker Compose 配置与健康检查收敛**
+* **[x] Task 1.3: 生产级 Docker Compose 配置与健康检查收敛**
   * **目标**：对齐 `.env.example` 环境变量，为 `deploy/docker-compose.yml` 所有业务容器添加 `/healthz` 健康检查与依赖关系。
   * **验证命令**：`docker compose -f deploy/docker-compose.yml config -q && echo "Compose config valid"`
 

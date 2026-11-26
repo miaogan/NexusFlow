@@ -10,6 +10,7 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/identity"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/grpcserver"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/log"
+	"github.com/nexusflow/nexusflow/backend/internal/platform/metrics"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 	"google.golang.org/grpc"
 )
@@ -37,6 +38,12 @@ func main() {
 	}
 
 	svc := identity.NewUserService(store)
+
+	go func() {
+		if err := metrics.Serve(ctx, cfg.MetricsAddr, logger); err != nil {
+			logger.Warn("metrics server stopped", "error", err)
+		}
+	}()
 
 	if err := grpcserver.Serve(ctx, cfg.UserGRPCAddr, func(s *grpc.Server) {
 		pb.RegisterUserServiceServer(s, svc)

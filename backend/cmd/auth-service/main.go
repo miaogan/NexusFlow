@@ -10,6 +10,7 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/identity"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/grpcserver"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/log"
+	"github.com/nexusflow/nexusflow/backend/internal/platform/metrics"
 	"github.com/nexusflow/nexusflow/backend/internal/revocation"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 	"google.golang.org/grpc"
@@ -49,6 +50,12 @@ func main() {
 		RefreshTTL:        cfg.RefreshTokenTTL,
 		AllowSelfRegister: cfg.AllowSelfRegister,
 	}, identity.WithRevocationList(blacklist))
+
+	go func() {
+		if err := metrics.Serve(ctx, cfg.MetricsAddr, logger); err != nil {
+			logger.Warn("metrics server stopped", "error", err)
+		}
+	}()
 
 	if err := grpcserver.Serve(ctx, cfg.AuthGRPCAddr, func(s *grpc.Server) {
 		pb.RegisterAuthServiceServer(s, svc)
