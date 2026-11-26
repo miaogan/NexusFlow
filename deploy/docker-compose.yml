@@ -221,6 +221,11 @@ services:
       <<: *app-env
       QUERY_GRPC_ADDR: ":9094"
       RERANK_URL: ${RERANK_URL:-}
+      RERANK_MODEL: ${RERANK_MODEL:-bge-reranker-v2-m3}
+      RERANK_PROTOCOL: ${RERANK_PROTOCOL:-generic}
+      RERANK_API_KEY: ${RERANK_API_KEY:-}
+      RERANK_POOL: ${RERANK_POOL:-0}
+      RERANK_TIMEOUT: ${RERANK_TIMEOUT:-8s}
       # Graph recall (LightRAG-style entity graph) runs in the LlamaIndex service.
       LLAMAINDEX_URL: "http://llamaindex:8000"
       # Read the same feedback table as the gateway so online down-ranking sees
@@ -250,6 +255,10 @@ services:
       # Production must point this at a SELECT-only role.
       NL2SQL_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
       NL2SQL_SCHEMA: "rag_feedback(tenant_id, user_id, subject_id, name, rating, query_text, answer_text, created_at)"
+      # Question -> SQL generation; empty -> only config.sql / sql_from works.
+      NL2SQL_LLM_BASE_URL: ${NL2SQL_LLM_BASE_URL:-}
+      NL2SQL_LLM_API_KEY: ${NL2SQL_LLM_API_KEY:-}
+      NL2SQL_LLM_MODEL: ${NL2SQL_LLM_MODEL:-gpt-4o-mini}
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/healthz"]
@@ -266,7 +275,18 @@ services:
       LLAMAINDEX_QDRANT_URL: http://qdrant:6333
       LLAMAINDEX_EMBEDDING_API_KEY: ${LLAMAINDEX_EMBEDDING_API_KEY:-}
       LLAMAINDEX_EMBEDDING_API_BASE: ${LLAMAINDEX_EMBEDDING_API_BASE:-https://api.openai.com/v1}
-      LLAMAINDEX_RERANK_URL: ${RERANK_URL:-}
+      LLAMAINDEX_EMBEDDING_MODEL: ${LLAMAINDEX_EMBEDDING_MODEL:-text-embedding-3-large}
+      LLAMAINDEX_EMBEDDING_BATCH_SIZE: ${LLAMAINDEX_EMBEDDING_BATCH_SIZE:-16}
+      LLAMAINDEX_RERANK_URL: ${LLAMAINDEX_RERANK_URL:-${RERANK_URL:-}}
+      LLAMAINDEX_RERANK_MODEL: ${LLAMAINDEX_RERANK_MODEL:-bge-reranker-v2-m3}
+      LLAMAINDEX_RERANK_PROTOCOL: ${LLAMAINDEX_RERANK_PROTOCOL:-generic}
+      LLAMAINDEX_RERANK_API_KEY: ${LLAMAINDEX_RERANK_API_KEY:-}
+      LLAMAINDEX_RERANK_POOL: ${LLAMAINDEX_RERANK_POOL:-0}
+      LLAMAINDEX_RERANK_TIMEOUT_SECONDS: ${LLAMAINDEX_RERANK_TIMEOUT_SECONDS:-2}
+      # Graph extraction LLM (empty -> co-occurrence word graph).
+      LLAMAINDEX_LLM_BASE_URL: ${LLAMAINDEX_LLM_BASE_URL:-}
+      LLAMAINDEX_LLM_API_KEY: ${LLAMAINDEX_LLM_API_KEY:-}
+      LLAMAINDEX_LLM_MODEL: ${LLAMAINDEX_LLM_MODEL:-gpt-4o-mini}
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
@@ -315,6 +335,7 @@ services:
       MEMORY_EMBEDDING_BASE_URL: ${MEMORY_EMBEDDING_BASE_URL:-}
       MEMORY_EMBEDDING_API_KEY: ${MEMORY_EMBEDDING_API_KEY:-}
       MEMORY_EMBEDDING_MODEL: ${MEMORY_EMBEDDING_MODEL:-text-embedding-3-small}
+      MEMORY_EMBEDDING_DIM: ${MEMORY_EMBEDDING_DIM:-1536}
       # pgvector index tuning (only used when embeddings are configured).
       MEMORY_VECTOR_INDEX: ${MEMORY_VECTOR_INDEX:-hnsw}
       MEMORY_VECTOR_INDEX_RECREATE: ${MEMORY_VECTOR_INDEX_RECREATE:-false}

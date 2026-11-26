@@ -46,7 +46,14 @@ func main() {
 
 	var reranker query.Reranker
 	if cfg.RerankURL != "" {
-		reranker = query.NewHTTPReranker(cfg.RerankURL, cfg.RerankModel, 0)
+		reranker = query.NewHTTPReranker(query.RerankerConfig{
+			URL:      cfg.RerankURL,
+			Model:    cfg.RerankModel,
+			Protocol: cfg.RerankProtocol,
+			APIKey:   cfg.RerankAPIKey,
+			Pool:     cfg.RerankPool,
+			Timeout:  cfg.RerankTimeout,
+		})
 	}
 
 	// Feedback drives online down-ranking; a failed backend disables only that

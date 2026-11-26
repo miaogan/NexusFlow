@@ -31,6 +31,12 @@ type Config struct {
 	MinerUTarget    string
 	RerankURL       string
 	RerankModel     string
+	// RerankProtocol selects the wire format: generic (bge/Cohere style) or
+	// dashscope (Aliyun text-rerank). RerankAPIKey is only sent for dashscope.
+	RerankProtocol string
+	RerankAPIKey   string
+	RerankPool     int
+	RerankTimeout  time.Duration
 	// RAGAgentURL is the Python RAG chat service (LangGraph) base URL.
 	RAGAgentURL string
 
@@ -120,6 +126,10 @@ func Load() Config {
 		MinerUTarget:    env("MINERU_TARGET", ""),
 		RerankURL:       env("RERANK_URL", ""),
 		RerankModel:     env("RERANK_MODEL", "bge-reranker-v2-m3"),
+		RerankProtocol:  env("RERANK_PROTOCOL", "generic"),
+		RerankAPIKey:    env("RERANK_API_KEY", ""),
+		RerankPool:      envInt("RERANK_POOL", 0),
+		RerankTimeout:   envDuration("RERANK_TIMEOUT", 8*time.Second),
 		RAGAgentURL:     env("RAG_AGENT_URL", "http://127.0.0.1:8001"),
 
 		StateDriver:         env("STATE_DRIVER", "memory"),

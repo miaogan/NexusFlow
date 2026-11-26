@@ -96,7 +96,11 @@ def test_llm_failure_falls_back_to_cooccurrence(monkeypatch: pytest.MonkeyPatch)
     assert build_graph(_docs()).mode == "cooccurrence"
 
 
-def test_graph_extract_endpoint_reports_entities() -> None:
+def test_graph_extract_endpoint_reports_entities(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Keep the endpoint test offline even when a local .env configures an LLM.
+    monkeypatch.setattr(graph.settings, "llm_base_url", "")
+    monkeypatch.setattr(graph.settings, "llm_api_key", "")
+
     from fastapi.testclient import TestClient
 
     from app.main import app

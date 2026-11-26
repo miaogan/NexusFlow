@@ -193,6 +193,8 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 
 **检索链路**（`backend/internal/query`）：多路召回并行执行（`vector` / `bm25` / `graph`，生产均由 LlamaIndex 检索真实 Qdrant 索引）→ RRF 融合（k=60）→ 去重 → Cross-Encoder 重排 → 负反馈降权（`FeedbackPenalty`：同一租户内某 chunk 累计 ≥3 条负反馈时得分 ×0.5，再排序）→ 取 top-N；单路失败、重排超时或反馈存储不可用时均自动降级（Fail-open）。`LlamaIndexRetriever` 统一封装三路请求并从 gRPC 元数据注入 `tenant_id` 过滤；配置 `LLAMAINDEX_URL` 时 query-service 使用真实索引，未配置时回退到内存演示语料（dev-all 始终使用内存实现）。`graph` 路由为 LightRAG 风格实体图，无 LLM 时退化为共现词图。
 
+**Rerank / Embedding 协议**：`RERANK_PROTOCOL=generic|dashscope`。`generic` 为 bge/Cohere 风格 `{model,query,documents,top_n}`；`dashscope` 使用阿里云原生 `{model,input:{query,documents},parameters:{top_n}}` 并以 `RERANK_API_KEY` 作 Bearer 认证，`RERANK_POOL` 限制送排候选数、`RERANK_TIMEOUT` 控制超时；LlamaIndex 侧对应 `LLAMAINDEX_RERANK_*`。Embedding 批次由 `LLAMAINDEX_EMBEDDING_BATCH_SIZE` 控制，`MEMORY_EMBEDDING_DIM` 必须与模型输出维度一致（如 DashScope 1024）。
+
 **沙箱护栏**（`backend/internal/sandbox`）：强制 TTL、`defer` 无条件销毁、输入/输出走约定文件、出口白名单与凭据不落盘。`local` 后端仅用于本机调试，生产必须使用 `remote`（OpenSandbox）。
 
 ## 用户与认证（RBAC）

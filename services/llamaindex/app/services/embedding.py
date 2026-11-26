@@ -11,4 +11,5 @@ def build_embedding(model: str | None = None):
         model=model or settings.embedding_model,
         api_key=settings.embedding_api_key,
         api_base=settings.embedding_api_base,
+        embed_batch_size=settings.embedding_batch_size,
     )

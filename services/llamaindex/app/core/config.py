@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-large"
     embedding_api_base: str = "https://api.openai.com/v1"
     embedding_api_key: str = ""
+    # DashScope-compatible embeddings may cap batch size; keep it configurable.
+    embedding_batch_size: int = 16
 
     qdrant_url: str = "http://127.0.0.1:6333"
     collection_prefix: str = "nexusflow"
@@ -24,6 +26,11 @@ class Settings(BaseSettings):
     rerank_url: str = ""
     rerank_model: str = "bge-reranker-v2-m3"
     rerank_timeout_seconds: float = 2.0
+    # generic (bge/Cohere style) | dashscope (Aliyun text-rerank).
+    rerank_protocol: str = "generic"
+    rerank_api_key: str = ""
+    # Candidate pool sent to the reranker; 0 keeps every fused candidate.
+    rerank_pool: int = 0
 
     rrf_k: int = 60
     feedback_path: str = "/tmp/nexusflow-feedback.jsonl"
