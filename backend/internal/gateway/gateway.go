@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -43,10 +44,26 @@ type Gateway struct {
 	secret    string
 	allowAnon bool
 	tracer    tracing.Tracer
+	// allowedUploadHosts restricts presigned upload URLs; empty disables the check.
+	allowedUploadHosts map[string]struct{}
 }
 
 // Option configures a Gateway at construction time.
 type Option func(*Gateway)
+
+// WithAllowedUploadHosts restricts presigned upload URLs to the given hosts to
+// mitigate SSRF. An empty list disables the check.
+func WithAllowedUploadHosts(hosts []string) Option {
+	return func(g *Gateway) {
+		if len(hosts) == 0 {
+			return
+		}
+		g.allowedUploadHosts = make(map[string]struct{}, len(hosts))
+		for _, h := range hosts {
+			g.allowedUploadHosts[h] = struct{}{}
+		}
+	}
+}
 
 // WithTracer attaches the observability tracer (feedback scores + trace viewer).
 func WithTracer(t tracing.Tracer) Option {
@@ -181,6 +198,10 @@ func (g *Gateway) uploadJSON(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if !g.presignedURLAllowed(body.PresignedURL) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "presigned_url host not allowed"})
+		return
+	}
 	// Reserved metadata keys are server-owned: drop client-provided
 	// object_key/file_url and derive them from explicit fields only, so a
 	// caller cannot point deletes/retries at arbitrary objects.
@@ -216,6 +237,7 @@ func (g *Gateway) uploadJSON(c *gin.Context) {
 		"task_id": resp.GetTaskId(),
 		"status":  resp.GetStatus(),
 		"message": resp.GetMessage(),
+		"created": resp.GetCreated(),
 	})
 }
 
@@ -311,6 +333,20 @@ func (g *Gateway) uploadMultipart(c *gin.Context) {
 		g.logger.Warn("delete orphan object failed", "key", objectKey, "error", delErr)
 	}
 	c.JSON(http.StatusAccepted, body)
+}
+
+// presignedURLAllowed validates a client-supplied upload URL against the host
+// allowlist, preventing SSRF to arbitrary endpoints.
+func (g *Gateway) presignedURLAllowed(raw string) bool {
+	if raw == "" || len(g.allowedUploadHosts) == 0 {
+		return true
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return false
+	}
+	_, ok := g.allowedUploadHosts[u.Host]
+	return ok
 }
 
 func (g *Gateway) listTasks(c *gin.Context) {

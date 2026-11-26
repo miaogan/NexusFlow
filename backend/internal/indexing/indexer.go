@@ -20,7 +20,7 @@ import (
 // satisfies it in dev mode; keeping it as an interface lets the pipeline run
 // end-to-end without a real vector store and keeps this package testable.
 type DocumentIndexer interface {
-	IndexMarkdown(ctx context.Context, docID, markdown string, meta map[string]string) int
+	IndexMarkdown(ctx context.Context, docID, markdown string, meta map[string]string) (int, error)
 }
 
 type parsedEvent struct {
@@ -88,7 +88,13 @@ func (idx *Indexer) Handle(ctx context.Context, msg queue.Message) error {
 	if task.State == state.Parsed {
 		// Indexing is idempotent (docstore replaces by docID), so re-running on
 		// redelivery is safe.
-		n = idx.indexer.IndexMarkdown(ctx, task.ID, evt.Markdown, meta)
+		n, err = idx.indexer.IndexMarkdown(ctx, task.ID, evt.Markdown, meta)
+		if err != nil {
+			if _, terr := idx.machine.Transition(ctx, task.ID, state.Failed, err.Error()); terr != nil {
+				idx.logger.Warn("transition to FAILED failed", "task_id", task.ID, "error", terr)
+			}
+			return fmt.Errorf("index markdown: %w", err)
+		}
 	}
 
 	// Advance through the remaining indexing stages. The state machine

@@ -54,10 +54,10 @@ func (e *Engine) Store() *DocStore { return e.store }
 // making it immediately searchable by every registered retriever. Re-indexing
 // the same docID replaces the previous chunks (idempotent). Returns the number
 // of chunks created.
-func (e *Engine) IndexMarkdown(_ context.Context, docID, markdown string, meta map[string]string) int {
+func (e *Engine) IndexMarkdown(_ context.Context, docID, markdown string, meta map[string]string) (int, error) {
 	chunks := ChunkMarkdown(markdown, 0)
 	if len(chunks) == 0 {
-		return 0
+		return 0, nil
 	}
 	for i := range chunks {
 		if chunks[i].Meta == nil {
@@ -69,7 +69,7 @@ func (e *Engine) IndexMarkdown(_ context.Context, docID, markdown string, meta m
 		chunks[i].ID = fmt.Sprintf("%s-%d", docID, i)
 	}
 	e.store.Add(docID, chunks)
-	return len(chunks)
+	return len(chunks), nil
 }
 
 func (e *Engine) Register(r Retriever) {

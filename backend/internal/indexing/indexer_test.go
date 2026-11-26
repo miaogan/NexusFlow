@@ -15,10 +15,10 @@ type stubIndexer struct {
 	last  string
 }
 
-func (s *stubIndexer) IndexMarkdown(_ context.Context, _ string, md string, _ map[string]string) int {
+func (s *stubIndexer) IndexMarkdown(_ context.Context, _ string, md string, _ map[string]string) (int, error) {
 	s.calls++
 	s.last = md
-	return 2
+	return 2, nil
 }
 
 func seedTask(t *testing.T, st state.Store, taskID, tenant string, s state.State) {

@@ -222,6 +222,7 @@ func main() {
 		objects,
 		logger, cfg.JWTSecret, cfg.AllowAnonymous,
 		gateway.WithTracer(tracer),
+		gateway.WithAllowedUploadHosts(cfg.ObjectStoreAllowedHosts),
 		gateway.WithIdentity(
 			pb.NewAuthServiceClient(authConn),
 			pb.NewUserServiceClient(userConn),

@@ -80,7 +80,10 @@ func TestEngine_IndexMarkdown(t *testing.T) {
 	store := e.Store()
 	store.Add("seed", []Chunk{{Content: "demo"}})
 
-	n := e.IndexMarkdown(context.Background(), "doc-1", "你好世界\n\n这是第二段", map[string]string{"tenant_id": "t1"})
+	n, err := e.IndexMarkdown(context.Background(), "doc-1", "你好世界\n\n这是第二段", map[string]string{"tenant_id": "t1"})
+	if err != nil {
+		t.Fatalf("index markdown: %v", err)
+	}
 	if n != 2 {
 		t.Fatalf("chunks = %d, want 2", n)
 	}
@@ -99,7 +102,9 @@ func TestEngine_IndexMarkdown(t *testing.T) {
 		t.Fatalf("indexed chunk missing expected meta")
 	}
 	// re-index same doc → no growth (idempotent)
-	e.IndexMarkdown(context.Background(), "doc-1", "你好世界\n\n这是第二段", map[string]string{"tenant_id": "t1"})
+	if _, err := e.IndexMarkdown(context.Background(), "doc-1", "你好世界\n\n这是第二段", map[string]string{"tenant_id": "t1"}); err != nil {
+		t.Fatalf("reindex: %v", err)
+	}
 	if got := store.Count(); got != 3 {
 		t.Fatalf("store count after reindex = %d, want 3", got)
 	}

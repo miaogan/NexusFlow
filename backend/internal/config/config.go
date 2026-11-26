@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -40,6 +41,9 @@ type Config struct {
 
 	ObjectStoreDir  string
 	ObjectStoreBase string
+	// ObjectStoreAllowedHosts restricts presigned upload URLs to trusted hosts
+	// (SSRF guard). Empty means only the ObjectStoreBase host is allowed.
+	ObjectStoreAllowedHosts []string
 
 	JWTSecret      string
 	AllowAnonymous bool
@@ -98,8 +102,9 @@ func Load() Config {
 		MetricsAddr:    env("METRICS_ADDR", ""),
 		IdentityDriver: env("IDENTITY_DRIVER", "memory"),
 
-		ObjectStoreDir:  env("OBJECT_STORE_DIR", "/tmp/nexusflow-objects"),
-		ObjectStoreBase: env("OBJECT_STORE_BASE", "http://127.0.0.1:9000/nexusflow"),
+		ObjectStoreDir:          env("OBJECT_STORE_DIR", "/tmp/nexusflow-objects"),
+		ObjectStoreBase:         env("OBJECT_STORE_BASE", "http://127.0.0.1:9000/nexusflow"),
+		ObjectStoreAllowedHosts: objectStoreHosts(env("OBJECT_STORE_ALLOWED_HOSTS", ""), env("OBJECT_STORE_BASE", "http://127.0.0.1:9000/nexusflow")),
 
 		JWTSecret:      env("JWT_SECRET", "nexusflow-dev-secret"),
 		AllowAnonymous: envBool("ALLOW_ANONYMOUS", true),
@@ -136,6 +141,26 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// objectStoreHosts returns the allowlisted hosts for presigned upload URLs. An
+// explicit comma-separated list wins; otherwise the ObjectStoreBase host is used.
+func objectStoreHosts(csv, base string) []string {
+	if strings.TrimSpace(csv) != "" {
+		var out []string
+		for _, h := range strings.Split(csv, ",") {
+			if h = strings.TrimSpace(h); h != "" {
+				out = append(out, h)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	if u, err := url.Parse(base); err == nil && u.Host != "" {
+		return []string{u.Host}
+	}
+	return nil
 }
 
 func envBool(key string, def bool) bool {
