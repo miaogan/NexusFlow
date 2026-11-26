@@ -68,7 +68,10 @@ func (s *RedisStore) Create(ctx context.Context, t Task) (Task, bool, error) {
 					return existing, false, nil
 				}
 			}
-			_ = s.rdb.Set(ctx, key, t.ID, 0)
+			// Another writer holds the idempotency key but has not persisted its
+			// task yet. Never overwrite the key — surface a duplicate so the
+			// caller can retry instead of creating a second task.
+			return Task{}, false, ErrDuplicateTask
 		}
 	}
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"sync"
@@ -254,6 +255,36 @@ func TestRetryTaskNotFailed(t *testing.T) {
 	}
 	if pub.count() != 0 {
 		t.Fatalf("expected no publish on rejected retry, got %d", pub.count())
+	}
+}
+
+type failPublisher struct{ err error }
+
+func (f failPublisher) Publish(context.Context, queue.Message) error { return f.err }
+
+// When enqueue fails, the task must roll back to FAILED instead of lingering in
+// PENDING forever.
+func TestUploadFile_RollsBackOnPublishFailure(t *testing.T) {
+	m := state.NewMachine()
+	objects := newFakeObjectStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc := NewService(objects, m, failPublisher{err: errors.New("broker down")}, logger, "http://objects", "file.uploaded")
+	ctx := ctxWithTenant("t1")
+
+	_, err := svc.UploadFile(ctx, &pb.UploadFileRequest{
+		FileName: "a.txt", FileType: "txt", FileSize: 3,
+		ObjectKey: "t1/a.txt", ContentHash: "hash-rollback",
+	})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", status.Code(err))
+	}
+
+	tasks, total, err := m.List(ctx, "t1", "", 10, 0)
+	if err != nil || total != 1 || len(tasks) != 1 {
+		t.Fatalf("tasks=%d err=%v, want 1", total, err)
+	}
+	if tasks[0].State != state.Failed {
+		t.Fatalf("state = %s, want FAILED after rollback", tasks[0].State)
 	}
 }
 

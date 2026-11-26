@@ -51,6 +51,9 @@ message UploadFileResponse {
   string task_id = 1;
   string status = 2;
   string message = 3;
+  // created=false means an existing task matched the content hash; the caller
+  // may discard any object it just stored for this upload.
+  bool created = 4;
 }
 
 message GetTaskStatusRequest {

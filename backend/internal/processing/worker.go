@@ -121,10 +121,9 @@ func (w *Worker) Handle(ctx context.Context, msg queue.Message) error {
 		return nil
 	}
 
-	if _, err := w.machine.Transition(ctx, task.ID, state.Parsed, ""); err != nil {
-		return fmt.Errorf("transition to PARSED: %w", err)
-	}
-
+	// Publish before flipping state: if publishing fails we return an error and
+	// the message is redelivered. The reverse order would mark the task PARSED
+	// and then drop the event on redelivery (the state==PARSED short-circuit).
 	parsed, _ := json.Marshal(parsedEvent{TaskID: task.ID, TenantID: task.TenantID, Markdown: markdown})
 	if err := w.pub.Publish(ctx, queue.Message{
 		Topic:   w.topicParsed,
@@ -133,6 +132,10 @@ func (w *Worker) Handle(ctx context.Context, msg queue.Message) error {
 		Headers: map[string]string{"tenant_id": task.TenantID},
 	}); err != nil {
 		return fmt.Errorf("publish parsed event: %w", err)
+	}
+
+	if _, err := w.machine.Transition(ctx, task.ID, state.Parsed, ""); err != nil {
+		return fmt.Errorf("transition to PARSED: %w", err)
 	}
 
 	w.logger.Info("parse completed", "task_id", task.ID, "markdown_bytes", len(markdown))

@@ -72,6 +72,9 @@ func main() {
 	}
 
 	bus := queue.NewMemoryBus()
+	bus.SetErrorHandler(func(topic string, err error) {
+		logger.Error("queue handler failed", "topic", topic, "error", err)
+	})
 	client := &mineru.MockClient{
 		Markdown: mockMarkdown,
 		ReadFile: func(fileURL, fileType string) (string, error) {

@@ -99,6 +99,7 @@ func (s *Service) UploadFile(ctx context.Context, req *pb.UploadFileRequest) (*p
 			TaskId:  task.ID,
 			Status:  string(task.State),
 			Message: "duplicate content, returning existing task",
+			Created: false,
 		}, nil
 	}
 
@@ -122,6 +123,10 @@ func (s *Service) UploadFile(ctx context.Context, req *pb.UploadFileRequest) (*p
 		Payload: evt,
 		Headers: map[string]string{"tenant_id": task.TenantID},
 	}); err != nil {
+		// Roll back so the task does not linger in PENDING forever.
+		if _, terr := s.machine.Transition(ctx, task.ID, state.Failed, "enqueue: "+err.Error()); terr != nil {
+			s.logger.Warn("rollback to FAILED failed", "task_id", task.ID, "error", terr)
+		}
 		return nil, status.Error(codes.Unavailable, "enqueue task: "+err.Error())
 	}
 
@@ -130,6 +135,7 @@ func (s *Service) UploadFile(ctx context.Context, req *pb.UploadFileRequest) (*p
 		TaskId:  task.ID,
 		Status:  string(task.State),
 		Message: "task accepted",
+		Created: true,
 	}, nil
 }
 
@@ -241,6 +247,10 @@ func (s *Service) RetryTask(ctx context.Context, req *pb.RetryTaskRequest) (*pb.
 		Payload: evt,
 		Headers: map[string]string{"tenant_id": task.TenantID},
 	}); err != nil {
+		// Roll back to FAILED so the operator can retry once the broker recovers.
+		if _, terr := s.machine.Transition(ctx, task.ID, state.Failed, "enqueue retry: "+err.Error()); terr != nil {
+			s.logger.Warn("rollback to FAILED failed", "task_id", task.ID, "error", terr)
+		}
 		return nil, status.Error(codes.Unavailable, "enqueue retry: "+err.Error())
 	}
 	s.logger.Info("task retry scheduled", "task_id", task.ID, "tenant", task.TenantID)

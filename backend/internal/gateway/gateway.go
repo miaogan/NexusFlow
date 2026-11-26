@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,6 +25,12 @@ import (
 )
 
 const maxUploadBytes = 100 << 20 // 100 MiB
+
+// allowedUploadTypes mirrors the parsing stage's accepted formats. Validate
+// before storing so rejected uploads never leave orphan objects behind.
+var allowedUploadTypes = map[string]struct{}{
+	"pdf": {}, "docx": {}, "txt": {}, "md": {}, "html": {},
+}
 
 type Gateway struct {
 	ingestion pb.IngestionServiceClient
@@ -174,13 +181,31 @@ func (g *Gateway) uploadJSON(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	// Reserved metadata keys are server-owned: drop client-provided
+	// object_key/file_url and derive them from explicit fields only, so a
+	// caller cannot point deletes/retries at arbitrary objects.
+	metadata := map[string]string{}
+	for k, v := range body.Metadata {
+		metadata[k] = v
+	}
+	delete(metadata, "object_key")
+	delete(metadata, "file_url")
+	if body.PresignedURL != "" {
+		metadata["file_url"] = body.PresignedURL
+	}
+	metadata["file_name"] = body.FileName
+	metadata["file_type"] = body.FileType
+	if body.FileSize > 0 {
+		metadata["file_size"] = strconv.FormatInt(body.FileSize, 10)
+	}
+
 	ctx, p := g.callerContext(c)
 	resp, err := g.ingestion.UploadFile(ctx, &pb.UploadFileRequest{
 		FileName:     body.FileName,
 		FileType:     body.FileType,
 		FileSize:     body.FileSize,
 		PresignedUrl: body.PresignedURL,
-		Metadata:     body.Metadata,
+		Metadata:     metadata,
 	})
 	if err != nil {
 		g.logger.Error("upload failed", "tenant", p.TenantID, "error", err)
@@ -201,17 +226,31 @@ func (g *Gateway) uploadMultipart(c *gin.Context) {
 
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "file exceeds size limit"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing form field 'file': " + err.Error()})
 		return
 	}
 	defer file.Close()
 
-	principal, _ := tenant.From(c.Request.Context())
-	uploadID := uuid.NewString()
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(header.Filename), "."))
 	if ext == "" {
 		ext = "txt"
 	}
+	if _, ok := allowedUploadTypes[ext]; !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported file type: " + ext})
+		return
+	}
+	if header.Size <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "empty file"})
+		return
+	}
+
+	principal, _ := tenant.From(c.Request.Context())
+	uploadID := uuid.NewString()
 	objectKey := fmt.Sprintf("%s/upload/%s/%s", principal.TenantID, uploadID, header.Filename)
 
 	hasher := sha256.New()
@@ -228,19 +267,20 @@ func (g *Gateway) uploadMultipart(c *gin.Context) {
 	}
 	contentHash := hex.EncodeToString(hasher.Sum(nil))
 
-	metadata := map[string]string{
-		"file_name":    header.Filename,
-		"file_type":    ext,
-		"file_size":    strconv.FormatInt(header.Size, 10),
-		"content_hash": contentHash,
-		"object_key":   objectKey,
-	}
+	// User-provided metadata first; reserved keys are written last so a client
+	// cannot spoof object_key / file_url / content_hash.
+	metadata := map[string]string{}
 	for key, vals := range c.Request.PostForm {
 		if key == "file" || len(vals) == 0 {
 			continue
 		}
 		metadata[key] = vals[0]
 	}
+	metadata["file_name"] = header.Filename
+	metadata["file_type"] = ext
+	metadata["file_size"] = strconv.FormatInt(header.Size, 10)
+	metadata["content_hash"] = contentHash
+	metadata["object_key"] = objectKey
 
 	ctx, _ := g.callerContext(c)
 	resp, err := g.ingestion.UploadFile(ctx, &pb.UploadFileRequest{
@@ -256,13 +296,21 @@ func (g *Gateway) uploadMultipart(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusAccepted, gin.H{
+	body := gin.H{
 		"task_id":      resp.GetTaskId(),
 		"status":       resp.GetStatus(),
 		"message":      resp.GetMessage(),
 		"content_hash": contentHash,
-		"object_key":   objectKey,
-	})
+		"created":      resp.GetCreated(),
+	}
+	if resp.GetCreated() {
+		body["object_key"] = objectKey
+	} else if delErr := g.objects.Delete(ctx, objectKey); delErr != nil {
+		// Content dedup matched an existing task: the object we just stored is
+		// unreferenced, so remove it rather than leave an orphan.
+		g.logger.Warn("delete orphan object failed", "key", objectKey, "error", delErr)
+	}
+	c.JSON(http.StatusAccepted, body)
 }
 
 func (g *Gateway) listTasks(c *gin.Context) {

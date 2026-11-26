@@ -85,3 +85,23 @@ func TestIndexer_SkipsNonParsed(t *testing.T) {
 		t.Fatalf("state changed unexpectedly: %s", task.State)
 	}
 }
+
+// A crash mid-way (state left at CHUNKED after the index was written) must be
+// resumed to COMPLETED on redelivery rather than silently skipped.
+func TestIndexer_ResumesFromPartialState(t *testing.T) {
+	st, _ := state.NewStore("memory", "")
+	seedTask(t, st, "task-1", "t1", state.Chunked)
+	idx := &stubIndexer{}
+	i := New(idx, st, slog.Default())
+	payload, _ := json.Marshal(parsedEvent{TaskID: "task-1", TenantID: "t1", Markdown: "# hi"})
+	if err := i.Handle(context.Background(), queue.Message{Payload: payload}); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	task, _, _ := st.Get(context.Background(), "task-1")
+	if task.State != state.Completed {
+		t.Fatalf("state = %s, want COMPLETED", task.State)
+	}
+	if idx.calls != 0 {
+		t.Fatalf("index calls = %d, want 0 (index written before crash)", idx.calls)
+	}
+}

@@ -54,14 +54,24 @@ func (idx *Indexer) Handle(ctx context.Context, msg queue.Message) error {
 	if !ok {
 		return fmt.Errorf("unknown task %s", evt.TaskID)
 	}
-	// Idempotent: redelivery of an already-indexed task is a no-op.
-	switch task.State {
-	case state.Chunked, state.Embedded, state.Indexed, state.Completed:
-		return nil
+	if task.State == state.Completed {
+		return nil // fully indexed
 	}
-	if task.State != state.Parsed {
-		// Not our stage yet (still parsing / already failed); skip.
-		return nil
+	// Resume from whichever indexing stage we stopped at, so a partial failure
+	// (e.g. crash between CHUNKED and EMBEDDED) is retried instead of skipped.
+	order := []state.State{state.Chunked, state.Embedded, state.Indexed, state.Completed}
+	var start int
+	switch task.State {
+	case state.Parsed:
+		start = 0
+	case state.Chunked:
+		start = 1
+	case state.Embedded:
+		start = 2
+	case state.Indexed:
+		start = 3
+	default:
+		return nil // not our stage yet (still parsing / already failed)
 	}
 
 	meta := map[string]string{
@@ -74,11 +84,16 @@ func (idx *Indexer) Handle(ctx context.Context, msg queue.Message) error {
 		}
 	}
 
-	n := idx.indexer.IndexMarkdown(ctx, task.ID, evt.Markdown, meta)
+	n := 0
+	if task.State == state.Parsed {
+		// Indexing is idempotent (docstore replaces by docID), so re-running on
+		// redelivery is safe.
+		n = idx.indexer.IndexMarkdown(ctx, task.ID, evt.Markdown, meta)
+	}
 
-	// Advance through the indexing stages. The state machine validates each
-	// transition; a stale parallel update is surfaced as an error here.
-	for _, to := range []state.State{state.Chunked, state.Embedded, state.Indexed, state.Completed} {
+	// Advance through the remaining indexing stages. The state machine
+	// validates each transition; a stale parallel update surfaces as an error.
+	for _, to := range order[start:] {
 		if _, err := idx.machine.Transition(ctx, task.ID, to, ""); err != nil {
 			idx.logger.Error("index transition failed", "task_id", task.ID, "to", to, "error", err)
 			return err

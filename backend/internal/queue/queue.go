@@ -27,25 +27,37 @@ type Subscriber interface {
 // MemoryBus is an in-process broker used for local development and tests.
 // It preserves the topic-based decoupling of the production design.
 type MemoryBus struct {
-	mu   sync.RWMutex
-	subs map[string][]Handler
-	wg   sync.WaitGroup
+	mu      sync.RWMutex
+	subs    map[string][]Handler
+	wg      sync.WaitGroup
+	onError func(topic string, err error)
 }
 
 func NewMemoryBus() *MemoryBus {
 	return &MemoryBus{subs: make(map[string][]Handler)}
 }
 
+// SetErrorHandler installs a callback invoked when an async handler returns an
+// error. Without it, MemoryBus failures would be silently swallowed.
+func (b *MemoryBus) SetErrorHandler(fn func(topic string, err error)) {
+	b.mu.Lock()
+	b.onError = fn
+	b.mu.Unlock()
+}
+
 func (b *MemoryBus) Publish(_ context.Context, msg Message) error {
 	b.mu.RLock()
 	handlers := append([]Handler(nil), b.subs[msg.Topic]...)
+	onError := b.onError
 	b.mu.RUnlock()
 	for _, h := range handlers {
 		h := h
 		b.wg.Add(1)
 		go func() {
 			defer b.wg.Done()
-			_ = h(context.Background(), msg)
+			if err := h(context.Background(), msg); err != nil && onError != nil {
+				onError(msg.Topic, err)
+			}
 		}()
 	}
 	return nil

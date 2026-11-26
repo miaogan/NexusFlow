@@ -342,10 +342,13 @@ func (x *ListTasksResponse) GetTotal() int32 {
 }
 
 type UploadFileResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
-	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
-	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	TaskId  string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	Status  string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	Message string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	// created=false means an existing task matched the content hash; the caller
+	// may discard any object it just stored for this upload.
+	Created       bool `protobuf:"varint,4,opt,name=created,proto3" json:"created,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -399,6 +402,13 @@ func (x *UploadFileResponse) GetMessage() string {
 		return x.Message
 	}
 	return ""
+}
+
+func (x *UploadFileResponse) GetCreated() bool {
+	if x != nil {
+		return x.Created
+	}
+	return false
 }
 
 type GetTaskStatusRequest struct {
@@ -798,11 +808,12 @@ const file_vectorization_v1_ingestion_proto_rawDesc = "" +
 	"\x06offset\x18\x03 \x01(\x05R\x06offset\"^\n" +
 	"\x11ListTasksResponse\x123\n" +
 	"\x05tasks\x18\x01 \x03(\v2\x1d.vectorization.v1.TaskSummaryR\x05tasks\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x05R\x05total\"_\n" +
+	"\x05total\x18\x02 \x01(\x05R\x05total\"y\n" +
 	"\x12UploadFileResponse\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"/\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\x12\x18\n" +
+	"\acreated\x18\x04 \x01(\bR\acreated\"/\n" +
 	"\x14GetTaskStatusRequest\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\"\xc9\x03\n" +
 	"\x15GetTaskStatusResponse\x12\x17\n" +

@@ -19,6 +19,11 @@ type RabbitMQ struct {
 	ch   *amqp.Channel
 }
 
+const (
+	consumerPrefetch   = 10
+	maxDeliveryRetries = 5
+)
+
 func NewRabbitMQ(url string, logger *slog.Logger) (*RabbitMQ, error) {
 	r := &RabbitMQ{url: url, logger: logger}
 	if err := r.connect(); err != nil {
@@ -42,8 +47,10 @@ func (r *RabbitMQ) connect() error {
 	return nil
 }
 
-func (r *RabbitMQ) declare(topic string) error {
-	_, err := r.ch.QueueDeclare(topic, true, false, false, false, nil)
+func (r *RabbitMQ) declare(topic string) error { return declareOn(r.ch, topic) }
+
+func declareOn(ch *amqp.Channel, topic string) error {
+	_, err := ch.QueueDeclare(topic, true, false, false, false, nil)
 	return err
 }
 
@@ -66,16 +73,34 @@ func (r *RabbitMQ) Publish(ctx context.Context, msg Message) error {
 	})
 }
 
+// Subscribe consumes a topic on a dedicated channel. Each consumer gets its own
+// channel because amqp.Channel is not safe for concurrent use; the publish
+// channel guarded by r.mu is never used for Ack/Nack.
 func (r *RabbitMQ) Subscribe(topic string, handler Handler) {
+	r.mu.Lock()
+	conn := r.conn
+	r.mu.Unlock()
+	if conn == nil {
+		r.logger.Error("subscribe before connect", "topic", topic)
+		return
+	}
+
 	go func() {
-		r.mu.Lock()
-		if err := r.declare(topic); err != nil {
-			r.mu.Unlock()
+		ch, err := conn.Channel()
+		if err != nil {
+			r.logger.Error("open consumer channel failed", "topic", topic, "error", err)
+			return
+		}
+		defer ch.Close()
+
+		if err := declareOn(ch, topic); err != nil {
 			r.logger.Error("declare queue failed", "topic", topic, "error", err)
 			return
 		}
-		deliveries, err := r.ch.Consume(topic, "", false, false, false, false, nil)
-		r.mu.Unlock()
+		if err := ch.Qos(consumerPrefetch, 0, false); err != nil {
+			r.logger.Warn("set qos failed", "topic", topic, "error", err)
+		}
+		deliveries, err := ch.Consume(topic, "", false, false, false, false, nil)
 		if err != nil {
 			r.logger.Error("consume failed", "topic", topic, "error", err)
 			return
@@ -93,14 +118,77 @@ func (r *RabbitMQ) Subscribe(topic string, handler Handler) {
 					msg.Headers[k] = s
 				}
 			}
-			if err := handler(context.Background(), msg); err != nil {
-				r.logger.Error("handler failed, requeueing", "topic", topic, "error", err)
-				_ = delivery.Nack(false, true)
+
+			if err := handler(context.Background(), msg); err == nil {
+				_ = delivery.Ack(false)
 				continue
+			} else {
+				retries := retryCount(delivery.Headers["x-retry"])
+				headers := cloneHeaders(delivery.Headers)
+				headers["x-error"] = err.Error()
+
+				if retries >= maxDeliveryRetries {
+					// Poison message: dead-letter instead of requeueing forever.
+					r.logger.Error("message exceeded retries, dead-lettering",
+						"topic", topic, "error", err, "retries", retries)
+					if perr := r.publishOn(ch, topic+".dlq", toPublishing(delivery, headers)); perr != nil {
+						r.logger.Error("dead-letter publish failed", "topic", topic, "error", perr)
+						_ = delivery.Nack(false, true)
+						continue
+					}
+					_ = delivery.Ack(false)
+					continue
+				}
+
+				headers["x-retry"] = int32(retries + 1)
+				r.logger.Warn("handler failed, retrying", "topic", topic, "error", err, "retry", retries+1)
+				if perr := r.publishOn(ch, topic, toPublishing(delivery, headers)); perr != nil {
+					_ = delivery.Nack(false, true) // fall back to broker requeue
+					continue
+				}
+				_ = delivery.Ack(false)
 			}
-			_ = delivery.Ack(false)
 		}
 	}()
+}
+
+func (r *RabbitMQ) publishOn(ch *amqp.Channel, topic string, pub amqp.Publishing) error {
+	if err := declareOn(ch, topic); err != nil {
+		return err
+	}
+	return ch.PublishWithContext(context.Background(), "", topic, false, false, pub)
+}
+
+func toPublishing(d amqp.Delivery, headers amqp.Table) amqp.Publishing {
+	return amqp.Publishing{
+		ContentType:  d.ContentType,
+		MessageId:    d.MessageId,
+		Headers:      headers,
+		Body:         d.Body,
+		DeliveryMode: d.DeliveryMode,
+	}
+}
+
+func cloneHeaders(in amqp.Table) amqp.Table {
+	out := amqp.Table{}
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func retryCount(v any) int {
+	switch n := v.(type) {
+	case int32:
+		return int(n)
+	case int64:
+		return int(n)
+	case int:
+		return n
+	case float64:
+		return int(n)
+	}
+	return 0
 }
 
 func (r *RabbitMQ) Close() error {
