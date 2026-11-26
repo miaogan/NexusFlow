@@ -293,7 +293,7 @@ P2/P3 约定：
 
 ## 反馈与评审
 
-- **问答页反馈**：每条回答支持「有帮助 / 没帮助」，提交时携带 `trace_id`、`conversation_id`、`message_id`、query、answer、引用 chunk 与意图标签；点击正文 `[n]` 引用同时上报 `user.citation_click` 隐式正反馈。
+- **问答页反馈**：每条回答支持「有帮助 / 没帮助」，提交时携带 `trace_id`、`conversation_id`、`message_id`、query、answer、引用 chunk 与意图标签；点「没帮助」后可补充纠正答案（`corrected_answer`，覆盖更新同一评分）；点击正文 `[n]` 引用同时上报 `user.citation_click` 隐式正反馈。
 - **检索页反馈**：保留赞/踩，落库的同时旁路写入 trace score（Langfuse 可用时）。
 - **持久化**：`FEEDBACK_DRIVER=memory|postgres`。Postgres 启动时自动建 `rag_feedback` 表，按 `tenant_id + user_id + subject_id + name` 覆盖更新，同一消息只保留最新评分；生产 compose 默认 `postgres`，即使 tracing 为 Noop 也不会丢数据。
 - **评审查询**：`GET /v1/feedback?rating=-1&limit=20`（需 `user:read`，按租户隔离），返回 query/answer/引用/纠正答案等字段。

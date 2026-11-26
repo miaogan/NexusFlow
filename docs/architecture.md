@@ -524,7 +524,7 @@ message SearchResponse {
 | 无结果/低分查询 | 隐式 | 召回不足或索引缺口 | 补数据、调切块 |
 | RAGAS 自动评估 | 系统 | 忠实度/相关性打分 | 回归评测、上线门禁 |
 
-> 落地状态：点赞/点踩（检索页与问答页）、引用点击已实现并落库；`corrected_answer` 字段已预留但暂无前端入口；无结果查询由 `eval/rag_eval.py` 与低分查询 API 覆盖；RAGAS/LLM-as-judge 自动评分尚未接入。
+> 落地状态：点赞/点踩（检索页与问答页）、引用点击已实现并落库；问答页「没帮助」后可提交纠正答案（`corrected_answer`）并随评分落库；无结果查询由 `eval/rag_eval.py` 与低分查询 API 覆盖；RAGAS/LLM-as-judge 自动评分尚未接入。
 
 ### 14.2 反馈数据模型
 

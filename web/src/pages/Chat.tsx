@@ -78,6 +78,11 @@ export default function Chat() {
   const [stageMessageId, setStageMessageId] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Record<string, number>>({});
+  // Tracks which message is showing the "corrected answer" editor and which
+  // messages already received a correction (upserts over the negative rating).
+  const [correctingId, setCorrectingId] = useState<string | null>(null);
+  const [correction, setCorrection] = useState("");
+  const [corrected, setCorrected] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -124,22 +129,22 @@ export default function Chat() {
     }
   };
 
+  const feedbackBase = (msg: ChatMessage) => ({
+    trace_id: msg.trace_id,
+    message_id: msg.id,
+    conversation_id: activeId ?? undefined,
+    query: msg.query,
+    answer: msg.content,
+    cited_chunk_ids: msg.citations?.map((c) => c.chunk_id) ?? [],
+    meta: msg.intent ? { intent: msg.intent } : undefined,
+  });
+
   const rate = async (msg: ChatMessage, value: number) => {
     if (feedback[msg.id] === value) return;
     const prev = feedback[msg.id];
     setFeedback((cur) => ({ ...cur, [msg.id]: value }));
     try {
-      await submitFeedback({
-        trace_id: msg.trace_id,
-        message_id: msg.id,
-        conversation_id: activeId ?? undefined,
-        name: "user.rating",
-        value,
-        query: msg.query,
-        answer: msg.content,
-        cited_chunk_ids: msg.citations?.map((c) => c.chunk_id) ?? [],
-        meta: msg.intent ? { intent: msg.intent } : undefined,
-      });
+      await submitFeedback({ ...feedbackBase(msg), name: "user.rating", value });
     } catch (e) {
       setFeedback((cur) => {
         const next = { ...cur };
@@ -151,9 +156,33 @@ export default function Chat() {
     }
   };
 
+  const submitCorrection = async (msg: ChatMessage) => {
+    const text = correction.trim();
+    if (!text) {
+      setCorrectingId(null);
+      return;
+    }
+    try {
+      // Same subject/name as the rating, so this upserts instead of adding a row.
+      await submitFeedback({
+        ...feedbackBase(msg),
+        name: "user.rating",
+        value: -1,
+        corrected_answer: text,
+      });
+      setCorrected((cur) => ({ ...cur, [msg.id]: true }));
+      setCorrectingId(null);
+      setCorrection("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const openConversation = async (id: string) => {
     if (id === activeId) return;
     setActiveId(id);
+    setCorrectingId(null);
+    setCorrection("");
     setError(null);
     resetStage();
     setLoading(true);
@@ -178,6 +207,8 @@ export default function Chat() {
   const newChat = () => {
     setActiveId(null);
     setMessages([]);
+    setCorrectingId(null);
+    setCorrection("");
     setError(null);
     resetStage();
   };
@@ -437,34 +468,78 @@ export default function Chat() {
                         </div>
                       )}
                       {isAssistant && !sending && msg.content && !msg.id.startsWith(STREAMING_ID) && (
-                        <div className="mt-2 flex items-center gap-2 border-t border-white/5 pt-2">
-                          <span className="text-[9px] text-slate-500">这个回答：</span>
-                          <button
-                            type="button"
-                            onClick={() => void rate(msg, 1)}
-                            className={`rounded-full border px-2 py-0.5 text-[9px] transition ${
-                              feedback[msg.id] === 1
-                                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-                                : "border-white/10 text-slate-400 hover:bg-white/5"
-                            }`}
-                          >
-                            有帮助
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void rate(msg, -1)}
-                            className={`rounded-full border px-2 py-0.5 text-[9px] transition ${
-                              feedback[msg.id] === -1
-                                ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
-                                : "border-white/10 text-slate-400 hover:bg-white/5"
-                            }`}
-                          >
-                            没帮助
-                          </button>
-                          {feedback[msg.id] !== undefined && (
-                            <span className="text-[9px] text-slate-500">已记录</span>
+                        <>
+                          <div className="mt-2 flex items-center gap-2 border-t border-white/5 pt-2">
+                            <span className="text-[9px] text-slate-500">这个回答：</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCorrectingId(null);
+                                void rate(msg, 1);
+                              }}
+                              className={`rounded-full border px-2 py-0.5 text-[9px] transition ${
+                                feedback[msg.id] === 1
+                                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                                  : "border-white/10 text-slate-400 hover:bg-white/5"
+                              }`}
+                            >
+                              有帮助
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void rate(msg, -1);
+                                setCorrection("");
+                                setCorrectingId(msg.id);
+                              }}
+                              className={`rounded-full border px-2 py-0.5 text-[9px] transition ${
+                                feedback[msg.id] === -1
+                                  ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+                                  : "border-white/10 text-slate-400 hover:bg-white/5"
+                              }`}
+                            >
+                              没帮助
+                            </button>
+                            {feedback[msg.id] !== undefined && (
+                              <span className="text-[9px] text-slate-500">已记录</span>
+                            )}
+                            {corrected[msg.id] && (
+                              <span className="text-[9px] text-emerald-400/70">已提交纠正</span>
+                            )}
+                          </div>
+                          {correctingId === msg.id && (
+                            <div className="mt-2 rounded-lg border border-white/10 bg-white/[0.02] p-2">
+                              <textarea
+                                value={correction}
+                                onChange={(e) => setCorrection(e.target.value)}
+                                rows={2}
+                                autoFocus
+                                placeholder="可选：填写你认为正确的答案，帮助改进检索与生成"
+                                className="w-full resize-none rounded-md border border-white/10 bg-transparent px-2 py-1 text-[11px] text-slate-200 placeholder:text-slate-600 focus:border-sky-500/40 focus:outline-none"
+                              />
+                              <div className="mt-1 flex items-center justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCorrectingId(null);
+                                    setCorrection("");
+                                  }}
+                                  className="rounded-full border border-white/10 px-2 py-0.5 text-[9px] text-slate-400 hover:bg-white/5"
+                                >
+                                  跳过
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={!correction.trim()}
+                                  onClick={() => void submitCorrection(msg)}
+                                  className="rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[9px] text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-40"
+                                >
+                                  提交纠正
+                                </button>
+                              </div>
+                            </div>
                           )}
-                        </div>
+                        </>
                       )}
                     </div>
                   </div>
