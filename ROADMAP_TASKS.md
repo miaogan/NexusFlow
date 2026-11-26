@@ -26,7 +26,7 @@
 * **[x] Task 2.2: 打通纠正答案（Corrected Answer）灰度回灌能力**
   * **目标**：在 `rag-agent` 检索前置步骤中匹配高优 `corrected_answer` 历史记录并注入 Prompt。
   * **验证命令**：`cd services/rag-agent && pytest`
-* **[ ] Task 2.3: 配置 GitHub Actions CI 自动化测试与离线评测卡点**
+* **[x] Task 2.3: 配置 GitHub Actions CI 自动化测试与离线评测卡点**
   * **目标**：新建 `.github/workflows/ci.yml`，配置前后端构建、单元测试及离线 RAG 评测工作流。
   * **验证命令**：`make test && make web-build`
 

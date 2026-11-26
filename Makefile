@@ -1,8 +1,8 @@
 SHELL := /bin/bash
 
-.PHONY: proto build test test-go test-py vet fmt web-install web-dev web-build \
+.PHONY: proto build test test-go test-py test-rag test-eval vet fmt web-install web-dev web-build \
 	run-dev-all run-gateway run-workflow run-auth-service run-user-service up down \
-	eval-rag eval-rag-chat judge-rag analyze-feedback test-eval
+	eval-rag eval-rag-chat judge-rag analyze-feedback
 
 proto:
 	protoc -I proto \
@@ -13,13 +13,16 @@ proto:
 build:
 	cd backend && go build ./...
 
-test: test-go test-py test-eval
+test: test-go test-py test-rag test-eval
 
 test-go:
 	cd backend && go test ./...
 
 test-py:
 	cd services/llamaindex && python3 -m pytest -q
+
+test-rag:
+	cd services/rag-agent && python3 -m pytest -q
 
 vet:
 	cd backend && go vet ./...

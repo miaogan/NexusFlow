@@ -442,6 +442,18 @@ make web-build     # 前端类型检查与生产构建
 make up / down     # 容器编排启停
 ```
 
+## 持续集成（GitHub Actions）
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在 `main` / `master` 的 push 与所有 PR 上运行，并按模块拆分为并行 Job：
+
+| Job | 内容 |
+| --- | --- |
+| Backend | `go vet ./...` + `go test ./...`（Go 版本取自 `backend/go.mod`） |
+| RAG agent / LlamaIndex | 各自安装依赖后执行 `pytest` |
+| Offline eval scripts | `python -m unittest discover -s eval`（离线评测脚本单测，纯标准库） |
+| Offline RAG gate | 编译并启动 `dev-all`，等待 `:8080/healthz` 后执行 `eval/rag_eval.py`；任一指标低于 `eval/thresholds.json` 即失败（日志作为 artifact 上传） |
+| Web | `npm ci && npm run build`（tsc 类型检查 + Vite 产物） |
+
 ## 当前实现边界
 
 - `MINERU_TARGET` 为空时使用内置 Mock 解析器；对 txt/md/csv/json 等文本类文件会回显真实内容，使"上传 → 检索"闭环可演示。接入真实 MinerU 只需配置该地址。
