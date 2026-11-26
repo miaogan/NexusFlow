@@ -451,6 +451,13 @@ type GetTaskStatusResponse struct {
 	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
 	Progress      int32                  `protobuf:"varint,3,opt,name=progress,proto3" json:"progress,omitempty"`
 	ErrorMsg      string                 `protobuf:"bytes,4,opt,name=error_msg,json=errorMsg,proto3" json:"error_msg,omitempty"`
+	ContentHash   string                 `protobuf:"bytes,5,opt,name=content_hash,json=contentHash,proto3" json:"content_hash,omitempty"`
+	Metadata      map[string]string      `protobuf:"bytes,6,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	FileName      string                 `protobuf:"bytes,7,opt,name=file_name,json=fileName,proto3" json:"file_name,omitempty"`
+	FileType      string                 `protobuf:"bytes,8,opt,name=file_type,json=fileType,proto3" json:"file_type,omitempty"`
+	FileSize      int64                  `protobuf:"varint,9,opt,name=file_size,json=fileSize,proto3" json:"file_size,omitempty"`
+	CreatedAt     string                 `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt     string                 `protobuf:"bytes,11,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -513,6 +520,247 @@ func (x *GetTaskStatusResponse) GetErrorMsg() string {
 	return ""
 }
 
+func (x *GetTaskStatusResponse) GetContentHash() string {
+	if x != nil {
+		return x.ContentHash
+	}
+	return ""
+}
+
+func (x *GetTaskStatusResponse) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
+func (x *GetTaskStatusResponse) GetFileName() string {
+	if x != nil {
+		return x.FileName
+	}
+	return ""
+}
+
+func (x *GetTaskStatusResponse) GetFileType() string {
+	if x != nil {
+		return x.FileType
+	}
+	return ""
+}
+
+func (x *GetTaskStatusResponse) GetFileSize() int64 {
+	if x != nil {
+		return x.FileSize
+	}
+	return 0
+}
+
+func (x *GetTaskStatusResponse) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
+func (x *GetTaskStatusResponse) GetUpdatedAt() string {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return ""
+}
+
+type DeleteTaskRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteTaskRequest) Reset() {
+	*x = DeleteTaskRequest{}
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteTaskRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteTaskRequest) ProtoMessage() {}
+
+func (x *DeleteTaskRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteTaskRequest.ProtoReflect.Descriptor instead.
+func (*DeleteTaskRequest) Descriptor() ([]byte, []int) {
+	return file_vectorization_v1_ingestion_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *DeleteTaskRequest) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+type DeleteTaskResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteTaskResponse) Reset() {
+	*x = DeleteTaskResponse{}
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteTaskResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteTaskResponse) ProtoMessage() {}
+
+func (x *DeleteTaskResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteTaskResponse.ProtoReflect.Descriptor instead.
+func (*DeleteTaskResponse) Descriptor() ([]byte, []int) {
+	return file_vectorization_v1_ingestion_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *DeleteTaskResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+type RetryTaskRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RetryTaskRequest) Reset() {
+	*x = RetryTaskRequest{}
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RetryTaskRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RetryTaskRequest) ProtoMessage() {}
+
+func (x *RetryTaskRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RetryTaskRequest.ProtoReflect.Descriptor instead.
+func (*RetryTaskRequest) Descriptor() ([]byte, []int) {
+	return file_vectorization_v1_ingestion_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *RetryTaskRequest) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+type RetryTaskResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RetryTaskResponse) Reset() {
+	*x = RetryTaskResponse{}
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RetryTaskResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RetryTaskResponse) ProtoMessage() {}
+
+func (x *RetryTaskResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RetryTaskResponse.ProtoReflect.Descriptor instead.
+func (*RetryTaskResponse) Descriptor() ([]byte, []int) {
+	return file_vectorization_v1_ingestion_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *RetryTaskResponse) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *RetryTaskResponse) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *RetryTaskResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
 var File_vectorization_v1_ingestion_proto protoreflect.FileDescriptor
 
 const file_vectorization_v1_ingestion_proto_rawDesc = "" +
@@ -556,17 +804,43 @@ const file_vectorization_v1_ingestion_proto_rawDesc = "" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x18\n" +
 	"\amessage\x18\x03 \x01(\tR\amessage\"/\n" +
 	"\x14GetTaskStatusRequest\x12\x17\n" +
-	"\atask_id\x18\x01 \x01(\tR\x06taskId\"\x81\x01\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\"\xc9\x03\n" +
 	"\x15GetTaskStatusResponse\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x1a\n" +
 	"\bprogress\x18\x03 \x01(\x05R\bprogress\x12\x1b\n" +
-	"\terror_msg\x18\x04 \x01(\tR\berrorMsg2\xa3\x02\n" +
+	"\terror_msg\x18\x04 \x01(\tR\berrorMsg\x12!\n" +
+	"\fcontent_hash\x18\x05 \x01(\tR\vcontentHash\x12Q\n" +
+	"\bmetadata\x18\x06 \x03(\v25.vectorization.v1.GetTaskStatusResponse.MetadataEntryR\bmetadata\x12\x1b\n" +
+	"\tfile_name\x18\a \x01(\tR\bfileName\x12\x1b\n" +
+	"\tfile_type\x18\b \x01(\tR\bfileType\x12\x1b\n" +
+	"\tfile_size\x18\t \x01(\x03R\bfileSize\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\n" +
+	" \x01(\tR\tcreatedAt\x12\x1d\n" +
+	"\n" +
+	"updated_at\x18\v \x01(\tR\tupdatedAt\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\",\n" +
+	"\x11DeleteTaskRequest\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\".\n" +
+	"\x12DeleteTaskResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\"+\n" +
+	"\x10RetryTaskRequest\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\"^\n" +
+	"\x11RetryTaskResponse\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\x12\x18\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage2\xd2\x03\n" +
 	"\x10IngestionService\x12W\n" +
 	"\n" +
 	"UploadFile\x12#.vectorization.v1.UploadFileRequest\x1a$.vectorization.v1.UploadFileResponse\x12`\n" +
 	"\rGetTaskStatus\x12&.vectorization.v1.GetTaskStatusRequest\x1a'.vectorization.v1.GetTaskStatusResponse\x12T\n" +
-	"\tListTasks\x12\".vectorization.v1.ListTasksRequest\x1a#.vectorization.v1.ListTasksResponseBLZJgithub.com/nexusflow/nexusflow/backend/pb/vectorization/v1;vectorizationv1b\x06proto3"
+	"\tListTasks\x12\".vectorization.v1.ListTasksRequest\x1a#.vectorization.v1.ListTasksResponse\x12W\n" +
+	"\n" +
+	"DeleteTask\x12#.vectorization.v1.DeleteTaskRequest\x1a$.vectorization.v1.DeleteTaskResponse\x12T\n" +
+	"\tRetryTask\x12\".vectorization.v1.RetryTaskRequest\x1a#.vectorization.v1.RetryTaskResponseBLZJgithub.com/nexusflow/nexusflow/backend/pb/vectorization/v1;vectorizationv1b\x06proto3"
 
 var (
 	file_vectorization_v1_ingestion_proto_rawDescOnce sync.Once
@@ -580,7 +854,7 @@ func file_vectorization_v1_ingestion_proto_rawDescGZIP() []byte {
 	return file_vectorization_v1_ingestion_proto_rawDescData
 }
 
-var file_vectorization_v1_ingestion_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_vectorization_v1_ingestion_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_vectorization_v1_ingestion_proto_goTypes = []any{
 	(*UploadFileRequest)(nil),     // 0: vectorization.v1.UploadFileRequest
 	(*TaskSummary)(nil),           // 1: vectorization.v1.TaskSummary
@@ -589,22 +863,32 @@ var file_vectorization_v1_ingestion_proto_goTypes = []any{
 	(*UploadFileResponse)(nil),    // 4: vectorization.v1.UploadFileResponse
 	(*GetTaskStatusRequest)(nil),  // 5: vectorization.v1.GetTaskStatusRequest
 	(*GetTaskStatusResponse)(nil), // 6: vectorization.v1.GetTaskStatusResponse
-	nil,                           // 7: vectorization.v1.UploadFileRequest.MetadataEntry
+	(*DeleteTaskRequest)(nil),     // 7: vectorization.v1.DeleteTaskRequest
+	(*DeleteTaskResponse)(nil),    // 8: vectorization.v1.DeleteTaskResponse
+	(*RetryTaskRequest)(nil),      // 9: vectorization.v1.RetryTaskRequest
+	(*RetryTaskResponse)(nil),     // 10: vectorization.v1.RetryTaskResponse
+	nil,                           // 11: vectorization.v1.UploadFileRequest.MetadataEntry
+	nil,                           // 12: vectorization.v1.GetTaskStatusResponse.MetadataEntry
 }
 var file_vectorization_v1_ingestion_proto_depIdxs = []int32{
-	7, // 0: vectorization.v1.UploadFileRequest.metadata:type_name -> vectorization.v1.UploadFileRequest.MetadataEntry
-	1, // 1: vectorization.v1.ListTasksResponse.tasks:type_name -> vectorization.v1.TaskSummary
-	0, // 2: vectorization.v1.IngestionService.UploadFile:input_type -> vectorization.v1.UploadFileRequest
-	5, // 3: vectorization.v1.IngestionService.GetTaskStatus:input_type -> vectorization.v1.GetTaskStatusRequest
-	2, // 4: vectorization.v1.IngestionService.ListTasks:input_type -> vectorization.v1.ListTasksRequest
-	4, // 5: vectorization.v1.IngestionService.UploadFile:output_type -> vectorization.v1.UploadFileResponse
-	6, // 6: vectorization.v1.IngestionService.GetTaskStatus:output_type -> vectorization.v1.GetTaskStatusResponse
-	3, // 7: vectorization.v1.IngestionService.ListTasks:output_type -> vectorization.v1.ListTasksResponse
-	5, // [5:8] is the sub-list for method output_type
-	2, // [2:5] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	11, // 0: vectorization.v1.UploadFileRequest.metadata:type_name -> vectorization.v1.UploadFileRequest.MetadataEntry
+	1,  // 1: vectorization.v1.ListTasksResponse.tasks:type_name -> vectorization.v1.TaskSummary
+	12, // 2: vectorization.v1.GetTaskStatusResponse.metadata:type_name -> vectorization.v1.GetTaskStatusResponse.MetadataEntry
+	0,  // 3: vectorization.v1.IngestionService.UploadFile:input_type -> vectorization.v1.UploadFileRequest
+	5,  // 4: vectorization.v1.IngestionService.GetTaskStatus:input_type -> vectorization.v1.GetTaskStatusRequest
+	2,  // 5: vectorization.v1.IngestionService.ListTasks:input_type -> vectorization.v1.ListTasksRequest
+	7,  // 6: vectorization.v1.IngestionService.DeleteTask:input_type -> vectorization.v1.DeleteTaskRequest
+	9,  // 7: vectorization.v1.IngestionService.RetryTask:input_type -> vectorization.v1.RetryTaskRequest
+	4,  // 8: vectorization.v1.IngestionService.UploadFile:output_type -> vectorization.v1.UploadFileResponse
+	6,  // 9: vectorization.v1.IngestionService.GetTaskStatus:output_type -> vectorization.v1.GetTaskStatusResponse
+	3,  // 10: vectorization.v1.IngestionService.ListTasks:output_type -> vectorization.v1.ListTasksResponse
+	8,  // 11: vectorization.v1.IngestionService.DeleteTask:output_type -> vectorization.v1.DeleteTaskResponse
+	10, // 12: vectorization.v1.IngestionService.RetryTask:output_type -> vectorization.v1.RetryTaskResponse
+	8,  // [8:13] is the sub-list for method output_type
+	3,  // [3:8] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_vectorization_v1_ingestion_proto_init() }
@@ -618,7 +902,7 @@ func file_vectorization_v1_ingestion_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_vectorization_v1_ingestion_proto_rawDesc), len(file_vectorization_v1_ingestion_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

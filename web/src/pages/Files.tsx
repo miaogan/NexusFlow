@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { listTasks, uploadFile } from "../api/client";
+import { deleteTask, listTasks, uploadFile } from "../api/client";
 import type { TaskSummary, UploadResult } from "../types";
 import {
   Button,
   Card,
   EmptyState,
   formatBytes,
+  IconTrash,
   PageHeader,
   ProgressBar,
   Spinner,
@@ -21,6 +22,7 @@ export default function Files() {
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(() => {
@@ -51,6 +53,23 @@ export default function Files() {
       setUploading(false);
     }
   };
+
+  const handleDelete = useCallback(
+    async (id: string) => {
+      if (!window.confirm("确定删除该文件及其任务记录吗？此操作不可撤销。")) return;
+      setBusy(true);
+      setError(null);
+      try {
+        await deleteTask(id);
+        await refresh();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refresh],
+  );
 
   return (
     <div>
@@ -116,6 +135,7 @@ export default function Files() {
                     <th className="px-3 py-2">进度</th>
                     <th className="px-3 py-2">状态</th>
                     <th className="px-3 py-2">创建时间</th>
+                    <th className="px-3 py-2 text-right">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -130,6 +150,17 @@ export default function Files() {
                       <td className="px-3 py-2.5"><div className="w-28"><ProgressBar value={t.progress} /></div></td>
                       <td className="px-3 py-2.5"><StatePill state={t.status} /></td>
                       <td className="px-3 py-2.5 text-slate-500">{t.created_at?.replace("T", " ").slice(0, 16)}</td>
+                      <td className="px-3 py-2.5 text-right">
+                        <button
+                          type="button"
+                          title="删除文件"
+                          disabled={busy}
+                          onClick={() => void handleDelete(t.task_id)}
+                          className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] text-rose-300 transition hover:bg-rose-500/10 disabled:opacity-40"
+                        >
+                          <IconTrash /> 删除
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

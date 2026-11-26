@@ -59,3 +59,29 @@ func TestMachineTransition(t *testing.T) {
 		t.Fatal("expected invalid transition error")
 	}
 }
+
+func TestMachineDelete(t *testing.T) {
+	m := NewMachine()
+	ctx := context.Background()
+
+	if _, _, err := m.Create(ctx, Task{ID: "t1", TenantID: "tenant", ContentHash: "hash-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Delete(ctx, "t1"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, ok, err := m.Get(ctx, "t1"); err != nil || ok {
+		t.Fatalf("task should be gone after delete: ok=%v err=%v", ok, err)
+	}
+	// Idempotency key must be released so the same hash can be re-ingested.
+	if _, created, err := m.Create(ctx, Task{ID: "t2", TenantID: "tenant", ContentHash: "hash-1"}); err != nil || !created {
+		t.Fatalf("re-create after delete should create new task: created=%v err=%v", created, err)
+	}
+}
+
+func TestMachineDeleteNotFound(t *testing.T) {
+	m := NewMachine()
+	if err := m.Delete(context.Background(), "missing"); err != ErrTaskNotFound {
+		t.Fatalf("expected ErrTaskNotFound, got %v", err)
+	}
+}

@@ -9,6 +9,8 @@ service IngestionService {
   rpc UploadFile(UploadFileRequest) returns (UploadFileResponse);
   rpc GetTaskStatus(GetTaskStatusRequest) returns (GetTaskStatusResponse);
   rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
+  rpc DeleteTask(DeleteTaskRequest) returns (DeleteTaskResponse);
+  rpc RetryTask(RetryTaskRequest) returns (RetryTaskResponse);
 }
 
 message UploadFileRequest {
@@ -60,4 +62,29 @@ message GetTaskStatusResponse {
   string status = 2;
   int32 progress = 3;
   string error_msg = 4;
+  string content_hash = 5;
+  map<string, string> metadata = 6;
+  string file_name = 7;
+  string file_type = 8;
+  int64 file_size = 9;
+  string created_at = 10;
+  string updated_at = 11;
+}
+
+message DeleteTaskRequest {
+  string task_id = 1;
+}
+
+message DeleteTaskResponse {
+  bool success = 1;
+}
+
+message RetryTaskRequest {
+  string task_id = 1;
+}
+
+message RetryTaskResponse {
+  string task_id = 1;
+  string status = 2;
+  string message = 3;
 }

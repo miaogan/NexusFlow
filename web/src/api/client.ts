@@ -84,6 +84,18 @@ export async function getTask(id: string): Promise<TaskDetail> {
   return request<TaskDetail>(`${GATEWAY_BASE}/v1/tasks/${encodeURIComponent(id)}`);
 }
 
+export async function deleteTask(id: string): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(`${GATEWAY_BASE}/v1/tasks/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function retryTask(id: string): Promise<{ task_id: string; status: string; message: string }> {
+  return request(`${GATEWAY_BASE}/v1/tasks/${encodeURIComponent(id)}/retry`, {
+    method: "POST",
+  });
+}
+
 export async function runSearch(query: string): Promise<SearchResponse> {
   return request<SearchResponse>(`${GATEWAY_BASE}/v1/search`, {
     method: "POST",

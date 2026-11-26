@@ -3,6 +3,7 @@ package ingestion
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -132,20 +133,118 @@ func (s *Service) UploadFile(ctx context.Context, req *pb.UploadFileRequest) (*p
 	}, nil
 }
 
-func (s *Service) GetTaskStatus(ctx context.Context, req *pb.GetTaskStatusRequest) (*pb.GetTaskStatusResponse, error) {
-	task, ok, err := s.machine.Get(ctx, req.GetTaskId())
+// loadOwnedTask fetches a task and enforces tenant ownership. Missing tasks
+// and tasks belonging to another tenant both surface as NotFound so task
+// existence is never leaked across tenants.
+func (s *Service) loadOwnedTask(ctx context.Context, id string) (state.Task, error) {
+	principal := tenant.FromIncoming(ctx)
+	task, ok, err := s.machine.Get(ctx, id)
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return state.Task{}, status.Error(codes.Internal, err.Error())
 	}
-	if !ok {
-		return nil, status.Error(codes.NotFound, "task not found")
+	if !ok || task.TenantID != principal.TenantID {
+		return state.Task{}, status.Error(codes.NotFound, "task not found")
+	}
+	return task, nil
+}
+
+func (s *Service) GetTaskStatus(ctx context.Context, req *pb.GetTaskStatusRequest) (*pb.GetTaskStatusResponse, error) {
+	task, err := s.loadOwnedTask(ctx, req.GetTaskId())
+	if err != nil {
+		return nil, err
+	}
+	return toTaskStatus(task), nil
+}
+
+func toTaskStatus(t state.Task) *pb.GetTaskStatusResponse {
+	meta := t.Metadata
+	if meta == nil {
+		meta = map[string]string{}
+	}
+	fileSize, _ := strconv.ParseInt(meta["file_size"], 10, 64)
+	contentHash := t.ContentHash
+	if contentHash == "" {
+		contentHash = meta["content_hash"]
 	}
 	return &pb.GetTaskStatusResponse{
-		TaskId:   task.ID,
-		Status:   string(task.State),
-		Progress: task.Progress,
-		ErrorMsg: task.ErrorMsg,
-	}, nil
+		TaskId:      t.ID,
+		Status:      string(t.State),
+		Progress:    t.Progress,
+		ErrorMsg:    t.ErrorMsg,
+		ContentHash: contentHash,
+		Metadata:    meta,
+		FileName:    meta["file_name"],
+		FileType:    meta["file_type"],
+		FileSize:    fileSize,
+		CreatedAt:   t.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:   t.UpdatedAt.Format(time.RFC3339),
+	}
+}
+
+// DeleteTask removes the task record and, best-effort, the underlying object.
+// Index entries are left in place (see known limitation); deleting a task does
+// not guarantee its chunks disappear from search results immediately.
+func (s *Service) DeleteTask(ctx context.Context, req *pb.DeleteTaskRequest) (*pb.DeleteTaskResponse, error) {
+	task, err := s.loadOwnedTask(ctx, req.GetTaskId())
+	if err != nil {
+		return nil, err
+	}
+	if err := s.machine.Delete(ctx, task.ID); err != nil {
+		if errors.Is(err, state.ErrTaskNotFound) {
+			return nil, status.Error(codes.NotFound, "task not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if objectKey := task.Metadata["object_key"]; objectKey != "" {
+		if err := s.objects.Delete(ctx, objectKey); err != nil {
+			s.logger.Warn("delete object failed", "task_id", task.ID, "object_key", objectKey, "error", err)
+		}
+	}
+	s.logger.Info("task deleted", "task_id", task.ID, "tenant", task.TenantID)
+	return &pb.DeleteTaskResponse{Success: true}, nil
+}
+
+// RetryTask re-enqueues a FAILED task by rolling it back to PENDING and
+// re-publishing the original upload event. Only FAILED tasks are retryable.
+func (s *Service) RetryTask(ctx context.Context, req *pb.RetryTaskRequest) (*pb.RetryTaskResponse, error) {
+	task, err := s.loadOwnedTask(ctx, req.GetTaskId())
+	if err != nil {
+		return nil, err
+	}
+	if task.State != state.Failed {
+		return nil, status.Error(codes.FailedPrecondition, "only FAILED tasks can be retried")
+	}
+	if _, err := s.machine.Transition(ctx, task.ID, state.Pending, ""); err != nil {
+		if errors.Is(err, state.ErrInvalidState) {
+			return nil, status.Error(codes.FailedPrecondition, "task is not retryable")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	objectKey := task.Metadata["object_key"]
+	fileURL := task.Metadata["file_url"]
+	if fileURL == "" && objectKey != "" {
+		fileURL = s.presignBase + "/" + objectKey
+	}
+	evt, _ := json.Marshal(uploadedEvent{
+		TaskID:    task.ID,
+		TenantID:  task.TenantID,
+		FileURL:   fileURL,
+		FileType:  task.Metadata["file_type"],
+		FileName:  task.Metadata["file_name"],
+		ObjectKey: objectKey,
+		Metadata:  task.Metadata,
+	})
+	if err := s.pub.Publish(ctx, queue.Message{
+		Topic:   s.topicUploaded,
+		Key:     task.ID,
+		Payload: evt,
+		Headers: map[string]string{"tenant_id": task.TenantID},
+	}); err != nil {
+		return nil, status.Error(codes.Unavailable, "enqueue retry: "+err.Error())
+	}
+	s.logger.Info("task retry scheduled", "task_id", task.ID, "tenant", task.TenantID)
+	return &pb.RetryTaskResponse{TaskId: task.ID, Status: string(state.Pending), Message: "retry enqueued"}, nil
 }
 
 func (s *Service) ListTasks(ctx context.Context, req *pb.ListTasksRequest) (*pb.ListTasksResponse, error) {

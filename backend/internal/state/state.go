@@ -76,6 +76,7 @@ type Store interface {
 	Get(ctx context.Context, id string) (Task, bool, error)
 	List(ctx context.Context, tenantID, status string, limit, offset int) ([]Task, int, error)
 	Transition(ctx context.Context, id string, to State, errMsg string) (Task, error)
+	Delete(ctx context.Context, id string) error
 }
 
 type Machine struct {
@@ -188,4 +189,21 @@ func (m *Machine) Transition(_ context.Context, id string, to State, errMsg stri
 	t.ErrorMsg = errMsg
 	t.UpdatedAt = time.Now()
 	return *t, nil
+}
+
+// Delete removes a task and, when it carried a content hash, clears the
+// (tenant, hash) idempotency key so the same file can be re-ingested later.
+func (m *Machine) Delete(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	t, ok := m.tasks[id]
+	if !ok {
+		return ErrTaskNotFound
+	}
+	if t.ContentHash != "" {
+		delete(m.byKey, t.TenantID+":"+t.ContentHash)
+	}
+	delete(m.tasks, id)
+	return nil
 }

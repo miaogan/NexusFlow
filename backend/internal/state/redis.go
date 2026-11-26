@@ -205,3 +205,25 @@ func (s *RedisStore) Transition(ctx context.Context, id string, to State, errMsg
 	}
 	return Task{}, ErrConflict
 }
+
+// Delete removes the task hash, its tenant index entry and the idempotency
+// key (when present) so the same content can be uploaded again afterwards.
+func (s *RedisStore) Delete(ctx context.Context, id string) error {
+	t, ok, err := s.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrTaskNotFound
+	}
+	if err := s.rdb.Del(ctx, taskKey(id)).Err(); err != nil {
+		return err
+	}
+	if err := s.rdb.SRem(ctx, tenantTasksKey(t.TenantID), id).Err(); err != nil {
+		return err
+	}
+	if t.ContentHash != "" {
+		_ = s.rdb.Del(ctx, idemKey(t.TenantID, t.ContentHash)).Err()
+	}
+	return nil
+}

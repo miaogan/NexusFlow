@@ -18,6 +18,8 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/store"
 	"github.com/nexusflow/nexusflow/backend/internal/tenant"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const maxUploadBytes = 100 << 20 // 100 MiB
@@ -66,6 +68,8 @@ func (g *Gateway) Router() *gin.Engine {
 	v1.POST("/files", g.uploadFile)
 	v1.GET("/tasks", g.listTasks)
 	v1.GET("/tasks/:id", g.getTask)
+	v1.DELETE("/tasks/:id", g.deleteTask)
+	v1.POST("/tasks/:id/retry", g.retryTask)
 	v1.POST("/search", g.search)
 	v1.POST("/sandbox/execute", g.executeSandbox)
 	v1.GET("/me", g.me)
@@ -172,12 +176,12 @@ func (g *Gateway) uploadMultipart(c *gin.Context) {
 
 	ctx, _ := g.callerContext(c)
 	resp, err := g.ingestion.UploadFile(ctx, &pb.UploadFileRequest{
-		FileName:     header.Filename,
-		FileType:     ext,
-		FileSize:     header.Size,
-		ObjectKey:    objectKey,
-		ContentHash:  contentHash,
-		Metadata:     metadata,
+		FileName:    header.Filename,
+		FileType:    ext,
+		FileSize:    header.Size,
+		ObjectKey:   objectKey,
+		ContentHash: contentHash,
+		Metadata:    metadata,
 	})
 	if err != nil {
 		g.logger.Error("upload register failed", "tenant", principal.TenantID, "error", err)
@@ -234,15 +238,74 @@ func (g *Gateway) getTask(c *gin.Context) {
 	ctx, _ := g.callerContext(c)
 	resp, err := g.ingestion.GetTaskStatus(ctx, &pb.GetTaskStatusRequest{TaskId: c.Param("id")})
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		code, msg := grpcToHTTP(err)
+		c.JSON(code, gin.H{"error": msg})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"task_id":   resp.GetTaskId(),
-		"status":    resp.GetStatus(),
-		"progress":  resp.GetProgress(),
-		"error_msg": resp.GetErrorMsg(),
+		"task_id":      resp.GetTaskId(),
+		"status":       resp.GetStatus(),
+		"progress":     resp.GetProgress(),
+		"error_msg":    resp.GetErrorMsg(),
+		"content_hash": resp.GetContentHash(),
+		"metadata":     resp.GetMetadata(),
+		"file_name":    resp.GetFileName(),
+		"file_type":    resp.GetFileType(),
+		"file_size":    resp.GetFileSize(),
+		"created_at":   resp.GetCreatedAt(),
+		"updated_at":   resp.GetUpdatedAt(),
 	})
+}
+
+func (g *Gateway) deleteTask(c *gin.Context) {
+	ctx, _ := g.callerContext(c)
+	resp, err := g.ingestion.DeleteTask(ctx, &pb.DeleteTaskRequest{TaskId: c.Param("id")})
+	if err != nil {
+		code, msg := grpcToHTTP(err)
+		c.JSON(code, gin.H{"error": msg})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": resp.GetSuccess()})
+}
+
+func (g *Gateway) retryTask(c *gin.Context) {
+	ctx, _ := g.callerContext(c)
+	resp, err := g.ingestion.RetryTask(ctx, &pb.RetryTaskRequest{TaskId: c.Param("id")})
+	if err != nil {
+		code, msg := grpcToHTTP(err)
+		c.JSON(code, gin.H{"error": msg})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{
+		"task_id": resp.GetTaskId(),
+		"status":  resp.GetStatus(),
+		"message": resp.GetMessage(),
+	})
+}
+
+// grpcToHTTP maps gRPC status codes to sensible HTTP statuses and extracts a
+// clean message, falling back to 502 for transport-level failures.
+func grpcToHTTP(err error) (int, string) {
+	if err == nil {
+		return http.StatusOK, ""
+	}
+	msg := err.Error()
+	if s, ok := status.FromError(err); ok {
+		if m := s.Message(); m != "" {
+			msg = m
+		}
+		switch s.Code() {
+		case codes.NotFound:
+			return http.StatusNotFound, msg
+		case codes.FailedPrecondition, codes.InvalidArgument:
+			return http.StatusBadRequest, msg
+		case codes.PermissionDenied:
+			return http.StatusForbidden, msg
+		case codes.Unauthenticated:
+			return http.StatusUnauthorized, msg
+		}
+	}
+	return http.StatusBadGateway, msg
 }
 
 type routeReq struct {
@@ -340,12 +403,12 @@ func (g *Gateway) executeSandbox(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"success":    resp.GetSuccess(),
+		"success":     resp.GetSuccess(),
 		"output_json": resp.GetOutputJson(),
-		"stdout":     resp.GetStdout(),
-		"stderr":     resp.GetStderr(),
-		"sandbox_id": resp.GetSandboxId(),
-		"error_msg":  resp.GetErrorMsg(),
+		"stdout":      resp.GetStdout(),
+		"stderr":      resp.GetStderr(),
+		"sandbox_id":  resp.GetSandboxId(),
+		"error_msg":   resp.GetErrorMsg(),
 	})
 }
 
