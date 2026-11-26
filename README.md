@@ -31,7 +31,7 @@ flowchart TB
 
 分层职责：
 
-- **接入层**：Gateway 统一鉴权（JWT → tenant_id）、租户级限流、trace 透传。
+- **接入层**：Gateway 统一鉴权（JWT → tenant_id + 权限点）、租户级限流、trace 透传；Auth / User 服务负责签发令牌、管理账号与 RBAC。
 - **编排调度层**：Workflow Engine 解析 DAG、按依赖并发调度；Ingestion 接收上传并投递任务。
 - **执行加工层**：Processing Worker 调用 MinerU；LlamaIndex Service 负责语义/层级切块、索引与 Embedding；Sandbox Execution 经 OpenSandbox 执行自定义代码。
 - **检索层**：Query Service 并行多路召回，RRF 融合，Cross-Encoder 重排，任一非核心路失败 Fail-open。
@@ -42,6 +42,8 @@ flowchart TB
 | 服务 | 语言 | 目录 | 端口 | 职责 |
 | --- | --- | --- | --- | --- |
 | API Gateway | Go | `backend/cmd/gateway` | 8080 | 鉴权、限流、上传与检索入口 |
+| Auth Service | Go | `backend/cmd/auth-service` | 9096 | 注册 / 登录 / 刷新 / 校验，签发 JWT |
+| User Service | Go | `backend/cmd/user-service` | 9097 | 用户 CRUD、角色与权限（RBAC）管理 |
 | Workflow Engine | Go | `backend/cmd/workflow-engine` | 8081 | DAG 校验与调度执行 |
 | Ingestion Service | Go | `backend/cmd/ingestion` | 9095 | 上传登记、状态查询、任务投递 |
 | Processing Worker | Go | `backend/cmd/processing-worker` | 9092 | 消费任务、调用 MinerU、发布解析结果 |
@@ -133,14 +135,16 @@ make web-dev        # http://localhost:5173
 
 | 页面 | 路径 | 功能 |
 | --- | --- | --- |
+| 登录 / 注册 | `/login` | 账号密码登录、自助注册、匿名浏览 |
 | 概览 | `/` | 任务统计、最近任务、快捷入口 |
 | 文件管理 | `/files` | 拖拽/点击上传文件，查看处理状态 |
 | 任务中心 | `/tasks` | 任务列表、状态过滤、自动轮询、详情 |
-| 检索测试 | `/search` | 多路召回检索与结果展示 |
+| 检索测试 | `/search` | 多路召回检索、赞/踩反馈与链路分解 |
+| 用户管理 | `/users` | 用户 CRUD、角色与权限点管理（需 `user:read`） |
 | 沙箱 Playground | `/sandbox` | 自定义代码执行与输入/输出合约调试 |
 | 工作流编排 | `/workflow` | 拖拽节点、连线、DAG 校验与试运行 |
 
-右上角「Token」可粘贴 JWT 切换租户身份；留空则匿名访问（需 `ALLOW_ANONYMOUS=true`）。
+访问控制台会跳转 `/login`：用种子管理员 `admin / admin123` 登录，或自助注册（默认 viewer 角色），也可点"以匿名身份浏览"（需 `ALLOW_ANONYMOUS=true`）。登录后右上角显示当前身份与登出按钮，拥有 `user:read` 的用户可见"用户管理"入口。
 
 ### 3. 完整容器编排
 
@@ -178,6 +182,41 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 **检索链路**（`backend/internal/query`）：多路召回并行执行 → RRF 融合（k=60）→ 去重 → Cross-Encoder 重排 → 取 top-N；单路失败或重排超时自动降级为 RRF 结果。
 
 **沙箱护栏**（`backend/internal/sandbox`）：强制 TTL、`defer` 无条件销毁、输入/输出走约定文件、出口白名单与凭据不落盘。`local` 后端仅用于本机调试，生产必须使用 `remote`（OpenSandbox）。
+
+## 用户与认证（RBAC）
+
+认证与账号管理拆成两个独立 gRPC 服务（`identity.proto` 契约）：
+
+- **Auth Service（:9096）**：`Register` / `Login` / `Refresh` / `Logout` / `Validate`，负责密码校验与 JWT 签发。
+- **User Service（:9097）**：租户隔离的用户 CRUD，以及全局角色、权限点的管理。
+
+**令牌模型**：HS256 JWT，claims 携带 `tenant_id` / `user_id` / `roles` / `permissions` / `token_type`。access token 默认 15 分钟（`ACCESS_TOKEN_TTL`），refresh token 默认 168 小时（`REFRESH_TOKEN_TTL`）；`token_type` 区分用途，refresh token 不能当 access 用。权限点在登录时由角色展开并写入 token，网关据此零开销判定，无需每次回调鉴权服务。
+
+**权限模型**：固定权限点目录（`user:read`、`file:write`、`sandbox:execute`、`trace:read` 等 14 个 + 通配 `*`）→ 角色组合 → 用户绑定角色。内置三个角色：
+
+| 角色 | 权限 | 说明 |
+| --- | --- | --- |
+| `admin` | `*` | 全量权限 |
+| `editor` | 文件/任务读写、检索、沙箱、工作流、trace、user:read | 内容编辑者 |
+| `viewer` | 文件/任务只读、检索、trace | 只读访客 |
+
+内置角色不可修改删除；自定义角色可自由组合权限点。
+
+**HTTP 端点**（Gateway 暴露）：
+
+| 方法 | 路径 | 鉴权 | 说明 |
+| --- | --- | --- | --- |
+| POST | `/v1/auth/register` | 公开 | 自助注册（`ALLOW_SELF_REGISTER` 可关），默认分配 viewer |
+| POST | `/v1/auth/login` | 公开 | 用户名 + 密码 → 令牌对 + 用户信息 |
+| POST | `/v1/auth/refresh` | 公开 | refresh token 换新令牌对 |
+| POST | `/v1/auth/logout` | 需登录 | 无状态登出（生产可接吊销名单） |
+| GET/POST | `/v1/users` | `user:read` / `user:write` | 列表 / 创建 |
+| GET/PATCH/DELETE | `/v1/users/:id` | `user:read` / `user:write` / `user:delete` | 详情 / 更新 / 删除 |
+| GET/POST | `/v1/roles` | `role:read` / `role:write` | 角色列表 / 新建或更新 |
+| DELETE | `/v1/roles/:name` | `role:write` | 删除自定义角色 |
+| GET | `/v1/permissions` | `role:read` | 权限点目录 |
+
+首次启动会自动种子管理员：`admin / admin123`（可用 `SEED_ADMIN_*` 覆盖）。控制台 `/login` 登录后，`admin` 可在"用户管理"页创建账号、分配角色、启停用户，并新建自定义角色。未登录可点"以匿名身份浏览"（需 `ALLOW_ANONYMOUS=true`），匿名身份无任何管理权限。
 
 ## 可观测性（Tracing / Langfuse）
 
@@ -225,3 +264,5 @@ make up / down     # 容器编排启停
 - LlamaIndex Service 的切块、索引与检索依赖 Qdrant 与 Embedding API Key；未配置时相关接口返回 503。
 - K8s HPA 使用自定义指标 `nexusflow_queue_length`，需部署 prometheus-adapter 将指标转换为 Custom Metrics API。
 - 设计文档中的 LightRAG、NL2SQL、长期记忆章节属于目标架构，当前代码骨架预留了对应扩展位，尚未实现端到端链路。（可观测性 / Langfuse 导出与 dev trace viewer 已实现，见上节。）
+- 用户与角色当前使用进程内存储（`identity.MemoryStore`）：dev-all 单进程内 Auth / User 共享同一实例；以独立进程部署 Auth / User 时二者内存不互通，需将 `identity.Store` 切换为 Redis / PostgreSQL 等共享后端。
+- 登出为无状态实现（不吊销已签发的 JWT），refresh token 到期自然失效；生产环境如需即时失效需引入令牌吊销名单。

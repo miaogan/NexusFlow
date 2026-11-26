@@ -52,12 +52,30 @@ func main() {
 	}
 	defer sandboxConn.Close()
 
+	authConn, err := grpc.NewClient(cfg.AuthTarget, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		logger.Error("connect auth", "error", err)
+		os.Exit(1)
+	}
+	defer authConn.Close()
+
+	userConn, err := grpc.NewClient(cfg.UserTarget, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		logger.Error("connect user", "error", err)
+		os.Exit(1)
+	}
+	defer userConn.Close()
+
 	g := gateway.New(
 		pb.NewIngestionServiceClient(ingestConn),
 		pb.NewQueryServiceClient(queryConn),
 		pb.NewSandboxExecutionServiceClient(sandboxConn),
 		objects,
 		logger, cfg.JWTSecret, cfg.AllowAnonymous,
+		gateway.WithIdentity(
+			pb.NewAuthServiceClient(authConn),
+			pb.NewUserServiceClient(userConn),
+		),
 	)
 
 	srv := &http.Server{

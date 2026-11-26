@@ -12,6 +12,7 @@ import (
 
 	"github.com/nexusflow/nexusflow/backend/internal/config"
 	"github.com/nexusflow/nexusflow/backend/internal/gateway"
+	"github.com/nexusflow/nexusflow/backend/internal/identity"
 	"github.com/nexusflow/nexusflow/backend/internal/indexing"
 	"github.com/nexusflow/nexusflow/backend/internal/ingestion"
 	"github.com/nexusflow/nexusflow/backend/internal/mineru"
@@ -121,6 +122,23 @@ func main() {
 	sandboxSvc := sandbox.NewGRPCService(sandbox.NewService(sandbox.NewLocalBackend(cfg.SandboxWorkDir), logger))
 	querySvc := query.NewGRPCService(engine)
 
+	identityStore := identity.NewMemoryStore()
+	if err := identityStore.Seed(identity.SeedOptions{
+		TenantID:      cfg.SeedTenantID,
+		AdminUsername: cfg.SeedAdminUsername,
+		AdminPassword: cfg.SeedAdminPassword,
+	}); err != nil {
+		logger.Error("seed identity store", "error", err)
+		os.Exit(1)
+	}
+	authSvc := identity.NewAuthService(identityStore, identity.AuthConfig{
+		Secret:            cfg.JWTSecret,
+		AccessTTL:         cfg.AccessTokenTTL,
+		RefreshTTL:        cfg.RefreshTokenTTL,
+		AllowSelfRegister: cfg.AllowSelfRegister,
+	})
+	userSvc := identity.NewUserService(identityStore)
+
 	wfRegistry := workflow.NewRegistry()
 	wfRegistry.Register(workflow.NoopNode{})
 	wfRegistry.Register(workflow.SetNode{})
@@ -129,7 +147,7 @@ func main() {
 	}
 	wfEngine := workflow.NewEngine(wfRegistry, logger)
 
-	errCh := make(chan error, 8)
+	errCh := make(chan error, 12)
 	go func() {
 		errCh <- grpcserver.Serve(ctx, cfg.IngestionGRPCAddr, func(s *grpc.Server) {
 			pb.RegisterIngestionServiceServer(s, ingestSvc)
@@ -148,6 +166,16 @@ func main() {
 	go func() {
 		errCh <- grpcserver.Serve(ctx, cfg.QueryGRPCAddr, func(s *grpc.Server) {
 			pb.RegisterQueryServiceServer(s, querySvc)
+		}, logger)
+	}()
+	go func() {
+		errCh <- grpcserver.Serve(ctx, cfg.AuthGRPCAddr, func(s *grpc.Server) {
+			pb.RegisterAuthServiceServer(s, authSvc)
+		}, logger)
+	}()
+	go func() {
+		errCh <- grpcserver.Serve(ctx, cfg.UserGRPCAddr, func(s *grpc.Server) {
+			pb.RegisterUserServiceServer(s, userSvc)
 		}, logger)
 	}()
 
@@ -171,6 +199,19 @@ func main() {
 	}
 	defer sandboxConn.Close()
 
+	authConn, err := grpc.NewClient(cfg.AuthTarget, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		logger.Error("connect auth", "error", err)
+		os.Exit(1)
+	}
+	defer authConn.Close()
+	userConn, err := grpc.NewClient(cfg.UserTarget, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		logger.Error("connect user", "error", err)
+		os.Exit(1)
+	}
+	defer userConn.Close()
+
 	gw := gateway.New(
 		pb.NewIngestionServiceClient(ingestConn),
 		pb.NewQueryServiceClient(queryConn),
@@ -178,6 +219,10 @@ func main() {
 		objects,
 		logger, cfg.JWTSecret, cfg.AllowAnonymous,
 		gateway.WithTracer(tracer),
+		gateway.WithIdentity(
+			pb.NewAuthServiceClient(authConn),
+			pb.NewUserServiceClient(userConn),
+		),
 	)
 	srv := &http.Server{
 		Addr:              cfg.GatewayHTTPAddr,

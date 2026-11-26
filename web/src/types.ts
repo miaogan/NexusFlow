@@ -164,4 +164,51 @@ export interface FeedbackRequest {
   name?: string;
 }
 
+// ---------- Identity / auth ----------
+
+export interface AuthUser {
+  id: string;
+  tenant_id: string;
+  username: string;
+  email: string;
+  roles: string[];
+  departments: string[];
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LoginResponse {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+  user: AuthUser;
+}
+
+export interface RoleInfo {
+  name: string;
+  permissions: string[];
+  builtin: boolean;
+  description: string;
+}
+
+export interface PermissionInfo {
+  key: string;
+  description: string;
+}
+
+export interface UserListResponse {
+  users: AuthUser[];
+  total: number;
+}
+
+export interface JwtClaims {
+  tenant_id?: string;
+  user_id?: string;
+  roles?: string[];
+  departments?: string[];
+  permissions?: string[];
+  exp?: number;
+}
+
 export type { Edge };

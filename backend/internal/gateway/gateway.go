@@ -29,6 +29,8 @@ type Gateway struct {
 	ingestion pb.IngestionServiceClient
 	query     pb.QueryServiceClient
 	sandbox   pb.SandboxExecutionServiceClient
+	auth      pb.AuthServiceClient
+	users     pb.UserServiceClient
 	objects   store.ObjectStore
 	logger    *slog.Logger
 	secret    string
@@ -42,6 +44,14 @@ type Option func(*Gateway)
 // WithTracer attaches the observability tracer (feedback scores + trace viewer).
 func WithTracer(t tracing.Tracer) Option {
 	return func(g *Gateway) { g.tracer = t }
+}
+
+// WithIdentity attaches the authentication and user-management gRPC clients.
+func WithIdentity(auth pb.AuthServiceClient, users pb.UserServiceClient) Option {
+	return func(g *Gateway) {
+		g.auth = auth
+		g.users = users
+	}
 }
 
 func New(
@@ -80,7 +90,14 @@ func (g *Gateway) Router() *gin.Engine {
 	})
 	r.GET("/metrics", gin.WrapH(metrics.Handler()))
 
+	// Public authentication endpoints: no bearer token required.
+	pub := r.Group("/v1/auth")
+	pub.POST("/login", g.login)
+	pub.POST("/register", g.register)
+	pub.POST("/refresh", g.refresh)
+
 	v1 := r.Group("/v1", Auth(g.secret, g.allowAnon), RateLimit(50, 100))
+	v1.POST("/auth/logout", g.logout)
 	v1.POST("/files", g.uploadFile)
 	v1.GET("/tasks", g.listTasks)
 	v1.GET("/tasks/:id", g.getTask)
@@ -93,7 +110,30 @@ func (g *Gateway) Router() *gin.Engine {
 	v1.POST("/sandbox/execute", g.executeSandbox)
 	v1.GET("/me", g.me)
 
+	// User & RBAC management.
+	v1.GET("/users", RequirePermission("user:read"), g.listUsers)
+	v1.POST("/users", RequirePermission("user:write"), g.createUser)
+	v1.GET("/users/:id", RequirePermission("user:read"), g.getUser)
+	v1.PATCH("/users/:id", RequirePermission("user:write"), g.updateUser)
+	v1.DELETE("/users/:id", RequirePermission("user:delete"), g.deleteUser)
+	v1.GET("/roles", RequirePermission("role:read"), g.listRoles)
+	v1.POST("/roles", RequirePermission("role:write"), g.upsertRole)
+	v1.DELETE("/roles/:name", RequirePermission("role:write"), g.deleteRole)
+	v1.GET("/permissions", RequirePermission("role:read"), g.listPermissions)
+
 	return r
+}
+
+// publicContext propagates a trace id for unauthenticated endpoints without
+// injecting a tenant principal (so the request body decides the tenant).
+func (g *Gateway) publicContext(c *gin.Context) context.Context {
+	ctx := c.Request.Context()
+	id := c.GetHeader("x-trace-id")
+	if id == "" {
+		id = tracing.NewID()
+	}
+	ctx = tracing.ToGRPC(ctx, id)
+	return tracing.WithTraceID(ctx, id)
 }
 
 func (g *Gateway) callerContext(c *gin.Context) (context.Context, tenant.Principal) {

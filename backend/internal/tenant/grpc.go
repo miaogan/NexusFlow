@@ -27,6 +27,9 @@ func FromIncoming(ctx context.Context) Principal {
 	if v := first(md.Get("x-roles")); v != "" {
 		p.Roles = strings.Split(v, ",")
 	}
+	if v := first(md.Get("x-permissions")); v != "" {
+		p.Permissions = strings.Split(v, ",")
+	}
 	return p
 }
 
@@ -44,5 +47,6 @@ func ToOutgoing(ctx context.Context, p Principal) context.Context {
 		"x-user-id", p.UserID,
 		"x-departments", strings.Join(p.Departments, ","),
 		"x-roles", strings.Join(p.Roles, ","),
+		"x-permissions", strings.Join(p.Permissions, ","),
 	)
 }

@@ -17,12 +17,16 @@ type Config struct {
 	ProcessingGRPCAddr string
 	SandboxGRPCAddr    string
 	QueryGRPCAddr      string
+	AuthGRPCAddr       string
+	UserGRPCAddr       string
 	WorkflowHTTPAddr   string
 
 	// Downstream endpoints used by the gateway / workers.
 	IngestionTarget string
 	QueryTarget     string
 	SandboxTarget   string
+	AuthTarget      string
+	UserTarget      string
 	MinerUTarget    string
 	RerankURL       string
 	RerankModel     string
@@ -36,6 +40,14 @@ type Config struct {
 
 	JWTSecret      string
 	AllowAnonymous bool
+
+	// Identity: authentication and RBAC.
+	AccessTokenTTL    time.Duration
+	RefreshTokenTTL   time.Duration
+	AllowSelfRegister bool
+	SeedTenantID      string
+	SeedAdminUsername string
+	SeedAdminPassword string
 
 	SandboxBackend   string
 	SandboxWorkDir   string
@@ -65,11 +77,15 @@ func Load() Config {
 		ProcessingGRPCAddr: env("PROCESSING_GRPC_ADDR", ":9092"),
 		SandboxGRPCAddr:    env("SANDBOX_GRPC_ADDR", ":9093"),
 		QueryGRPCAddr:      env("QUERY_GRPC_ADDR", ":9094"),
+		AuthGRPCAddr:       env("AUTH_GRPC_ADDR", ":9096"),
+		UserGRPCAddr:       env("USER_GRPC_ADDR", ":9097"),
 		WorkflowHTTPAddr:   env("WORKFLOW_HTTP_ADDR", ":8081"),
 
 		IngestionTarget: env("INGESTION_TARGET", "127.0.0.1:9095"),
 		QueryTarget:     env("QUERY_TARGET", "127.0.0.1:9094"),
 		SandboxTarget:   env("SANDBOX_TARGET", "127.0.0.1:9093"),
+		AuthTarget:      env("AUTH_TARGET", "127.0.0.1:9096"),
+		UserTarget:      env("USER_TARGET", "127.0.0.1:9097"),
 		MinerUTarget:    env("MINERU_TARGET", ""),
 		RerankURL:       env("RERANK_URL", ""),
 		RerankModel:     env("RERANK_MODEL", "bge-reranker-v2-m3"),
@@ -83,6 +99,13 @@ func Load() Config {
 
 		JWTSecret:      env("JWT_SECRET", "nexusflow-dev-secret"),
 		AllowAnonymous: envBool("ALLOW_ANONYMOUS", true),
+
+		AccessTokenTTL:    envDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
+		RefreshTokenTTL:   envDuration("REFRESH_TOKEN_TTL", 7*24*time.Hour),
+		AllowSelfRegister: envBool("ALLOW_SELF_REGISTER", true),
+		SeedTenantID:      env("SEED_TENANT_ID", "default"),
+		SeedAdminUsername: env("SEED_ADMIN_USERNAME", "admin"),
+		SeedAdminPassword: env("SEED_ADMIN_PASSWORD", "admin123"),
 
 		SandboxBackend:   env("SANDBOX_BACKEND", "local"),
 		SandboxWorkDir:   env("SANDBOX_WORK_DIR", "/tmp/nexusflow-sandboxes"),

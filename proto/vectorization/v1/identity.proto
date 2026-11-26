@@ -1,0 +1,188 @@
+syntax = "proto3";
+
+package vectorization.v1;
+
+option go_package = "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1;vectorizationv1";
+
+// ========== 认证服务：注册 / 登录 / 刷新 / 登出 / 校验 ==========
+service AuthService {
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc Refresh(RefreshRequest) returns (LoginResponse);
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+  rpc Validate(ValidateRequest) returns (ValidateResponse);
+}
+
+// ========== 用户与 RBAC 服务：用户 CRUD + 角色/权限管理 ==========
+service UserService {
+  rpc CreateUser(CreateUserRequest) returns (UserResponse);
+  rpc GetUser(GetUserRequest) returns (UserResponse);
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc UpdateUser(UpdateUserRequest) returns (UserResponse);
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+
+  rpc ListRoles(ListRolesRequest) returns (ListRolesResponse);
+  rpc UpsertRole(UpsertRoleRequest) returns (RoleResponse);
+  rpc DeleteRole(DeleteRoleRequest) returns (DeleteRoleResponse);
+  rpc ListPermissions(ListPermissionsRequest) returns (ListPermissionsResponse);
+}
+
+// ---------- 共享模型 ----------
+
+message UserInfo {
+  string id = 1;
+  string tenant_id = 2;
+  string username = 3;
+  string email = 4;
+  repeated string roles = 5;
+  repeated string departments = 6;
+  string status = 7;  // active | disabled
+  string created_at = 8;
+  string updated_at = 9;
+}
+
+message TokenPair {
+  string access_token = 1;
+  string refresh_token = 2;
+  int64 expires_in = 3;  // access token 有效期（秒）
+}
+
+message RoleInfo {
+  string name = 1;
+  repeated string permissions = 2;
+  bool builtin = 3;
+  string description = 4;
+}
+
+message PermissionInfo {
+  string key = 1;
+  string description = 2;
+}
+
+// ---------- Auth ----------
+
+message RegisterRequest {
+  string tenant_id = 1;
+  string username = 2;
+  string password = 3;
+  string email = 4;
+}
+
+message RegisterResponse {
+  UserInfo user = 1;
+}
+
+message LoginRequest {
+  string tenant_id = 1;
+  string username = 2;
+  string password = 3;
+}
+
+message LoginResponse {
+  TokenPair tokens = 1;
+  UserInfo user = 2;
+}
+
+message RefreshRequest {
+  string refresh_token = 1;
+}
+
+message LogoutRequest {
+  string refresh_token = 1;
+}
+
+message LogoutResponse {
+  bool success = 1;
+}
+
+message ValidateRequest {
+  string access_token = 1;
+}
+
+message ValidateResponse {
+  bool valid = 1;
+  UserInfo user = 2;
+}
+
+// ---------- Users ----------
+
+message CreateUserRequest {
+  string tenant_id = 1;
+  string username = 2;
+  string password = 3;
+  string email = 4;
+  repeated string roles = 5;
+  repeated string departments = 6;
+}
+
+message UserResponse {
+  UserInfo user = 1;
+}
+
+message GetUserRequest {
+  string tenant_id = 1;
+  string id = 2;
+}
+
+message ListUsersRequest {
+  string tenant_id = 1;
+  string query = 2;  // username / email 模糊匹配
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message ListUsersResponse {
+  repeated UserInfo users = 1;
+  int32 total = 2;
+}
+
+message UpdateUserRequest {
+  string tenant_id = 1;
+  string id = 2;
+  string email = 3;            // 空表示不改
+  repeated string roles = 4;   // 空表示不改
+  repeated string departments = 5;
+  string status = 6;           // 空表示不改；active | disabled
+  string password = 7;         // 非空则重置密码
+}
+
+message DeleteUserRequest {
+  string tenant_id = 1;
+  string id = 2;
+}
+
+message DeleteUserResponse {
+  bool success = 1;
+}
+
+// ---------- Roles / Permissions ----------
+
+message ListRolesRequest {}
+
+message ListRolesResponse {
+  repeated RoleInfo roles = 1;
+}
+
+message UpsertRoleRequest {
+  string name = 1;
+  repeated string permissions = 2;
+  string description = 3;
+}
+
+message RoleResponse {
+  RoleInfo role = 1;
+}
+
+message DeleteRoleRequest {
+  string name = 1;
+}
+
+message DeleteRoleResponse {
+  bool success = 1;
+}
+
+message ListPermissionsRequest {}
+
+message ListPermissionsResponse {
+  repeated PermissionInfo permissions = 1;
+}

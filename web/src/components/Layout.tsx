@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
-import { getMe, getToken, setToken } from "../api/client";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { clearAuth, getCurrentUser, getMe, getToken, hasPermission, isAnonymous } from "../api/client";
 import type { MeInfo } from "../types";
 import { Button } from "./ui";
 
-const NAV = [
+type NavItem = { to: string; label: string; end?: boolean };
+
+const NAV: NavItem[] = [
   { to: "/", label: "概览", end: true },
   { to: "/files", label: "文件管理" },
   { to: "/tasks", label: "任务中心" },
@@ -14,15 +16,31 @@ const NAV = [
 ];
 
 export default function Layout() {
+  const navigate = useNavigate();
   const [me, setMe] = useState<MeInfo | null>(null);
-  const [tokenOpen, setTokenOpen] = useState(false);
-  const [tokenDraft, setTokenDraft] = useState("");
+  const [ready, setReady] = useState(false);
+  const user = getCurrentUser();
+  const anon = isAnonymous();
 
   useEffect(() => {
+    if (!getToken() && !isAnonymous()) {
+      navigate("/login", { replace: true });
+      return;
+    }
+    setReady(true);
     getMe()
       .then(setMe)
       .catch(() => setMe(null));
-  }, []);
+  }, [navigate]);
+
+  if (!ready) return null;
+
+  const nav = hasPermission("user:read") ? [...NAV, { to: "/users", label: "用户管理" }] : NAV;
+
+  const handleLogout = () => {
+    clearAuth();
+    navigate("/login", { replace: true });
+  };
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -37,7 +55,7 @@ export default function Layout() {
           </div>
         </div>
         <nav className="mt-2 flex flex-col gap-0.5 px-2">
-          {NAV.map((item) => (
+          {nav.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -64,23 +82,30 @@ export default function Layout() {
       <div className="flex flex-1 flex-col overflow-hidden">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-white/5 px-6">
           <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">
-            {me ? `${me.tenant_id} · ${me.user_id}` : "未连接"}
+            {user ? `${user.tenant_id} · ${user.username}` : me ? `${me.tenant_id} · ${me.user_id}` : "未连接"}
           </p>
           <div className="flex items-center gap-2">
             <span
               className={`flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] ${
-                me ? "bg-emerald-500/10 text-emerald-300" : "bg-rose-500/10 text-rose-300"
+                !anon && getToken()
+                  ? "bg-emerald-500/10 text-emerald-300"
+                  : me
+                    ? "bg-sky-500/10 text-sky-300"
+                    : "bg-rose-500/10 text-rose-300"
               }`}
             >
               <span className="h-1.5 w-1.5 rounded-full bg-current" />
               {getToken() ? "已鉴权" : me ? "匿名访问" : "离线"}
             </span>
-            <Button variant="ghost" className="px-2.5 py-1 text-[10px]" onClick={() => {
-              setTokenDraft(getToken() ?? "");
-              setTokenOpen(true);
-            }}>
-              Token
-            </Button>
+            {anon && !getToken() ? (
+              <Button variant="ghost" className="px-2.5 py-1 text-[10px]" onClick={() => navigate("/login")}>
+                登录
+              </Button>
+            ) : (
+              <Button variant="ghost" className="px-2.5 py-1 text-[10px]" onClick={handleLogout}>
+                登出
+              </Button>
+            )}
           </div>
         </header>
 
@@ -88,31 +113,6 @@ export default function Layout() {
           <Outlet />
         </main>
       </div>
-
-      {tokenOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setTokenOpen(false)}>
-          <div className="panel w-96 p-5" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold text-slate-100">访问令牌</h3>
-            <p className="mt-1 text-xs text-slate-500">
-              留空则以匿名身份访问（需服务端开启 ALLOW_ANONYMOUS）。粘贴 JWT 可切换租户身份。
-            </p>
-            <textarea
-              value={tokenDraft}
-              onChange={(e) => setTokenDraft(e.target.value)}
-              placeholder="Bearer JWT..."
-              className="mt-3 h-24 w-full resize-none rounded-lg border border-white/10 bg-ink-950 px-3 py-2 font-mono text-[11px] text-slate-200 outline-none focus:border-accent/40"
-            />
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => { setToken(null); setTokenOpen(false); location.reload(); }}>
-                清除
-              </Button>
-              <Button onClick={() => { setToken(tokenDraft || null); setTokenOpen(false); location.reload(); }}>
-                保存
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

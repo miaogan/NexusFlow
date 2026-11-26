@@ -50,6 +50,19 @@ func Auth(secret string, allowAnonymous bool) gin.HandlerFunc {
 	}
 }
 
+// RequirePermission gates a route on a permission key carried by the caller's
+// JWT. The wildcard "*" satisfies every requirement.
+func RequirePermission(perm string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		p, _ := tenant.From(c.Request.Context())
+		if !tenant.HasPermission(p, perm) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden: requires " + perm})
+			return
+		}
+		c.Next()
+	}
+}
+
 // RateLimit applies a per-tenant token bucket at the gateway edge.
 func RateLimit(rps float64, burst int) gin.HandlerFunc {
 	var mu sync.Mutex
