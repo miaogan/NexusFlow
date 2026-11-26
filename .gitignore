@@ -28,3 +28,4 @@ web/dist/
 /eval/report.json
 /eval/feedback_report.json
 /eval/regressions.jsonl
+/eval/judge_report.json

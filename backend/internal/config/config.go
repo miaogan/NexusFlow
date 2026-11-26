@@ -38,8 +38,10 @@ type Config struct {
 	RedisAddr   string
 	MetricsAddr string
 
-	// IdentityDriver selects the user/role store: memory | redis.
+	// IdentityDriver selects the user/role store: memory | redis | postgres.
 	IdentityDriver string
+	// IdentityDatabaseURL is the PostgreSQL DSN used when IdentityDriver is postgres.
+	IdentityDatabaseURL string
 
 	// Feedback persistence: memory | postgres. Postgres keeps user ratings
 	// and implicit signals across restarts.
@@ -105,10 +107,11 @@ func Load() Config {
 		RerankModel:     env("RERANK_MODEL", "bge-reranker-v2-m3"),
 		RAGAgentURL:     env("RAG_AGENT_URL", "http://127.0.0.1:8001"),
 
-		StateDriver:    env("STATE_DRIVER", "memory"),
-		RedisAddr:      env("REDIS_ADDR", "127.0.0.1:6379"),
-		MetricsAddr:    env("METRICS_ADDR", ""),
-		IdentityDriver: env("IDENTITY_DRIVER", "memory"),
+		StateDriver:         env("STATE_DRIVER", "memory"),
+		RedisAddr:           env("REDIS_ADDR", "127.0.0.1:6379"),
+		MetricsAddr:         env("METRICS_ADDR", ""),
+		IdentityDriver:      env("IDENTITY_DRIVER", "memory"),
+		IdentityDatabaseURL: env("IDENTITY_DATABASE_URL", ""),
 
 		FeedbackDriver:      env("FEEDBACK_DRIVER", "memory"),
 		FeedbackDatabaseURL: env("FEEDBACK_DATABASE_URL", ""),

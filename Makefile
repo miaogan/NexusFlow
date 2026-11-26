@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 .PHONY: proto build test test-go test-py vet fmt web-install web-dev web-build \
 	run-dev-all run-gateway run-workflow run-auth-service run-user-service up down \
-	eval-rag eval-rag-chat analyze-feedback test-eval
+	eval-rag eval-rag-chat judge-rag analyze-feedback test-eval
 
 proto:
 	protoc -I proto \
@@ -13,7 +13,7 @@ proto:
 build:
 	cd backend && go build ./...
 
-test: test-go test-py
+test: test-go test-py test-eval
 
 test-go:
 	cd backend && go test ./...
@@ -63,6 +63,10 @@ eval-rag:
 
 eval-rag-chat:
 	python3 eval/rag_eval.py --base-url http://127.0.0.1:8080 --k 2 --with-chat
+
+# LLM-as-judge faithfulness/relevancy/completeness (requires RAG_LLM_* config).
+judge-rag:
+	python3 eval/judge.py --base-url http://127.0.0.1:8080 --k 2
 
 # Attribute negative feedback and export a replayable regression set.
 analyze-feedback:

@@ -198,7 +198,7 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 
 **令牌模型**：HS256 JWT，claims 携带 `tenant_id` / `user_id` / `roles` / `permissions` / `token_type`。access token 默认 15 分钟（`ACCESS_TOKEN_TTL`），refresh token 默认 168 小时（`REFRESH_TOKEN_TTL`）；`token_type` 区分用途，refresh token 不能当 access 用。权限点在登录时由角色展开并写入 token，网关据此零开销判定，无需每次回调鉴权服务。控制台在 access token 过期（401）时用 refresh token 自动换新并重试原请求，刷新失败则清理登录态并回到 `/login`。
 
-**存储**：`IDENTITY_DRIVER=memory`（默认，dev-all 单进程）或 `redis`（独立部署时 Auth / User 服务共享同一份用户与角色数据）。
+**存储**：`IDENTITY_DRIVER=memory`（默认，dev-all 单进程）、`redis` 或 `postgres`（独立部署时 Auth / User 服务共享同一份用户与角色数据；postgres 使用 `IDENTITY_DATABASE_URL`，启动时自动建 `identity_users` / `identity_roles` 表）。
 
 **权限模型**：固定权限点目录（`user:read`、`file:write`、`sandbox:execute`、`trace:read` 等 14 个 + 通配 `*`）→ 角色组合 → 用户绑定角色。内置三个角色：
 
@@ -298,7 +298,7 @@ P2/P3 约定：
 - **持久化**：`FEEDBACK_DRIVER=memory|postgres`。Postgres 启动时自动建 `rag_feedback` 表，按 `tenant_id + user_id + subject_id + name` 覆盖更新，同一消息只保留最新评分；生产 compose 默认 `postgres`，即使 tracing 为 Noop 也不会丢数据。
 - **评审查询**：`GET /v1/feedback?rating=-1&limit=20`（需 `user:read`，按租户隔离），返回 query/answer/引用/纠正答案等字段。
 - **低分归因**：`eval/analyze_feedback.py` 拉取负反馈，按 `generation_wrong / retrieval_miss / citation_missing / citation_out_of_range / unclassified` 归因，输出 `eval/feedback_report.json` 与可回放的 `eval/regressions.jsonl`。
-- **尚未完成**：LLM-as-judge（faithfulness / relevancy）与在线降权 / 灰度回灌（P3）尚未接入。
+- **尚未完成**：在线降权 / 灰度回灌（P3）尚未接入。
 
 ## RAG 离线评测
 
@@ -327,7 +327,23 @@ make eval-rag-chat
 {"query": "多路召回如何做 RRF 融合和精排？", "relevant_ids": ["doc-2"], "kb_id": null}
 ```
 
-`relevant_ids` 可匹配 `chunk_id` 或 `meta.doc_id / document_id / file_name`。真实语料库建议 `--k 5` 并同步调整阈值；报告写入 `eval/report.json`（已忽略提交）。当前生成侧只做规则校验，LLM-as-judge 的 faithfulness/relevancy 尚未接入。
+`relevant_ids` 可匹配 `chunk_id` 或 `meta.doc_id / document_id / file_name`。真实语料库建议 `--k 5` 并同步调整阈值；报告写入 `eval/report.json`（已忽略提交）。生成侧的语义评分见下节。
+
+## LLM-as-judge 语义评分
+
+`eval/judge.py` 对 golden 集逐条调用 `/v1/chat` 拿到答案与引用片段，再用 OpenAI 兼容模型按三个维度打分（0–1）：`faithfulness`（是否只依据引用）、`relevancy`（是否切题）、`completeness`（是否覆盖关键信息）。仅依赖标准库。
+
+```bash
+export RAG_LLM_BASE_URL=https://api.deepseek.com/v1
+export RAG_LLM_API_KEY=sk-...
+export RAG_LLM_MODEL=deepseek-chat
+
+make judge-rag      # 写 eval/judge_report.json；低于 eval/judge_thresholds.json 时退出码 1
+```
+
+- 未配置 LLM 时脚本以退出码 2 提示需要 Key，不会静默跳过。
+- 单条用例失败（网关或模型异常）会记入 `errors` 并继续评测其余用例；全部失败才返回 2。
+- 阈值默认 `faithfulness/relevancy >= 0.7`、`completeness >= 0.6`，可按语料在 `eval/judge_thresholds.json` 调整。
 
 ## 反馈归因与回归集
 
@@ -403,5 +419,5 @@ make up / down     # 容器编排启停
 - LlamaIndex Service 的切块、索引与检索依赖 Qdrant 与 Embedding API Key；未配置时相关接口返回 503。
 - K8s HPA 使用自定义指标 `nexusflow_queue_length`，需部署 prometheus-adapter 将指标转换为 Custom Metrics API。
 - 设计文档中的 LightRAG、NL2SQL、长期记忆章节属于目标架构，当前代码骨架预留了对应扩展位，尚未实现端到端链路。（可观测性 / Langfuse 导出与 dev trace viewer 已实现，见上节。）
-- 用户与角色支持两种存储：`memory`（dev-all 单进程默认）与 `redis`（`IDENTITY_DRIVER=redis`，供独立部署的 Auth / User 服务跨进程共享）。PostgreSQL 存储尚未实现，可扩展 `identity.Store` 接口接入。
+- 用户与角色支持三种存储：`memory`（dev-all 单进程默认）、`redis`（`IDENTITY_DRIVER=redis`）与 `postgres`（`IDENTITY_DRIVER=postgres` + `IDENTITY_DATABASE_URL`），后两者供独立部署的 Auth / User 服务跨进程共享；postgres 启动时自动建表并复用内置角色种子。沙箱环境无 Postgres，该路径尚未做运行时验证。
 - 登出为无状态实现（不吊销已签发的 JWT），refresh token 到期自然失效；生产环境如需即时失效需引入令牌吊销名单。

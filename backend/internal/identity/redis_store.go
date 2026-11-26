@@ -306,9 +306,16 @@ func (r *RedisStore) putRole(ctx context.Context, role Role) error {
 }
 
 // NewStore selects the identity store implementation from configuration.
-func NewStore(driver, redisAddr string) (Store, error) {
-	if driver == "redis" {
+// redisAddr is used for the redis driver; dsn is used for the postgres driver.
+func NewStore(driver, redisAddr, dsn string) (Store, error) {
+	switch driver {
+	case "redis":
 		return NewRedisStore(redisAddr)
+	case "postgres":
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return NewPostgresStore(ctx, dsn)
+	default:
+		return NewMemoryStore(), nil
 	}
-	return NewMemoryStore(), nil
 }

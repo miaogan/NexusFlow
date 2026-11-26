@@ -22,7 +22,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	store, err := identity.NewStore(cfg.IdentityDriver, cfg.RedisAddr)
+	store, err := identity.NewStore(cfg.IdentityDriver, cfg.RedisAddr, cfg.IdentityDatabaseURL)
 	if err != nil {
 		logger.Error("init identity store", "error", err)
 		os.Exit(1)

@@ -524,7 +524,7 @@ message SearchResponse {
 | 无结果/低分查询 | 隐式 | 召回不足或索引缺口 | 补数据、调切块 |
 | RAGAS 自动评估 | 系统 | 忠实度/相关性打分 | 回归评测、上线门禁 |
 
-> 落地状态：点赞/点踩（检索页与问答页）、引用点击已实现并落库；问答页「没帮助」后可提交纠正答案（`corrected_answer`）并随评分落库；无结果查询由 `eval/rag_eval.py` 与低分查询 API 覆盖；RAGAS/LLM-as-judge 自动评分尚未接入。
+> 落地状态：点赞/点踩（检索页与问答页）、引用点击已实现并落库；问答页「没帮助」后可提交纠正答案（`corrected_answer`）并随评分落库；无结果查询由 `eval/rag_eval.py` 与低分查询 API 覆盖；RAGAS / LLM-as-judge 语义评分由 `eval/judge.py` 提供（需配置 LLM Key）。
 
 ### 14.2 反馈数据模型
 
@@ -605,7 +605,7 @@ message FeedbackEvent {
 | 引用规则校验 | 已实现 | `--with-chat`：citation_validity / hit_rate / inline_marker_rate |
 | 阈值门禁 | 已实现 | `eval/thresholds.json` + `make eval-rag`，低于阈值退出码 1 |
 | 低分归因 / 回归集导出 | 已实现 | `eval/analyze_feedback.py`：五类归因 + `eval/regressions.jsonl` |
-| RAGAS / LLM-as-judge | 未接入 | 需配置 LLM Key |
+| RAGAS / LLM-as-judge | 已接入（需 LLM Key） | `eval/judge.py`：faithfulness / relevancy / completeness |
 | 在线降权 / 灰度回灌 | 规划中 | P3 |
 
 ## 15. 多租户与权限治理
