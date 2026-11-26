@@ -79,13 +79,17 @@ V2.0 技术选型的核心考量如下：
 
 架构的核心特征是“计算特征与生态优势互补”：Go 负责高并发编排与解析调度，Python 的 LlamaIndex 负责复杂的数据加工，不可信代码被隔离到独立沙箱资源池，三者分别投放到独立服务中，配合 Kubernetes 的弹性调度实现精准扩缩容。
 
+V4.0 在接入层进一步拆出 Auth Service 与 User Service：JWT 的签发与校验、用户账号与角色权限管理从网关剥离为独立服务，网关仅负责令牌校验、路由级权限判定与限流，降低接入层耦合、便于独立伸缩。
+
 ## 3. 核心微服务拆分
 
-遵循单一职责原则，V2.0 系统拆分为以下核心微服务。与 V1.0 相比，Processing Worker 职责收窄为解析调度，新增独立的 LlamaIndex Processing Service 承担切块与向量化加工：
+遵循单一职责原则，系统当前拆分为以下核心微服务。相对早期版本，Processing Worker 职责收窄为解析调度，新增独立的 LlamaIndex Processing Service 承担切块与向量化加工；V4.0 又从接入层拆出 Auth / User 服务，专门承载认证签发与 RBAC：
 
 | 服务 | 语言 | 职责 | 资源特征 |
 | --- | --- | --- | --- |
 | API Gateway | Go | 统一入口，鉴权、限流、路由转发 | I/O 密集，无状态 |
+| Auth Service | Go | 注册 / 登录 / 刷新 / 校验，签发与验证 JWT | 轻量无状态 |
+| User Service | Go | 租户隔离的用户 CRUD、角色与权限点管理（RBAC） | 轻量，需共享存储 |
 | Workflow Engine | Go | 解析 DAG，按依赖调度节点，维护执行上下文 | CPU 中等，需状态存储 |
 | Ingestion Service | Go | 接收上传，写对象存储与元数据，投递任务 | I/O 密集 |
 | Processing Worker | Go | 消费任务，调用 MinerU 解析，产出 Markdown | I/O+等待，异步解析 |
@@ -209,7 +213,7 @@ OpenSandbox 作为控制平面，承担沙箱的创建、调度、隔离与回�
 
 ## 10. 接口定义（Protocol Buffers）
 
-以下为系统核心服务的 Protobuf 契约，含 V2.0 新增的 LlamaIndexService（数据加工服务）与 SandboxExecutionService（自定义代码节点）。跨服务、跨语言调用以此为准。
+以下为系统核心服务的 Protobuf 契约，含 V2.0 新增的 LlamaIndexService（数据加工服务）、SandboxExecutionService（自定义代码节点），以及 V4.0 的 AuthService / UserService（认证与 RBAC，完整定义见 `proto/vectorization/v1/identity.proto`）。跨服务、跨语言调用以此为准。
 
 ```protobuf
 syntax = "proto3";
@@ -280,6 +284,45 @@ message CodeExecuteResponse {
   bool   success = 1;  string output_json = 2;  string stdout = 3;
   string stderr = 4;  string sandbox_id = 5;  string error_msg = 6;
 }
+// ========== 认证服务（注册 / 登录 / 刷新 / 校验，签发 JWT）==========
+service AuthService {
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Login(LoginRequest)       returns (LoginResponse);
+  rpc Refresh(RefreshRequest)   returns (LoginResponse);
+  rpc Logout(LogoutRequest)     returns (LogoutResponse);
+  rpc Validate(ValidateRequest) returns (ValidateResponse);
+}
+message UserInfo {
+  string id = 1;  string tenant_id = 2;  string username = 3;  string email = 4;
+  repeated string roles = 5;  repeated string departments = 6;  string status = 7;
+}
+message TokenPair {
+  string access_token = 1;  string refresh_token = 2;  int64 expires_in = 3;
+}
+message RegisterRequest  { string tenant_id = 1;  string username = 2;  string password = 3;  string email = 4; }
+message RegisterResponse { UserInfo user = 1; }
+message LoginRequest     { string tenant_id = 1;  string username = 2;  string password = 3; }
+message LoginResponse    { TokenPair tokens = 1;  UserInfo user = 2; }
+message RefreshRequest   { string refresh_token = 1; }
+message LogoutRequest    { string refresh_token = 1; }
+message LogoutResponse   { bool success = 1; }
+message ValidateRequest  { string access_token = 1; }
+message ValidateResponse { bool valid = 1;  UserInfo user = 2; }
+// ========== 用户与 RBAC 服务 ==========
+service UserService {
+  rpc CreateUser(CreateUserRequest) returns (UserResponse);
+  rpc GetUser(GetUserRequest)       returns (UserResponse);
+  rpc ListUsers(ListUsersRequest)   returns (ListUsersResponse);
+  rpc UpdateUser(UpdateUserRequest) returns (UserResponse);
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+  rpc ListRoles(ListRolesRequest)   returns (ListRolesResponse);
+  rpc UpsertRole(UpsertRoleRequest) returns (RoleResponse);
+  rpc DeleteRole(DeleteRoleRequest) returns (DeleteRoleResponse);
+  rpc ListPermissions(ListPermissionsRequest) returns (ListPermissionsResponse);
+}
+message RoleInfo       { string name = 1;  repeated string permissions = 2;  bool builtin = 3;  string description = 4; }
+message PermissionInfo { string key = 1;  string description = 2; }
+// CreateUser / GetUser / ListUsers / UpdateUser / DeleteUser 的请求以 tenant_id 隔离，字段从略
 ```
 
 ## 11. 沙箱执行服务核心代码框架（Go）
@@ -552,7 +595,13 @@ message FeedbackEvent {
 
 ### 15.1 统一鉴权中心
 
-网关层解析 JWT 提取 tenant_id 与部门/角色权限（ACL），注入到下游请求上下文（gRPC metadata / MQ 消息头）随任务全程透传；基于 tenant_id 实施 API 限流与配额、资源隔离，形成"一次鉴权、全链携带"的闭环。
+鉴权中心已落地为两个独立微服务：**Auth Service** 负责注册、登录、令牌刷新与校验，**User Service** 负责租户隔离的用户 CRUD 与角色/权限点管理（契约见 `proto/vectorization/v1/identity.proto`，实现位于 `backend/internal/identity`）。
+
+令牌为 HS256 JWT，claims 携带 `tenant_id`、`user_id`、`roles`、`permissions`、`token_type`；access token 默认 15 分钟、refresh token 默认 168 小时，`token_type` 阻止 refresh 令牌被当作 access 令牌使用。登录时由角色展开权限点写入令牌，实现"权限随令牌下发"。
+
+网关层解析 JWT 提取 tenant_id 与权限点，注入下游请求上下文（gRPC metadata `x-tenant-id` / `x-user-id` / `x-roles` / `x-permissions`）随任务全程透传；路由级 `RequirePermission` 中间件据此零回调判定鉴权，并基于 tenant_id 实施 API 限流与配额，形成"一次鉴权、全链携带"的闭环。
+
+权限模型为固定权限点目录（`user:read`、`file:write`、`sandbox:execute`、`trace:read` 等 14 个 + 通配 `*`）与角色组合：内置 `admin`（全量）、`editor`（内容读写 + 检索/沙箱/工作流）、`viewer`（只读），并支持自定义角色自由组合权限点；内置角色不可修改删除。
 
 ### 15.2 ACL 元数据绑定与前置过滤
 
@@ -614,6 +663,8 @@ LightRAG 支持两种检索模式：Local 模式聚焦实体邻域的局部细�
 
 引入自建的 Langfuse 作为 LLM 应用治理底座，统一承载提示词版本、全链路追踪与自动化评审，为反馈闭环（第 14 章）提供数据与度量支撑。
 
+> 实现状态：19.1 / 19.2 的核心能力已在 `backend/internal/platform/{prompt,tracing}` 落地——版本化 Prompt 注册表、检索/问答全链路 Tracing（`MemoryTracer` 供开发态查看，`LangfuseTracer` 批量导出且 fail-open），以及经 `POST /v1/feedback` 回传的赞/踩评分。19.3 的定时 LLM-as-a-Judge 自动化评审仍属目标设计。
+
 ### 19.1 Prompt 版本管理
 
 所有提示词托管于 Langfuse，支持按租户/场景打标、动态热拉取与无感热更新；新版本以 A/B 实验灰度，指标劣化一键回滚。
@@ -634,6 +685,7 @@ LightRAG 支持两种检索模式：Local 模式聚焦实体邻域的局部细�
 | --- | --- | --- |
 | 前端交互 | React + TypeScript + Tailwind + React Flow | 可视化工作流画布，生成 DAG DSL |
 | 网关与调度 | Go + Gin + RabbitMQ/Asynq + Kafka | 高并发网关、多租户鉴权、生产者/消费者削峰 |
+| 认证与权限 | Go + JWT(HS256) + bcrypt + RBAC | 独立 Auth / User 服务，权限随令牌下发，路由级判定 |
 | AI 计算与加工 | Python + FastAPI + LlamaIndex | 切块、多路索引、检索与 Rerank、NL2SQL、记忆读写 |
 | 文档解析 | MinerU（magic-pdf） | 复杂版面/图表还原为结构化 Markdown |
 | 检索增强 | Milvus/Qdrant + LightRAG + BGE-Reranker | 向量+稀疏+图谱三路召回、RRF+重排 |
