@@ -52,7 +52,7 @@ services:
       POSTGRES_USER: nexusflow
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexusflow}
       POSTGRES_DB: nexusflow
-    ports: ["5432:5432"]
+    ports: ["${POSTGRES_PUBLISH_PORT:-5432}:5432"]
     volumes: ["postgres-data:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U nexusflow -d nexusflow"]
@@ -66,6 +66,8 @@ services:
     volumes: ["qdrant-data:/qdrant/storage"]
 
   minio:
+    # Optional: the Go services persist objects on the local volume today.
+    profiles: ["extras"]
     image: minio/minio:RELEASE.2024-12-18T13-15-44Z
     command: server /data --console-address ":9001"
     environment:
@@ -113,7 +115,7 @@ services:
       redis:
         condition: service_healthy
     volumes: ["objects:/data/objects"]
-    ports: ["8080:8080"]
+    ports: ["${GATEWAY_PUBLISH_PORT:-8080}:8080"]
 
   auth-service:
     build:
@@ -400,12 +402,14 @@ services:
     ports: ["8088:80"]
 
   prometheus:
+    profiles: ["extras"]
     image: prom/prometheus:v2.55.1
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports: ["9090:9090"]
 
   grafana:
+    profiles: ["extras"]
     image: grafana/grafana:11.4.0
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin

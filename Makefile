@@ -1,5 +1,8 @@
 SHELL := /bin/bash
 
+# Load the root .env for compose interpolation when present (it is gitignored).
+COMPOSE_ENV := $(if $(wildcard .env),--env-file .env,)
+
 .PHONY: proto build test test-go test-py test-rag test-eval vet fmt web-install web-dev web-build \
 	run-dev-all run-gateway run-workflow run-auth-service run-user-service up down \
 	eval-rag eval-rag-chat judge-rag analyze-feedback
@@ -55,10 +58,10 @@ run-user-service:
 	cd backend && go run ./cmd/user-service
 
 up:
-	docker compose -f deploy/docker-compose.yml up --build
+	docker compose $(COMPOSE_ENV) -f deploy/docker-compose.yml up --build
 
 down:
-	docker compose -f deploy/docker-compose.yml down -v
+	docker compose $(COMPOSE_ENV) -f deploy/docker-compose.yml down -v
 
 # Offline RAG evaluation (requires a running gateway + query service).
 eval-rag:
