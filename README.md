@@ -189,6 +189,8 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 
 **DAG 引擎**（`backend/internal/workflow`）：校验节点类型、引用完整性与环路，按拓扑层级并发执行就绪节点，上游输出写入共享 `ExecutionContext`。
 
+**NL2SQL 节点**（`type: "nl2sql"`）：配置 `sql` 直接执行，或用 `sql_from` 引用上游输出（如 `query.sql`）；配置 `question` / `question_from` 且启用 `NL2SQL_LLM_*` 时由 LLM 生成 SQL。内置只读护栏：只允许单条 `SELECT` / `WITH ... SELECT`，剔除注释与尾分号，拒绝堆叠语句、DDL/DML 关键字、`SELECT INTO` 与 `FOR UPDATE`；执行时统一包裹 `LIMIT`（`NL2SQL_MAX_ROWS`，默认 200）并受 `NL2SQL_TIMEOUT` 约束。数据库连接由 `NL2SQL_DATABASE_URL` 注入，生产应使用 SELECT-only 角色。
+
 **检索链路**（`backend/internal/query`）：多路召回并行执行（本地 `vector` / `bm25` + LlamaIndex `graph`）→ RRF 融合（k=60）→ 去重 → Cross-Encoder 重排 → 负反馈降权（`FeedbackPenalty`：同一租户内某 chunk 累计 ≥3 条负反馈时得分 ×0.5，再排序）→ 取 top-N；单路失败、重排超时或反馈存储不可用时均自动降级（Fail-open）。`graph` 路由由 `GraphRetriever` 调用 LlamaIndex `/v1/search`（LightRAG 风格实体图，无 LLM 时退化为共现词图），仅在配置 `LLAMAINDEX_URL` 的独立 query-service 中注册。
 
 **沙箱护栏**（`backend/internal/sandbox`）：强制 TTL、`defer` 无条件销毁、输入/输出走约定文件、出口白名单与凭据不落盘。`local` 后端仅用于本机调试，生产必须使用 `remote`（OpenSandbox）。
@@ -460,6 +462,6 @@ make up / down     # 容器编排启停
 - 单进程 dev-all 模式下，上传文件经解析、切块后写入共享内存索引（DocStore），检索可命中真实上传内容，任务状态推进至 COMPLETED。RRF 融合与重排逻辑与生产一致；生产将内存召回器替换为 Qdrant/Milvus 即可。
 - LlamaIndex Service 的切块、索引与检索依赖 Qdrant 与 Embedding API Key；未配置时相关接口返回 503。
 - K8s HPA 使用自定义指标 `nexusflow_queue_length`，需部署 prometheus-adapter 将指标转换为 Custom Metrics API。
-- 设计文档中的 NL2SQL 章节属于目标架构，尚未实现端到端链路；LightRAG 图谱检索已落地为 `graph` 召回路由：LlamaIndex 提供 `/v1/graph/extract` 抽取接口与 `/v1/search` 的 graph 子路由（配置 `LLAMAINDEX_LLM_*` 时用 LLM 抽取实体/关系，否则或调用失败时自动退化为共现词图），Go 侧 `GraphRetriever` 将结果接入 RRF。长期记忆已由 `memory-agent` 落地（抽取/去重/召回/注入）。（可观测性 / Langfuse 导出与 dev trace viewer 已实现，见上节。）
+- 设计文档中的 NL2SQL 章节已落地为 `nl2sql` 工作流节点（只读 SQL 护栏 + 可选 LLM 生成）；LightRAG 图谱检索已落地为 `graph` 召回路由：LlamaIndex 提供 `/v1/graph/extract` 抽取接口与 `/v1/search` 的 graph 子路由（配置 `LLAMAINDEX_LLM_*` 时用 LLM 抽取实体/关系，否则或调用失败时自动退化为共现词图），Go 侧 `GraphRetriever` 将结果接入 RRF。长期记忆已由 `memory-agent` 落地（抽取/去重/召回/注入）。（可观测性 / Langfuse 导出与 dev trace viewer 已实现，见上节。）
 - 用户与角色支持三种存储：`memory`（dev-all 单进程默认）、`redis`（`IDENTITY_DRIVER=redis`）与 `postgres`（`IDENTITY_DRIVER=postgres` + `IDENTITY_DATABASE_URL`），后两者供独立部署的 Auth / User 服务跨进程共享；postgres 启动时自动建表并复用内置角色种子。沙箱环境无 Postgres，该路径尚未做运行时验证。
 - 登出通过令牌吊销名单即时生效：JWT 携带 `jti`，登出时将该 id 写入 `TOKEN_BLACKLIST_DRIVER`（`memory` 单进程 / `redis` 供 gateway 与 auth-service 共享）并设置剩余有效期 TTL；网关在每次鉴权时拦截已吊销的 access token，auth-service 在 validate/refresh 时拒绝已吊销的 refresh token。Redis 不可用时自动降级为内存名单并告警。

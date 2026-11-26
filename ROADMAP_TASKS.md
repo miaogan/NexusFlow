@@ -37,6 +37,6 @@
 * **[x] Task 3.1: 实现 LightRAG 图谱检索路由（Graph Route）**
   * **目标**：在 `services/llamaindex` 补充图谱抽取/查询接口（无 LLM 时自动降级为共现词图谱），并在 Go 侧注册 `graph` 召回路由接入 RRF 融合。
   * **验证命令**：`make vet && go test ./backend/internal/query/...`
-* **[ ] Task 3.2: 实现 NL2SQL 结构化查询工作流节点**
+* **[x] Task 3.2: 实现 NL2SQL 结构化查询工作流节点**
   * **目标**：在 `backend/internal/workflow/` 注册 `nl2sql` 节点，内置 SQL 安全护栏（仅允许 SELECT 只读语句）。
   * **验证命令**：`make vet && go test ./backend/internal/workflow/...`

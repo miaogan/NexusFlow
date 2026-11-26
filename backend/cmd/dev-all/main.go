@@ -165,6 +165,30 @@ func main() {
 	for _, stage := range []string{"ingest", "parse", "index", "sandbox", "query"} {
 		wfRegistry.Register(workflow.StageNode{Name: stage})
 	}
+	nl2sqlOpts := []workflow.NL2SQLOption{
+		workflow.WithNL2SQLMaxRows(cfg.NL2SQLMaxRows),
+		workflow.WithNL2SQLTimeout(cfg.NL2SQLTimeout),
+	}
+	if cfg.NL2SQLLLMBaseURL != "" && cfg.NL2SQLLLMAPIKey != "" {
+		nl2sqlOpts = append(nl2sqlOpts, workflow.WithNL2SQLGenerator(
+			workflow.NewHTTPNL2SQLGenerator(
+				cfg.NL2SQLLLMBaseURL, cfg.NL2SQLLLMAPIKey, cfg.NL2SQLModel, cfg.NL2SQLSchema, 0,
+			),
+		))
+	}
+	if cfg.NL2SQLDatabaseURL != "" {
+		db, dbErr := workflow.OpenNL2SQLDB(ctx, cfg.NL2SQLDatabaseURL)
+		if dbErr != nil {
+			logger.Warn("nl2sql database unavailable, node registered without a database", "error", dbErr)
+		} else {
+			go func() {
+				<-ctx.Done()
+				_ = db.Close()
+			}()
+			nl2sqlOpts = append(nl2sqlOpts, workflow.WithNL2SQLDB(db))
+		}
+	}
+	wfRegistry.Register(workflow.NewNL2SQLNode(nl2sqlOpts...))
 	wfEngine := workflow.NewEngine(wfRegistry, logger)
 
 	errCh := make(chan error, 12)

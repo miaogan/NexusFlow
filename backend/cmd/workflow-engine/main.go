@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -27,6 +28,7 @@ func main() {
 	for _, stage := range []string{"ingest", "parse", "index", "sandbox", "query"} {
 		registry.Register(workflow.StageNode{Name: stage})
 	}
+	registry.Register(newNL2SQLNode(ctx, cfg, logger))
 	engine := workflow.NewEngine(registry, logger)
 
 	srv := &http.Server{
@@ -38,4 +40,32 @@ func main() {
 		logger.Error("workflow engine stopped", "error", err)
 		os.Exit(1)
 	}
+}
+
+// newNL2SQLNode builds the read-only SQL node. Database and LLM are optional:
+// without them the node still appears in /v1/nodes and returns a clear
+// configuration error when a run tries to execute it.
+func newNL2SQLNode(ctx context.Context, cfg config.Config, logger *slog.Logger) *workflow.NL2SQLNode {
+	opts := []workflow.NL2SQLOption{
+		workflow.WithNL2SQLMaxRows(cfg.NL2SQLMaxRows),
+		workflow.WithNL2SQLTimeout(cfg.NL2SQLTimeout),
+	}
+	if cfg.NL2SQLLLMBaseURL != "" && cfg.NL2SQLLLMAPIKey != "" {
+		opts = append(opts, workflow.WithNL2SQLGenerator(workflow.NewHTTPNL2SQLGenerator(
+			cfg.NL2SQLLLMBaseURL, cfg.NL2SQLLLMAPIKey, cfg.NL2SQLModel, cfg.NL2SQLSchema, 0,
+		)))
+	}
+	if cfg.NL2SQLDatabaseURL != "" {
+		db, err := workflow.OpenNL2SQLDB(ctx, cfg.NL2SQLDatabaseURL)
+		if err != nil {
+			logger.Warn("nl2sql database unavailable, node registered without a database", "error", err)
+		} else {
+			go func() {
+				<-ctx.Done()
+				_ = db.Close()
+			}()
+			opts = append(opts, workflow.WithNL2SQLDB(db))
+		}
+	}
+	return workflow.NewNL2SQLNode(opts...)
 }

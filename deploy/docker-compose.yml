@@ -242,9 +242,16 @@ services:
     environment:
       <<: *app-env
       WORKFLOW_HTTP_ADDR: ":8081"
+      # nl2sql node: read-only structured queries over the shared Postgres.
+      # Production must point this at a SELECT-only role.
+      NL2SQL_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
+      NL2SQL_SCHEMA: "rag_feedback(tenant_id, user_id, subject_id, name, rating, query_text, answer_text, created_at)"
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/healthz"]
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports: ["8081:8081"]
 
   llamaindex:

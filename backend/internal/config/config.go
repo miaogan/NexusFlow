@@ -85,6 +85,18 @@ type Config struct {
 
 	ParseMaxAttempts  int
 	ParsePollInterval time.Duration
+
+	// NL2SQL workflow node: read-only structured queries over Postgres. The DSN
+	// is intentionally separate from the identity/feedback databases.
+	NL2SQLDatabaseURL string
+	NL2SQLMaxRows     int
+	NL2SQLTimeout     time.Duration
+	// NL2SQLSchema is a short table/column description injected into the
+	// question -> SQL prompt.
+	NL2SQLSchema     string
+	NL2SQLLLMBaseURL string
+	NL2SQLLLMAPIKey  string
+	NL2SQLModel      string
 }
 
 func Load() Config {
@@ -152,6 +164,14 @@ func Load() Config {
 
 		ParseMaxAttempts:  envInt("PARSE_MAX_ATTEMPTS", 3),
 		ParsePollInterval: envDuration("PARSE_POLL_INTERVAL", 2*time.Second),
+
+		NL2SQLDatabaseURL: env("NL2SQL_DATABASE_URL", ""),
+		NL2SQLMaxRows:     envInt("NL2SQL_MAX_ROWS", 200),
+		NL2SQLTimeout:     envDuration("NL2SQL_TIMEOUT", 5*time.Second),
+		NL2SQLSchema:      env("NL2SQL_SCHEMA", ""),
+		NL2SQLLLMBaseURL:  env("NL2SQL_LLM_BASE_URL", ""),
+		NL2SQLLLMAPIKey:   env("NL2SQL_LLM_API_KEY", ""),
+		NL2SQLModel:       env("NL2SQL_LLM_MODEL", "gpt-4o-mini"),
 	}
 }
 
