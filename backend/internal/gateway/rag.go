@@ -95,22 +95,82 @@ func (g *Gateway) chat(c *gin.Context) {
 	if !g.requireRAG(c) {
 		return
 	}
+	body, ok := g.readChatBody(c)
+	if !ok {
+		return
+	}
+	g.proxyRAG(c, http.MethodPost, "/v1/chat", body)
+}
+
+// chatStream relays the RAG agent's SSE stream without buffering it, so the
+// console can render retrieve → generate → answer progressively.
+func (g *Gateway) chatStream(c *gin.Context) {
+	if !g.requireRAG(c) {
+		return
+	}
+	body, ok := g.readChatBody(c)
+	if !ok {
+		return
+	}
+	resp, err := g.rag.do(c, http.MethodPost, "/v1/chat/stream", body)
+	if err != nil {
+		g.logger.Error("rag agent stream failed", "error", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "rag agent unavailable: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		payload, _ := io.ReadAll(io.LimitReader(resp.Body, maxChatBodyBytes))
+		ct := resp.Header.Get("Content-Type")
+		if ct == "" {
+			ct = "application/json"
+		}
+		c.Data(resp.StatusCode, ct, payload)
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+
+	flusher, _ := c.Writer.(http.Flusher)
+	buf := make([]byte, 4096)
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, writeErr := c.Writer.Write(buf[:n]); writeErr != nil {
+				return
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if readErr != nil {
+			return
+		}
+	}
+}
+
+func (g *Gateway) readChatBody(c *gin.Context) ([]byte, bool) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxChatBodyBytes)
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "read body: " + err.Error()})
-		return
+		return nil, false
 	}
 	var req chatReq
 	if err := json.Unmarshal(body, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json: " + err.Error()})
-		return
+		return nil, false
 	}
 	if strings.TrimSpace(req.Message) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "message is required"})
-		return
+		return nil, false
 	}
-	g.proxyRAG(c, http.MethodPost, "/v1/chat", body)
+	return body, true
 }
 
 func (g *Gateway) listConversations(c *gin.Context) {

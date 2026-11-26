@@ -1,7 +1,56 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { chat, getConversation, listConversations } from "../api/client";
-import type { ChatMessage, ConversationSummary } from "../types";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { chatStream, getConversation, listConversations } from "../api/client";
+import type { ChatMessage, Citation, ConversationSummary } from "../types";
 import { Button, EmptyState, PageHeader, Spinner } from "../components/ui";
+
+type Phase = "idle" | "retrieve" | "generate" | "done";
+
+const STREAMING_ID = "__streaming__";
+
+function citationAnchor(messageId: string, index: number): string {
+  return `cite-${messageId}-${index}`;
+}
+
+/** Renders [n] markers in the answer as buttons that jump to the source card. */
+function renderInlineCitations(
+  text: string,
+  citations: Citation[] | undefined,
+  messageId: string,
+  onJump: (anchor: string) => void,
+): ReactNode[] {
+  const parts = text.split(/(\[\d+\])/g);
+  return parts.map((part, i) => {
+    const match = /^\[(\d+)\]$/.exec(part);
+    if (!match) return <span key={i}>{part}</span>;
+    const n = Number(match[1]);
+    const cite = citations?.[n - 1];
+    if (!cite) return <span key={i}>{part}</span>;
+    const anchor = citationAnchor(messageId, n - 1);
+    return (
+      <button
+        key={i}
+        type="button"
+        onClick={() => onJump(anchor)}
+        title={cite.meta?.file_name ? `跳转到来源：${cite.meta.file_name}` : `跳转到来源 ${n}`}
+        className="mx-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded bg-accent/15 px-1 align-super text-[9px] font-medium text-accent transition hover:bg-accent/30"
+      >
+        {n}
+      </button>
+    );
+  });
+}
+
+function StageChip({ label, state }: { label: string; state: "pending" | "active" | "done" }) {
+  const cls =
+    state === "active"
+      ? "border-accent/40 bg-accent/10 text-accent"
+      : state === "done"
+        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+        : "border-white/10 text-slate-500";
+  return (
+    <span className={`rounded-full border px-2 py-0.5 text-[9px] transition ${cls}`}>{label}</span>
+  );
+}
 
 export default function Chat() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -10,6 +59,9 @@ export default function Chat() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [stageMessageId, setStageMessageId] = useState<string | null>(null);
+  const [highlight, setHighlight] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -18,7 +70,7 @@ export default function Chat() {
       const res = await listConversations();
       setConversations(res.conversations);
     } catch {
-      // Listing is best-effort; the chat itself surfaces errors.
+      // Listing is best-effort; chat errors are surfaced separately.
     }
   }, []);
 
@@ -27,13 +79,27 @@ export default function Chat() {
   }, [refreshConversations]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    bottomRef.current?.scrollIntoView({ behavior: "auto" });
   }, [messages, sending]);
+
+  const resetStage = () => {
+    setPhase("idle");
+    setStageMessageId(null);
+  };
+
+  const jumpTo = (anchor: string) => {
+    const el = document.getElementById(anchor);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlight(anchor);
+    window.setTimeout(() => setHighlight((cur) => (cur === anchor ? null : cur)), 1800);
+  };
 
   const openConversation = async (id: string) => {
     if (id === activeId) return;
     setActiveId(id);
     setError(null);
+    resetStage();
     setLoading(true);
     try {
       const detail = await getConversation(id);
@@ -50,51 +116,91 @@ export default function Chat() {
     setActiveId(null);
     setMessages([]);
     setError(null);
+    resetStage();
   };
 
   const send = async () => {
     const text = input.trim();
     if (!text || sending) return;
 
-    const draft: ChatMessage = {
-      id: `local-${Date.now()}`,
-      role: "user",
-      content: text,
-      created_at: new Date().toISOString(),
-    };
+    const streamId = `${STREAMING_ID}-${Date.now()}`;
+    const userId = `local-${Date.now()}`;
+    const now = new Date().toISOString();
     setSending(true);
     setError(null);
-    setMessages((prev) => [...prev, draft]);
+    setPhase("retrieve");
+    setStageMessageId(streamId);
     setInput("");
+    setMessages((prev) => [
+      ...prev,
+      { id: userId, role: "user", content: text, created_at: now },
+      { id: streamId, role: "assistant", content: "", citations: [], created_at: now },
+    ]);
 
+    let answer = "";
     try {
-      const res = await chat(text, activeId ?? undefined);
-      setActiveId(res.conversation_id);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: res.message_id,
-          role: "assistant",
-          content: res.answer,
-          citations: res.citations,
-          created_at: res.created_at,
+      await chatStream(text, activeId ?? undefined, {
+        onStage: (stage, status) => {
+          if (stage === "retrieve" && status === "start") setPhase("retrieve");
+          if (stage === "generate") setPhase("generate");
         },
-      ]);
-      void refreshConversations();
+        onSources: (citations) => {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === streamId ? { ...m, citations } : m)),
+          );
+        },
+        onToken: (chunk) => {
+          answer += chunk;
+          setMessages((prev) =>
+            prev.map((m) => (m.id === streamId ? { ...m, content: answer } : m)),
+          );
+        },
+        onDone: (res) => {
+          setActiveId(res.conversation_id);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === streamId
+                ? {
+                    ...m,
+                    id: res.message_id,
+                    content: res.answer,
+                    citations: res.citations,
+                    created_at: res.created_at,
+                  }
+                : m,
+            ),
+          );
+          setStageMessageId(res.message_id);
+          setPhase("done");
+          void refreshConversations();
+        },
+      });
     } catch (e) {
-      setMessages((prev) => prev.filter((m) => m.id !== draft.id));
+      setMessages((prev) => prev.filter((m) => m.id !== streamId));
       setInput(text);
+      setStageMessageId(null);
+      setPhase("idle");
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSending(false);
     }
   };
 
+  const stageState = (target: "retrieve" | "generate" | "answer"): "pending" | "active" | "done" => {
+    if (phase === "done") return "done";
+    if (phase === "retrieve") return target === "retrieve" ? "active" : "pending";
+    if (phase === "generate") {
+      if (target === "retrieve") return "done";
+      return target === "generate" ? "active" : "pending";
+    }
+    return "pending";
+  };
+
   return (
     <div className="flex h-[calc(100vh-7.5rem)] flex-col">
       <PageHeader
         title="智能问答"
-        description="基于知识库的多轮 RAG 问答，答案附带检索引用，会话按用户隔离"
+        description="多轮 RAG 问答：过程节点、检索知识、正文引用与一键跳转"
       />
 
       <div className="flex min-h-0 flex-1 gap-4">
@@ -128,7 +234,7 @@ export default function Chat() {
         </aside>
 
         <section className="panel flex min-h-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1 space-y-3 overflow-auto p-4">
+          <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
             {loading ? (
               <div className="flex items-center gap-2 py-6 text-xs text-slate-500">
                 <Spinner /> 加载会话…
@@ -136,41 +242,91 @@ export default function Chat() {
             ) : messages.length === 0 ? (
               <EmptyState
                 title="开始提问"
-                hint="例如：NexusFlow 的检索链路是如何工作的？答案会引用检索到的片段。"
+                hint="例如：NexusFlow 的检索链路是如何工作的？回答会标注 [n] 引用，点击可跳转到对应知识片段。"
               />
             ) : (
-              messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-                >
+              messages.map((msg) => {
+                const isAssistant = msg.role === "assistant";
+                const showStage = isAssistant && msg.id === stageMessageId && phase !== "idle";
+                return (
                   <div
-                    className={`max-w-[82%] rounded-xl px-3.5 py-2.5 text-xs leading-relaxed ${
-                      msg.role === "user"
-                        ? "bg-accent/15 text-slate-100"
-                        : "border border-white/5 bg-white/[0.03] text-slate-200"
-                    }`}
+                    key={msg.id}
+                    className={`flex ${isAssistant ? "justify-start" : "justify-end"}`}
                   >
-                    <div className="whitespace-pre-wrap">{msg.content}</div>
-                    {msg.role === "assistant" && msg.citations && msg.citations.length > 0 && (
-                      <div className="mt-2 space-y-1 border-t border-white/5 pt-2">
-                        <p className="text-[9px] uppercase tracking-wider text-slate-500">
-                          引用 {msg.citations.length} 条
-                        </p>
-                        {msg.citations.map((c, idx) => (
-                          <div key={`${c.chunk_id}-${idx}`} className="rounded bg-white/[0.03] p-1.5">
-                            <span className="mr-1 text-[9px] text-accent">[{idx + 1}]</span>
-                            <span className="text-[10px] text-slate-400">{c.content}</span>
-                            {c.meta?.file_name && (
-                              <span className="ml-1 text-[9px] text-slate-500">· {c.meta.file_name}</span>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    <div
+                      className={`max-w-[82%] rounded-xl px-3.5 py-2.5 text-xs leading-relaxed ${
+                        isAssistant
+                          ? "border border-white/5 bg-white/[0.03] text-slate-200"
+                          : "bg-accent/15 text-slate-100"
+                      }`}
+                    >
+                      {showStage && (
+                        <div className="mb-2 flex items-center gap-1.5 border-b border-white/5 pb-2">
+                          <StageChip label="检索" state={stageState("retrieve")} />
+                          <span className="text-slate-600">→</span>
+                          <StageChip label="生成" state={stageState("generate")} />
+                          <span className="text-slate-600">→</span>
+                          <StageChip label="回答" state={stageState("answer")} />
+                          {sending && <span className="ml-1 text-[9px] text-slate-500">进行中…</span>}
+                        </div>
+                      )}
+
+                      {isAssistant ? (
+                        <div className="whitespace-pre-wrap">
+                          {renderInlineCitations(msg.content, msg.citations, msg.id, jumpTo)}
+                          {sending && msg.id === stageMessageId && !msg.content && (
+                            <span className="text-slate-500">正在生成…</span>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="whitespace-pre-wrap">{msg.content}</div>
+                      )}
+
+                      {isAssistant && (msg.citations?.length ?? 0) > 0 && (
+                        <div className="mt-2.5 space-y-1 border-t border-white/5 pt-2">
+                          <p className="text-[9px] uppercase tracking-wider text-slate-500">
+                            检索到的知识 · {msg.citations?.length} 条
+                          </p>
+                          {msg.citations?.map((c, idx) => {
+                            const anchor = citationAnchor(msg.id, idx);
+                            return (
+                              <div
+                                key={`${c.chunk_id}-${idx}`}
+                                id={anchor}
+                                className={`rounded-lg border p-2 transition ${
+                                  highlight === anchor
+                                    ? "border-accent/60 bg-accent/10"
+                                    : "border-white/5 bg-white/[0.02]"
+                                }`}
+                              >
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span className="rounded bg-accent/15 px-1 py-0.5 text-[9px] text-accent">
+                                    [{idx + 1}]
+                                  </span>
+                                  {c.meta?.file_name && (
+                                    <span
+                                      className="truncate text-[9px] text-slate-400"
+                                      title={c.meta.file_name}
+                                    >
+                                      📄 {c.meta.file_name}
+                                    </span>
+                                  )}
+                                  <span className="ml-auto text-[9px] font-mono text-slate-500">
+                                    score {c.score.toFixed(3)}
+                                  </span>
+                                </div>
+                                <p className="mt-1 whitespace-pre-wrap text-[10px] leading-relaxed text-slate-400">
+                                  {c.content}
+                                </p>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
             {sending && (
               <div className="flex items-center gap-2 text-[10px] text-slate-500">

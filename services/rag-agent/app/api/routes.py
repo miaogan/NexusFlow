@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from app.deps import get_service
@@ -43,6 +46,35 @@ async def chat(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RetrievalUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    req: ChatRequest,
+    request: Request,
+    service: ChatService = Depends(service_dep),
+) -> StreamingResponse:
+    tenant_id, user_id, auth_header = caller_identity(request)
+
+    async def event_source():
+        try:
+            async for event in service.chat_stream(
+                req, tenant_id, user_id, auth_header
+            ):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as exc:  # noqa: BLE001 - keep the stream well-formed
+            payload = json.dumps({"type": "error", "error": str(exc)}, ensure_ascii=False)
+            yield f"data: {payload}\n\n"
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/conversations", response_model=ConversationListResponse)

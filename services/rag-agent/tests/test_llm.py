@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from app.services.llm import AnswerGenerator
 
 
@@ -30,3 +32,31 @@ def test_context_is_capped() -> None:
     gen = AnswerGenerator(max_context_chars=10)
     context = gen._context([{"content": "abcdefghijklmnop"}])
     assert context == "[1] abcdefghij"
+
+
+def _collect(agen) -> list[str]:
+    async def run() -> list[str]:
+        return [piece async for piece in agen]
+
+    return asyncio.run(run())
+
+
+def test_astream_fallback_yields_numbered_chunks() -> None:
+    gen = AnswerGenerator()
+    parts = _collect(
+        gen.astream(
+            "what?",
+            [],
+            [{"chunk_id": "c1", "content": "Alpha"}, {"chunk_id": "c2", "content": "Beta"}],
+        )
+    )
+    assert len(parts) == 1
+    assert "[1] Alpha" in parts[0]
+    assert "[2] Beta" in parts[0]
+
+
+def test_astream_without_chunks_returns_guidance() -> None:
+    gen = AnswerGenerator()
+    parts = _collect(gen.astream("unknown?", [], []))
+    assert len(parts) == 1
+    assert "未在知识库中检索到" in parts[0]

@@ -142,7 +142,7 @@ make web-dev        # http://localhost:5173
 | 文件管理 | `/files` | 拖拽/点击上传文件，查看处理状态 |
 | 任务中心 | `/tasks` | 任务列表、状态过滤、自动轮询、详情 |
 | 检索测试 | `/search` | 多路召回检索、赞/踩反馈与链路分解 |
-| 智能问答 | `/chat` | 多轮 RAG 问答、答案引用、会话历史 |
+| 智能问答 | `/chat` | 多轮 RAG 问答、过程节点、检索知识、正文引用一键跳转 |
 | 用户管理 | `/users` | 用户 CRUD、角色与权限点管理（需 `user:read`） |
 | 沙箱 Playground | `/sandbox` | 自定义代码执行与输入/输出合约调试 |
 | 工作流编排 | `/workflow` | 拖拽节点、连线、DAG 校验与试运行 |
@@ -231,6 +231,7 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 - **身份联动**：网关校验 JWT 后将 `x-tenant-id` / `x-user-id` / `Authorization` 透传给 rag-agent；会话与消息按「租户 + 用户」隔离，匿名调用者落在 `default/anonymous`。
 - **检索复用**：rag-agent 通过 `RAG_GATEWAY_URL` 调用网关 `/v1/search`，复用统一的多路召回 + RRF + 重排链路与 trace，而不是自建第二套检索。
 - **LangGraph 生成**：`retrieve → generate` 两节点状态图；配置 `RAG_LLM_BASE_URL` + `RAG_LLM_API_KEY`（OpenAI 兼容）时调用大模型，未配置时降级为抽取式片段摘要，保证无 Key 也能演示。
+- **流式过程事件**：`/v1/chat/stream` 以 SSE 依次推送 `stage(retrieve) → sources → stage(generate) → token* → done`；控制台据此渲染「检索 → 生成 → 回答」节点、检索知识面板，并支持正文 `[n]` 标记点击跳转到对应来源。
 - **会话存储**：`RAG_DATABASE_URL` 指向 Postgres 时持久化到 `rag_conversations` / `rag_messages`；为空则使用进程内存储（仅开发）。
 
 本地运行（先启动 dev-all 提供网关与检索，再启动 rag-agent）：
@@ -250,6 +251,7 @@ RAG_GATEWAY_URL=http://127.0.0.1:8080 uvicorn app.main:app --port 8001
 | 方法 | 路径 | 鉴权 | 说明 |
 | --- | --- | --- | --- |
 | POST | `/v1/chat` | `search:use` | 提问 `{message, conversation_id?, top_k?, kb_id?}`，返回答案 + 引用 |
+| POST | `/v1/chat/stream` | `search:use` | 同上，SSE 流式返回过程事件与回答 |
 | GET | `/v1/conversations` | `search:use` | 当前用户的会话列表（分页） |
 | GET | `/v1/conversations/:id` | `search:use` | 会话详情（消息 + 引用） |
 

@@ -138,6 +138,7 @@ func (g *Gateway) Router() *gin.Engine {
 	v1.POST("/search", g.search)
 	// RAG chat: multi-turn Q&A over the retrieval corpus, scoped to the caller.
 	v1.POST("/chat", RequirePermission("search:use"), g.chat)
+	v1.POST("/chat/stream", RequirePermission("search:use"), g.chatStream)
 	v1.GET("/conversations", RequirePermission("search:use"), g.listConversations)
 	v1.GET("/conversations/:id", RequirePermission("search:use"), g.getConversation)
 	v1.POST("/feedback", g.submitFeedback)

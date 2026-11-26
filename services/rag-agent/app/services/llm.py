@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any
+
+NO_CONTEXT_ANSWER = (
+    "未在知识库中检索到与问题相关的内容，请换一种问法或先上传相关文档。"
+)
 
 SYSTEM_PROMPT = (
     "你是 NexusFlow 知识库助手。只能依据提供的资料回答；资料不足时请明确说明。"
@@ -50,10 +55,28 @@ class AnswerGenerator:
         chunks: list[dict[str, Any]],
     ) -> str:
         if not chunks:
-            return "未在知识库中检索到与问题相关的内容，请换一种问法或先上传相关文档。"
+            return NO_CONTEXT_ANSWER
         if self._llm is None:
             return self._extractive(chunks)
         return self._llm_answer(query, history, chunks)
+
+    async def astream(
+        self,
+        query: str,
+        history: list[dict[str, str]],
+        chunks: list[dict[str, Any]],
+    ) -> AsyncIterator[str]:
+        """Streams answer text. Degrades to one chunk when no LLM is configured."""
+        if not chunks:
+            yield NO_CONTEXT_ANSWER
+            return
+        if self._llm is None:
+            yield self._extractive(chunks)
+            return
+        async for delta in self._llm.astream(self._messages(query, history, chunks)):  # type: ignore[union-attr]
+            text = str(getattr(delta, "content", "") or "")
+            if text:
+                yield text
 
     def _context(self, chunks: list[dict[str, Any]]) -> str:
         blocks: list[str] = []
@@ -80,12 +103,12 @@ class AnswerGenerator:
         lines.append("（未配置大模型，以上为检索片段摘要；配置 RAG_LLM_* 后可生成综合回答。）")
         return "\n".join(lines)
 
-    def _llm_answer(
+    def _messages(
         self,
         query: str,
         history: list[dict[str, str]],
         chunks: list[dict[str, Any]],
-    ) -> str:
+    ) -> list[Any]:
         from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
         context = self._context(chunks)
@@ -102,6 +125,13 @@ class AnswerGenerator:
             elif role == "assistant":
                 messages.append(AIMessage(content=content))
         messages.append(HumanMessage(content=prompt))
+        return messages
 
-        result = self._llm.invoke(messages)  # type: ignore[union-attr]
+    def _llm_answer(
+        self,
+        query: str,
+        history: list[dict[str, str]],
+        chunks: list[dict[str, Any]],
+    ) -> str:
+        result = self._llm.invoke(self._messages(query, history, chunks))  # type: ignore[union-attr]
         return str(getattr(result, "content", result)).strip()

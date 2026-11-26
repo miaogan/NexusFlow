@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any, Protocol, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -25,6 +26,13 @@ class GeneratorLike(Protocol):
         history: list[dict[str, str]],
         chunks: list[dict[str, Any]],
     ) -> str: ...
+
+    def astream(
+        self,
+        query: str,
+        history: list[dict[str, str]],
+        chunks: list[dict[str, Any]],
+    ) -> AsyncIterator[str]: ...
 
 
 class ChatState(TypedDict, total=False):
@@ -59,7 +67,7 @@ class ChatGraph:
         self._compiled = builder.compile()
 
     def _retrieve(self, state: ChatState) -> dict[str, Any]:
-        chunks, trace_id = self._retriever.search(
+        return self.retrieve(
             query=state["query"],
             tenant_id=state.get("tenant_id") or "default",
             top_k=state.get("top_k") or 5,
@@ -67,14 +75,32 @@ class ChatGraph:
             filters=state.get("filters"),
             auth_header=state.get("auth_header"),
         )
+
+    def retrieve(
+        self,
+        *,
+        query: str,
+        tenant_id: str,
+        top_k: int,
+        kb_id: str | None = None,
+        filters: dict[str, str] | None = None,
+        auth_header: str | None = None,
+    ) -> dict[str, Any]:
+        """Retrieval step, exposed so the streaming path can reuse it."""
+        chunks, trace_id = self._retriever.search(
+            query=query,
+            tenant_id=tenant_id,
+            top_k=top_k,
+            kb_id=kb_id,
+            filters=filters,
+            auth_header=auth_header,
+        )
         return {"chunks": chunks, "trace_id": trace_id}
 
-    def _generate(self, state: ChatState) -> dict[str, Any]:
-        chunks = state.get("chunks") or []
-        answer = self._generator.generate(
-            state["query"], state.get("history") or [], chunks
-        )
-        citations = [
+    def citations(self, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Structural citations derived from retrieved chunks (not parsed from
+        the model's text), so the UI can link [n] markers to real sources."""
+        return [
             {
                 "chunk_id": c.get("chunk_id", ""),
                 "content": c.get("content", ""),
@@ -83,7 +109,22 @@ class ChatGraph:
             }
             for c in chunks
         ]
-        return {"answer": answer, "citations": citations}
+
+    def _generate(self, state: ChatState) -> dict[str, Any]:
+        chunks = state.get("chunks") or []
+        answer = self._generator.generate(
+            state["query"], state.get("history") or [], chunks
+        )
+        return {"answer": answer, "citations": self.citations(chunks)}
+
+    async def stream_answer(
+        self,
+        query: str,
+        history: list[dict[str, str]],
+        chunks: list[dict[str, Any]],
+    ) -> AsyncIterator[str]:
+        async for piece in self._generator.astream(query, history, chunks):
+            yield piece
 
     def invoke(self, **state: Any) -> ChatState:
         return self._compiled.invoke(state)  # type: ignore[return-value]

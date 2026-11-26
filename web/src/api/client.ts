@@ -1,6 +1,7 @@
 import type {
   AuthUser,
   ChatResponse,
+  Citation,
   ConversationDetail,
   ConversationListResponse,
   Dag,
@@ -250,6 +251,102 @@ export async function chat(
       top_k: topK,
     }),
   });
+}
+
+export interface ChatStreamHandlers {
+  onStage?: (stage: string, status: string, count?: number) => void;
+  onSources?: (citations: Citation[]) => void;
+  onToken?: (text: string) => void;
+  onDone?: (res: ChatResponse) => void;
+  onError?: (message: string) => void;
+}
+
+/**
+ * Streams a chat turn over SSE (POST + ReadableStream). Events:
+ * stage → sources → token* → done, or error.
+ */
+export async function chatStream(
+  message: string,
+  conversationId: string | undefined,
+  handlers: ChatStreamHandlers,
+): Promise<void> {
+  const send = () =>
+    fetch(`${GATEWAY_BASE}/v1/chat/stream`, {
+      method: "POST",
+      headers: new Headers({ ...authHeaders(), "Content-Type": "application/json" }),
+      body: JSON.stringify({ message, conversation_id: conversationId || undefined }),
+    });
+
+  let response = await send();
+  if (response.status === 401 && (await tryRefresh())) {
+    response = await send();
+  }
+  if (!response.ok) {
+    const detail = await response.text();
+    let msg = detail || `HTTP ${response.status}`;
+    try {
+      const parsed = JSON.parse(detail);
+      if (parsed?.error) msg = parsed.error;
+    } catch {
+      /* keep raw text */
+    }
+    throw new Error(msg);
+  }
+  if (!response.body) throw new Error("streaming unsupported by this browser");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let idx = buffer.indexOf("\n\n");
+      while (idx >= 0) {
+        const block = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        for (const line of block.split("\n")) {
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+          let event: Record<string, unknown>;
+          try {
+            event = JSON.parse(payload) as Record<string, unknown>;
+          } catch {
+            continue;
+          }
+          switch (event.type) {
+            case "stage":
+              handlers.onStage?.(
+                String(event.stage ?? ""),
+                String(event.status ?? ""),
+                typeof event.count === "number" ? event.count : undefined,
+              );
+              break;
+            case "sources":
+              handlers.onSources?.((event.citations as Citation[]) ?? []);
+              break;
+            case "token":
+              handlers.onToken?.(String(event.content ?? ""));
+              break;
+            case "done":
+              handlers.onDone?.(event as unknown as ChatResponse);
+              break;
+            case "error": {
+              const msg = String(event.error ?? "stream error");
+              handlers.onError?.(msg);
+              throw new Error(msg);
+            }
+          }
+        }
+        idx = buffer.indexOf("\n\n");
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 export async function listConversations(
