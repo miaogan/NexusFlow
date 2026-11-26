@@ -28,6 +28,16 @@ class Settings(BaseSettings):
     rrf_k: int = 60
     feedback_path: str = "/tmp/nexusflow-feedback.jsonl"
 
+    # LightRAG-style graph route. With an LLM configured, entities/relations are
+    # extracted by the model; otherwise (or on failure) the route degrades to a
+    # co-occurrence word graph built from the same chunks.
+    graph_cache_seconds: float = 60.0
+    graph_llm_timeout_seconds: float = 20.0
+    graph_max_llm_chunks: int = 20
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = "gpt-4o-mini"
+
 
 @lru_cache
 def get_settings() -> Settings:

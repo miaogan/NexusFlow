@@ -1,4 +1,5 @@
 from app.core.config import settings
+from app.retrieval.graph import clear_graph_cache
 from app.schemas import IndexRequest, IndexResponse
 from app.services.chunking import build_nodes
 from app.services.embedding import build_embedding
@@ -22,6 +23,8 @@ def index_markdown(request: IndexRequest) -> IndexResponse:
         storage_context=storage_context,
         embed_model=build_embedding(request.embedding_model),
     )
+    # New chunks must appear in the graph route immediately, not after the TTL.
+    clear_graph_cache(collection)
 
     return IndexResponse(
         success=True,

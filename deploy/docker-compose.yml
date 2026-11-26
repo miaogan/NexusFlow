@@ -217,6 +217,8 @@ services:
       <<: *app-env
       QUERY_GRPC_ADDR: ":9094"
       RERANK_URL: ${RERANK_URL:-}
+      # Graph recall (LightRAG-style entity graph) runs in the LlamaIndex service.
+      LLAMAINDEX_URL: "http://llamaindex:8000"
       # Read the same feedback table as the gateway so online down-ranking sees
       # ratings submitted against cited chunks.
       FEEDBACK_DRIVER: postgres
@@ -228,6 +230,8 @@ services:
       redis:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      llamaindex:
         condition: service_healthy
 
   workflow-engine:

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/nexusflow/nexusflow/backend/internal/config"
 	"github.com/nexusflow/nexusflow/backend/internal/feedback"
@@ -64,6 +65,11 @@ func main() {
 	docStore.Add("seed", demoCorpus())
 	engine.Register(query.NewMemoryRetriever("vector", docStore))
 	engine.Register(query.NewMemoryRetriever("bm25", docStore))
+	// Graph recall runs in the LlamaIndex service (LightRAG-style entity graph);
+	// registering it lets RRF fuse graph candidates with the local routes.
+	if cfg.LlamaIndexURL != "" {
+		engine.Register(query.NewGraphRetriever(cfg.LlamaIndexURL, 5*time.Second))
+	}
 
 	svc := query.NewGRPCService(engine)
 

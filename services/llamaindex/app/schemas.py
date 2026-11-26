@@ -59,3 +59,31 @@ class FeedbackEvent(BaseModel):
     faithfulness: float | None = None
     ts: int = 0
     meta: dict[str, str] = Field(default_factory=dict)
+
+
+class GraphExtractRequest(BaseModel):
+    """Inspects graph extraction for ad-hoc markdown."""
+
+    markdown: str
+    max_chunks: int = 50
+
+
+class GraphEntity(BaseModel):
+    term: str
+    chunk_count: int = 0
+    weight: float = 0.0
+
+
+class GraphRelation(BaseModel):
+    source: str
+    target: str
+    weight: float = 1.0
+
+
+class GraphExtractResponse(BaseModel):
+    success: bool = True
+    # llm when entities came from the model, cooccurrence for the fallback.
+    mode: str = "cooccurrence"
+    entities: list[GraphEntity] = Field(default_factory=list)
+    relations: list[GraphRelation] = Field(default_factory=list)
+    error_msg: str = ""

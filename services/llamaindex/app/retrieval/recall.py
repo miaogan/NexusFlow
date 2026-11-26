@@ -3,6 +3,7 @@ from functools import lru_cache
 
 from app.core.config import settings
 from app.retrieval.fusion import Chunk
+from app.retrieval.graph import build_graph, cached_graph, query_graph
 
 
 class RecallUnavailable(RuntimeError):
@@ -114,11 +115,17 @@ def _bm25_recall(query: str, top_k: int, filters: dict[str, str]) -> list[Chunk]
     return results
 
 
+def _graph_recall(query: str, top_k: int, filters: dict[str, str]) -> list[Chunk]:
+    collection = _collection(filters)
+    graph = cached_graph(collection, lambda: build_graph(_scroll_documents(filters)))
+    return query_graph(graph, query, top_k)
+
+
 def retrieve(route, query: str, filters: dict[str, str]) -> list[Chunk]:
     """Dispatch one recall route. Heavy imports stay inside the branches so
     the API can boot without optional integrations installed."""
     if route.type == "bm25":
         return _bm25_recall(query, route.top_k, filters)
     if route.type == "graph":
-        raise RecallUnavailable("graph recall requires the LightRAG adapter")
+        return _graph_recall(query, route.top_k, filters)
     return _vector_recall(query, route.top_k, filters)

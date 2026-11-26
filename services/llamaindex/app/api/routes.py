@@ -3,10 +3,15 @@ from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
 from app.feedback.store import FeedbackStore
+from app.retrieval.graph import extract_markdown_graph
 from app.retrieval.pipeline import search
 from app.retrieval.recall import RecallUnavailable
 from app.schemas import (
     FeedbackEvent,
+    GraphEntity,
+    GraphExtractRequest,
+    GraphExtractResponse,
+    GraphRelation,
     IndexRequest,
     IndexResponse,
     SearchRequest,
@@ -32,6 +37,20 @@ async def search_endpoint(request: SearchRequest) -> SearchResponse:
         return await search(request)
     except RecallUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/graph/extract", response_model=GraphExtractResponse)
+async def extract_graph_endpoint(request: GraphExtractRequest) -> GraphExtractResponse:
+    """Entity/relation extraction for ad-hoc markdown (LLM or co-occurrence)."""
+    graph = await run_in_threadpool(
+        extract_markdown_graph, request.markdown, request.max_chunks
+    )
+    return GraphExtractResponse(
+        success=True,
+        mode=graph.mode,
+        entities=[GraphEntity(**item) for item in graph.entities()],
+        relations=[GraphRelation(**item) for item in graph.relations()],
+    )
 
 
 @router.post("/feedback", status_code=202)
