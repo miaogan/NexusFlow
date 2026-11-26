@@ -6,6 +6,8 @@ import type {
   SearchResponse,
   TaskDetail,
   TaskListResponse,
+  Trace,
+  TraceListResponse,
   UploadResult,
   ValidationResult,
 } from "../types";
@@ -109,6 +111,29 @@ export async function runSearch(query: string): Promise<SearchResponse> {
       final_top_n: 5,
     }),
   });
+}
+
+// ---------- Observability APIs ----------
+
+export async function submitFeedback(
+  traceID: string,
+  value: number,
+  comment?: string,
+  name = "user.rating",
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`${GATEWAY_BASE}/v1/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ trace_id: traceID, value, comment, name }),
+  });
+}
+
+export async function listTraces(): Promise<TraceListResponse> {
+  return request<TraceListResponse>(`${GATEWAY_BASE}/v1/traces`);
+}
+
+export async function getTrace(id: string): Promise<Trace> {
+  return request<Trace>(`${GATEWAY_BASE}/v1/traces/${encodeURIComponent(id)}`);
 }
 
 export async function executeSandbox(req: SandboxExecuteRequest): Promise<SandboxResult> {

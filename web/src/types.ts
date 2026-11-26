@@ -121,4 +121,47 @@ export interface MeInfo {
   departments?: string[];
 }
 
+// ---------- Observability / tracing ----------
+
+export interface TraceSpan {
+  trace_id: string;
+  span_id: string;
+  parent_id?: string;
+  name: string;
+  start_time: string;
+  end_time: string;
+  status: string;
+  status_msg?: string;
+  input?: unknown;
+  output?: unknown;
+  attributes?: Record<string, unknown>;
+}
+
+export interface TraceScore {
+  trace_id: string;
+  name: string;
+  value: number;
+  comment?: string;
+  ts: string;
+}
+
+export interface Trace {
+  id: string;
+  root: TraceSpan | null;
+  spans: TraceSpan[];
+  scores: TraceScore[];
+}
+
+export interface TraceListResponse {
+  traces: Trace[];
+  enabled: boolean;
+}
+
+export interface FeedbackRequest {
+  trace_id: string;
+  value: number;
+  comment?: string;
+  name?: string;
+}
+
 export type { Edge };

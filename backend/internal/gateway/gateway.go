@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/metrics"
+	"github.com/nexusflow/nexusflow/backend/internal/platform/tracing"
 	"github.com/nexusflow/nexusflow/backend/internal/store"
 	"github.com/nexusflow/nexusflow/backend/internal/tenant"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
@@ -32,6 +33,15 @@ type Gateway struct {
 	logger    *slog.Logger
 	secret    string
 	allowAnon bool
+	tracer    tracing.Tracer
+}
+
+// Option configures a Gateway at construction time.
+type Option func(*Gateway)
+
+// WithTracer attaches the observability tracer (feedback scores + trace viewer).
+func WithTracer(t tracing.Tracer) Option {
+	return func(g *Gateway) { g.tracer = t }
 }
 
 func New(
@@ -42,8 +52,9 @@ func New(
 	logger *slog.Logger,
 	secret string,
 	allowAnon bool,
+	opts ...Option,
 ) *Gateway {
-	return &Gateway{
+	g := &Gateway{
 		ingestion: ingestion,
 		query:     query,
 		sandbox:   sandbox,
@@ -51,7 +62,12 @@ func New(
 		logger:    logger,
 		secret:    secret,
 		allowAnon: allowAnon,
+		tracer:    tracing.NoopTracer{},
 	}
+	for _, o := range opts {
+		o(g)
+	}
+	return g
 }
 
 func (g *Gateway) Router() *gin.Engine {
@@ -71,6 +87,9 @@ func (g *Gateway) Router() *gin.Engine {
 	v1.DELETE("/tasks/:id", g.deleteTask)
 	v1.POST("/tasks/:id/retry", g.retryTask)
 	v1.POST("/search", g.search)
+	v1.POST("/feedback", g.submitFeedback)
+	v1.GET("/traces", g.listTraces)
+	v1.GET("/traces/:id", g.getTrace)
 	v1.POST("/sandbox/execute", g.executeSandbox)
 	v1.GET("/me", g.me)
 
@@ -79,7 +98,16 @@ func (g *Gateway) Router() *gin.Engine {
 
 func (g *Gateway) callerContext(c *gin.Context) (context.Context, tenant.Principal) {
 	p, _ := tenant.From(c.Request.Context())
-	return tenant.ToOutgoing(c.Request.Context(), p), p
+	ctx := tenant.ToOutgoing(c.Request.Context(), p)
+	// Propagate (or seed) a trace id onto outgoing gRPC metadata so downstream
+	// services continue the same trace.
+	id := c.GetHeader("x-trace-id")
+	if id == "" {
+		id = tracing.NewID()
+	}
+	ctx = tracing.ToGRPC(ctx, id)
+	ctx = tracing.WithTraceID(ctx, id)
+	return ctx, p
 }
 
 type uploadReq struct {
@@ -363,6 +391,67 @@ func (g *Gateway) search(c *gin.Context) {
 		"recall_count":   resp.GetRecallCount(),
 		"rerank_applied": resp.GetRerankApplied() == 1,
 	})
+}
+
+func (g *Gateway) memoryTracer() (*tracing.MemoryTracer, bool) {
+	m, ok := g.tracer.(*tracing.MemoryTracer)
+	return m, ok
+}
+
+type feedbackReq struct {
+	TraceID string  `json:"trace_id" binding:"required"`
+	Name    string  `json:"name"`
+	Value   float64 `json:"value" binding:"required"`
+	Comment string  `json:"comment"`
+}
+
+// submitFeedback records a user evaluation (赞/踩, or any numeric score) onto
+// a trace. With MemoryTracer it is visible in the trace viewer; with
+// LangfuseTracer it is exported as a score observation.
+func (g *Gateway) submitFeedback(c *gin.Context) {
+	var body feedbackReq
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	name := body.Name
+	if name == "" {
+		name = "user.rating"
+	}
+	ctx, _ := g.callerContext(c)
+	if err := g.tracer.AddScore(ctx, body.TraceID, name, body.Value, body.Comment); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (g *Gateway) listTraces(c *gin.Context) {
+	m, ok := g.memoryTracer()
+	if !ok {
+		c.JSON(http.StatusOK, gin.H{"traces": []any{}, "enabled": false})
+		return
+	}
+	traces := m.Traces()
+	const limit = 50
+	if len(traces) > limit {
+		traces = traces[:limit]
+	}
+	c.JSON(http.StatusOK, gin.H{"traces": traces, "enabled": true})
+}
+
+func (g *Gateway) getTrace(c *gin.Context) {
+	m, ok := g.memoryTracer()
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "trace viewer disabled (set TRACING_MEMORY=true or configure LANGFUSE)"})
+		return
+	}
+	tr, ok := m.Trace(c.Param("id"))
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "trace not found"})
+		return
+	}
+	c.JSON(http.StatusOK, tr)
 }
 
 type sandboxReq struct {

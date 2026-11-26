@@ -3,33 +3,48 @@ package query
 import (
 	"context"
 	"fmt"
+	"strings"
 
-	"github.com/google/uuid"
-	"google.golang.org/grpc/metadata"
-
+	"github.com/nexusflow/nexusflow/backend/internal/platform/prompt"
+	"github.com/nexusflow/nexusflow/backend/internal/platform/tracing"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 )
 
 // GRPCService exposes the recall pipeline over the protobuf contract.
 type GRPCService struct {
 	pb.UnimplementedQueryServiceServer
-	engine *Engine
+	engine  *Engine
+	prompts *prompt.Registry
 }
 
-func NewGRPCService(engine *Engine) *GRPCService {
-	return &GRPCService{engine: engine}
+// GRPCOption configures a GRPCService.
+type GRPCOption func(*GRPCService)
+
+// WithPrompts sets the versioned prompt registry used by the Answer path.
+func WithPrompts(r *prompt.Registry) GRPCOption {
+	return func(s *GRPCService) { s.prompts = r }
 }
 
-func traceID(ctx context.Context) string {
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if vals := md.Get("x-trace-id"); len(vals) > 0 && vals[0] != "" {
-			return vals[0]
-		}
+func NewGRPCService(engine *Engine, opts ...GRPCOption) *GRPCService {
+	s := &GRPCService{engine: engine, prompts: prompt.NewDefaultRegistry()}
+	for _, o := range opts {
+		o(s)
 	}
-	return uuid.NewString()
+	return s
+}
+
+// traceCtx seeds the context with a trace id from incoming gRPC metadata,
+// generating one when absent, and returns the id.
+func traceCtx(ctx context.Context) (context.Context, string) {
+	if id := tracing.FromGRPC(ctx); id != "" {
+		ctx = tracing.WithTraceID(ctx, id)
+	}
+	return tracing.EnsureTraceID(ctx)
 }
 
 func (s *GRPCService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.SearchResponse, error) {
+	ctx, trace := traceCtx(ctx)
+
 	routes := make([]Route, 0, len(req.GetRoutes()))
 	for _, r := range req.GetRoutes() {
 		routes = append(routes, Route{Type: r.GetType(), TopK: int(r.GetTopK()), FilterExpr: r.GetFilterExpr()})
@@ -60,15 +75,25 @@ func (s *GRPCService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 	}
 	return &pb.SearchResponse{
 		Chunks:        chunks,
-		TraceId:       traceID(ctx),
+		TraceId:       trace,
 		RecallCount:   int32(res.RecallCount),
 		RerankApplied: applied,
 	}, nil
 }
 
 func (s *GRPCService) Answer(req *pb.AnswerRequest, stream pb.QueryService_AnswerServer) error {
-	ctx := stream.Context()
-	trace := traceID(ctx)
+	ctx, trace := traceCtx(stream.Context())
+
+	tr := s.engine.Tracer()
+	ap, _ := s.prompts.Get("answer.grounding")
+	span, ctx := tr.Start(ctx, "answer.generate",
+		tracing.WithInput(map[string]any{"query": req.GetQuery()}),
+		tracing.WithAttributes(map[string]any{
+			"prompt_name":    ap.Name,
+			"prompt_version": ap.Version,
+		}),
+	)
+	defer span.End()
 
 	routes := make([]Route, 0, len(req.GetRoutes()))
 	for _, r := range req.GetRoutes() {
@@ -80,23 +105,31 @@ func (s *GRPCService) Answer(req *pb.AnswerRequest, stream pb.QueryService_Answe
 		Filters: req.GetFilters(),
 	})
 	if err != nil {
+		span.RecordError(err)
 		return err
 	}
 
 	citations := make([]*pb.RetrievedChunk, 0, len(res.Chunks))
-	for _, c := range res.Chunks {
+	var sb strings.Builder
+	for i, c := range res.Chunks {
 		citations = append(citations, &pb.RetrievedChunk{
 			ChunkId: c.ID,
 			Content: c.Content,
 			Score:   float32(c.Score),
 			Meta:    c.Meta,
 		})
+		fmt.Fprintf(&sb, "[%d] %s\n", i+1, c.Content)
 	}
 
-	// The generation step is delegated to the LLM layer; this service only
-	// assembles grounded context, so the placeholder keeps the stream shape.
-	answer := fmt.Sprintf("（占位回答）已检索到 %d 个相关片段，请接入生成模型。", len(citations))
+	// The generation step is delegated to the LLM layer; this service renders
+	// the grounded prompt (name + version recorded in the trace) so the stream
+	// shape stays stable until a generator is wired in.
+	answer := strings.ReplaceAll(ap.Content, "{{query}}", req.GetQuery())
+	answer = strings.ReplaceAll(answer, "{{context}}", sb.String())
+	span.SetOutput(map[string]any{"citations": len(citations), "prompt_name": ap.Name, "prompt_version": ap.Version})
+
 	if err := stream.Send(&pb.AnswerChunk{Delta: answer, TraceId: trace, Citations: citations}); err != nil {
+		span.RecordError(err)
 		return err
 	}
 	return stream.Send(&pb.AnswerChunk{Done: true, TraceId: trace, Citations: citations})
