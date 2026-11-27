@@ -217,7 +217,7 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 
 | 环境变量 | 默认 | 作用 |
 | --- | --- | --- |
-| `AGENT_HUB_TOOLS_ENABLED` | false | 注册工具、启用 `POST /v1/call`、`GET /v1/tools`、`GET /v1/audit` |
+| `AGENT_HUB_TOOLS_ENABLED` | false | 注册工具、启用 `/v1/call` 的 tool 分支、`GET /v1/tools`、`GET /v1/audit` |
 | `AGENT_HUB_WORKFLOW_ENABLED` | false | 注册 `workflow.run` 工具（Hub → DAG） |
 | `WORKFLOW_AGENT_NODE` | false | 注册 DAG `agent` 节点（DAG → Hub） |
 | `AGENT_HUB_REASONING_ENABLED` | false | 多轮推理与工具调用循环 |
@@ -227,13 +227,21 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 
 - 自定义 SubAgent 注册表：`AGENT_HUB_REGISTRY_DRIVER=memory|postgres`；Postgres 模式需 `AGENT_HUB_REGISTRY_DATABASE_URL`，启动时幂等创建 `custom_agents` 并加载该租户的自定义 Agent。写接口仍受 `AGENT_HUB_DYNAMIC_REGISTRATION` 控制。
 - 生产必须设置 `WORKFLOW_SERVICE_TOKEN`（gateway / workflow 两侧一致），agent-hub 通过 `AGENT_HUB_WORKFLOW_SERVICE_TOKEN` 使用同一值；为空表示不做直连校验，仅限本机开发。
-- `WORKFLOW_AGENT_NODE` 依赖 `AGENT_HUB_TOOLS_ENABLED`：`/v1/call` 由后者启用；只开 DAG 节点会导致 agent 调用返回 404。
+- `/v1/call` 的 agent 分支始终可用（DAG `agent` 节点、自定义 SubAgent 依赖它）；tool 分支与 `GET /v1/tools` 需 `AGENT_HUB_TOOLS_ENABLED`。
 - 工具审批：Hub 返回 `202 + approval_id`，批准后带 `approval_id` 重试；DAG 审批经网关 `POST /v1/workflows/runs/{id}/approve|resume`（需 `workflow:run`），重复审批返回 409。
 - 审计查询：`GET /v1/audit?action=tool.call&decision=denied`（按 `x-tenant-id` 过滤）。
 - 生产环境（`APP_ENV=prod`）的 `SANDBOX_BACKEND=local` 会拒绝启动，除非显式设置 `SANDBOX_ALLOW_LOCAL=true`；网关侧 `/v1/sandbox/execute` 仍要求 `sandbox:execute` 权限。
 - 当前 `RunStore` 为进程内 `MemoryRunStore`。多副本启用 HITL 前需改为共享存储或对同一 run 做粘性路由，否则跨副本无法恢复。
 
-### 8.5 审批、MCP 与审计运维
+### 8.5 自定义 SubAgent、审批、MCP 与审计运维
+
+**自定义 SubAgent（含 Sandbox）**
+
+- `POST /v1/agents` 支持 `kind=http|sandbox`；sandbox 需提供 `sandbox.code`、`runtime`（python/node）、`timeout_seconds`，代码上限 64KB、超时上限 60s。
+- 调用入口为 Gateway `POST /v1/agents/{name}/call`（需 `search:use`）；sandbox agent 在 Hub 内再调用 Gateway `/v1/sandbox/execute`，仍要求 `sandbox:execute`，viewer 会被拒绝。
+- `GET /v1/agents` 只返回 sandbox 脱敏元数据（runtime / timeout / code_bytes），不返回代码正文。
+- 自定义 Agent 可声明 `skills`（最多 16 个，格式同 Agent 名）；`GET /v1/skills` 返回当前租户可见技能。Chat 的 Intent 节点会携带该列表，命中时直接调用 SubAgent，失败自动回退 RAG。
+- 启用 `AGENT_HUB_ADMIN_TOKEN` 时，Gateway / Workflow 需通过 `AGENT_HUB_TOKEN` 配置同一值；否则经 Gateway 的 `/v1/call`、审批与审计请求会被 Hub 拒绝。
 
 **审批**
 

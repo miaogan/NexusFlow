@@ -15,4 +15,4 @@ def classify(
     graph: IntentGraph = Depends(get_graph),
 ) -> IntentResult:
     history = [item.model_dump() for item in req.history]
-    return IntentResult(**graph.invoke(req.message, history))
+    return IntentResult(**graph.invoke(req.message, history, req.skills))

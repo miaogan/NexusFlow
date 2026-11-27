@@ -1,6 +1,6 @@
 # NexusFlow v1.2.0 演进与 Agent 自动执行任务清单 (ROADMAP_V1_2)
 
-> **状态：进行中（Milestone 1 已交付，Milestone 2/3 待开始）。** 本文件是 v1.2.0 的版本计划摘要；任务拆解与验收命令在执行时补充。
+> **状态：进行中（Milestone 1、Milestone 2 已交付；Milestone 3 待开始）。** 本文件是 v1.2.0 的版本计划摘要；任务拆解与验收命令在执行时补充。
 >
 > **核心目标**：实现**用户自定义 SubAgent + OpenSandbox 安全动态编排**，包含多租户表结构迁移、注册表隔离、沙箱执行器打通、动态技能路由以及前端管理控制台。
 >
@@ -15,8 +15,10 @@
 
 ## Milestone 2: OpenSandbox 调度打通与动态技能路由
 
-* **[ ] Task 2.1**: 实现 `SandboxAgentExecutor` 适配器打通安全代码执行。
-* **[ ] Task 2.2**: 升级 `Intent / Router` 节点为动态技能路由（Dynamic Skill Routing）。
+* **[x] Task 2.1**: 实现 `SandboxAgentExecutor` 适配器打通安全代码执行。
+  * 交付：`AgentSpec` 新增 `kind=sandbox` 与 `sandbox` 配置（code/runtime/timeout/packages/env_vars），存储层新增 `custom_agents.sandbox` 列；`SandboxAgentExecutor` 经 Gateway `/v1/sandbox/execute` 执行，透传用户 Bearer 强制 `sandbox:execute`；新增代码/入参大小与超时上限、列表脱敏、`POST /v1/agents/{name}/call` 调用入口；HTTP 自定义 Agent 改为直接调用注册的 endpoint。
+* **[x] Task 2.2**: 升级 `Intent / Router` 节点为动态技能路由（Dynamic Skill Routing）。
+  * 交付：`AgentSpec`/存储新增 `skills`；`AgentRegistry` 提供 `resolve_skill` 与 `available_skills`；`Hub.call_skill` 按租户/优先级选择 SubAgent；Intent 节点接收技能列表并输出 `intent=skill + skill`，规则与 LLM 双通道；`SkillRouter` 接入 Chat（同步 + SSE），技能失败自动回退 RAG；新增 `GET /v1/skills`。
 
 ## Milestone 3: 前端可视化编排控制台与全链路验收
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -22,10 +23,13 @@ from nexusflow_agents.agents.rag.services.intent import HttpIntentClassifier, In
 from nexusflow_agents.agents.rag.services.memory import ConversationMemory, HttpMemoryClient
 from nexusflow_agents.agents.rag.services.reasoning import ApprovalPending, ReasoningLoop
 from nexusflow_agents.agents.rag.services.retrieval import RetrievalUnavailable
+from nexusflow_agents.agents.rag.services.skills import SkillRouter
 from nexusflow_agents.agents.rag.services.store import ConversationNotFound, ConversationStore
 from nexusflow_agents.agents.rag.services.summary import ConversationSummarizer, HttpSummarizer
 
 APPROVAL_PENDING_ANSWER = "该操作需要人工审批，已暂停执行。"
+
+logger = logging.getLogger(__name__)
 
 
 class ChatService:
@@ -41,6 +45,7 @@ class ChatService:
         memory: ConversationMemory | None = None,
         corrections: CorrectedAnswerProvider | None = None,
         reasoning: ReasoningLoop | None = None,
+        skills: SkillRouter | None = None,
     ) -> None:
         self._store = store
         self._graph = graph
@@ -57,6 +62,8 @@ class ChatService:
         )
         # Optional multi-turn tool loop; disabled unless reasoning is enabled.
         self._reasoning = reasoning
+        # Optional tenant-scoped skill router for custom SubAgents.
+        self._skills = skills
 
     def _prepare_history(
         self, conv: dict[str, Any]
@@ -193,6 +200,43 @@ class ChatService:
             "trace_id": retrieved.get("trace_id"),
         }
 
+    def _available_skills(self, tenant_id: str) -> list[str]:
+        if self._skills is None:
+            return []
+        try:
+            return self._skills.available(tenant_id)
+        except Exception:  # noqa: BLE001 - routing must never break chat
+            return []
+
+    def _invoke_skill(
+        self,
+        skill: str,
+        message: str,
+        history: list[dict[str, str]],
+        tenant_id: str,
+        user_id: str,
+        auth_header: str | None,
+    ) -> tuple[str, str | None] | None:
+        if not skill or self._skills is None:
+            return None
+        try:
+            data = self._skills.invoke(
+                skill,
+                message,
+                history,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                auth_header=auth_header,
+            )
+        except Exception as exc:  # noqa: BLE001 - degrade to normal RAG
+            logger.warning("skill %s failed, falling back to RAG: %s", skill, exc)
+            return None
+        answer = self._skills.answer(data).strip()
+        if not answer:
+            return None
+        trace_id = data.get("trace_id")
+        return answer, trace_id if isinstance(trace_id, str) else None
+
     def chat(
         self,
         req: ChatRequest,
@@ -220,8 +264,36 @@ class ChatService:
         top_k = req.top_k or self._settings.default_top_k
         top_k = max(1, min(top_k, self._settings.max_top_k))
 
-        intent = self._intent.classify(message, history)
-        if intent.get("need_retrieval", True):
+        skills = self._available_skills(tenant_id)
+        intent = self._intent.classify(
+            message, history, tenant_id=tenant_id, skills=skills
+        )
+        citations: list[dict[str, Any]] = []
+        answer = ""
+        trace_id = None
+        if intent.get("intent") == "skill":
+            skill_result = self._invoke_skill(
+                str(intent.get("skill") or ""),
+                message,
+                history,
+                tenant_id,
+                user_id,
+                auth_header,
+            )
+            if skill_result is not None:
+                answer, trace_id = skill_result
+            else:
+                # A stale/unavailable skill must not break the turn.
+                intent = {
+                    **intent,
+                    "intent": "knowledge_qa",
+                    "need_retrieval": True,
+                    "skill": None,
+                }
+
+        if answer:
+            pass
+        elif intent.get("need_retrieval", True):
             corrected = self._corrected_answers(message, tenant_id, auth_header)
             state = self._reasoning_state(
                 message=message,
@@ -250,7 +322,7 @@ class ChatService:
                     corrected=corrected,
                 )
             answer = state.get("answer") or ""
-            citations: list[dict[str, Any]] = state.get("citations") or []
+            citations = state.get("citations") or []
             trace_id = state.get("trace_id")
         else:
             answer = self._graph.generate_intent_answer(
@@ -314,9 +386,55 @@ class ChatService:
         top_k = max(1, min(top_k, self._settings.max_top_k))
 
         yield {"type": "stage", "stage": "intent", "status": "start"}
-        intent = await run_in_threadpool(self._intent.classify, message, history)
+        skills = await run_in_threadpool(self._available_skills, tenant_id)
+        intent = await run_in_threadpool(
+            self._intent.classify,
+            message,
+            history,
+            tenant_id=tenant_id,
+            skills=skills,
+        )
         yield {"type": "intent", **intent}
         yield {"type": "stage", "stage": "intent", "status": "done"}
+
+        if intent.get("intent") == "skill":
+            skill = str(intent.get("skill") or "")
+            yield {"type": "stage", "stage": "skill", "status": "start", "skill": skill}
+            skill_result = await run_in_threadpool(
+                self._invoke_skill,
+                skill,
+                message,
+                history,
+                tenant_id,
+                user_id,
+                auth_header,
+            )
+            if skill_result is not None:
+                answer, trace_id = skill_result
+                yield {"type": "token", "content": answer}
+                msg = await run_in_threadpool(
+                    self._store.append, conv["id"], "assistant", answer, []
+                )
+                self._remember(tenant_id, user_id, message, answer)
+                yield {"type": "stage", "stage": "skill", "status": "done", "skill": skill}
+                yield {
+                    "type": "done",
+                    "conversation_id": conv["id"],
+                    "message_id": msg["id"],
+                    "answer": answer,
+                    "citations": [],
+                    "trace_id": trace_id,
+                    "created_at": msg["created_at"],
+                }
+                return
+            # Stale/unavailable skill: continue as knowledge QA.
+            yield {"type": "stage", "stage": "skill", "status": "degraded", "skill": skill}
+            intent = {
+                **intent,
+                "intent": "knowledge_qa",
+                "need_retrieval": True,
+                "skill": None,
+            }
 
         # chitchat/clarify turns answer directly; only knowledge QA retrieves.
         if not intent.get("need_retrieval", True):

@@ -96,6 +96,106 @@ def test_custom_agent_crud_is_tenant_scoped(
     assert registry.get("local.intent", "t1") is not None
 
 
+def test_sandbox_agent_is_stored_with_redacted_listing(
+    client: tuple[TestClient, AgentRegistry, InMemoryAgentStore],
+) -> None:
+    http, registry, store = client
+    body = {
+        "name": "sandbox.agent",
+        "capabilities": ["agent.call"],
+        "kind": "sandbox",
+        "sandbox": {
+            "code": "print(input())",
+            "runtime": "python",
+            "timeout_seconds": 5,
+            "packages": ["numpy"],
+        },
+    }
+
+    response = http.post(
+        "/v1/agents", json=body, headers={"x-tenant-id": "t1"}
+    )
+
+    assert response.status_code == 201
+    spec = registry.get("sandbox.agent", "t1")
+    assert spec is not None
+    assert spec.kind == "sandbox"
+    assert spec.risk == "execute"
+    assert spec.sandbox["code"] == "print(input())"
+    assert store.list("t1")[0].sandbox["runtime"] == "python"
+
+    item = next(
+        agent
+        for agent in http.get(
+            "/v1/agents", headers={"x-tenant-id": "t1"}
+        ).json()["agents"]
+        if agent["name"] == "sandbox.agent"
+    )
+    assert item["sandbox"]["configured"] is True
+    assert item["sandbox"]["code_bytes"] > 0
+    assert "code" not in item["sandbox"]
+
+
+def test_sandbox_agent_rejects_missing_code(
+    client: tuple[TestClient, AgentRegistry, InMemoryAgentStore],
+) -> None:
+    http, _, _ = client
+
+    response = http.post(
+        "/v1/agents",
+        json={
+            "name": "sandbox.agent",
+            "capabilities": ["agent.call"],
+            "kind": "sandbox",
+            "sandbox": {"runtime": "python"},
+        },
+        headers={"x-tenant-id": "t1"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_http_agent_requires_endpoint(
+    client: tuple[TestClient, AgentRegistry, InMemoryAgentStore],
+) -> None:
+    http, _, _ = client
+
+    response = http.post(
+        "/v1/agents",
+        json={"name": "http.agent", "capabilities": ["agent.call"]},
+        headers={"x-tenant-id": "t1"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_agent_skills_feed_dynamic_router(
+    client: tuple[TestClient, AgentRegistry, InMemoryAgentStore],
+) -> None:
+    http, _, _ = client
+    body = _body()
+    body["skills"] = ["translate", "expense.approval"]
+
+    response = http.post(
+        "/v1/agents", json=body, headers={"x-tenant-id": "t1"}
+    )
+
+    assert response.status_code == 201
+    skills = http.get(
+        "/v1/skills", headers={"x-tenant-id": "t1"}
+    ).json()["skills"]
+    assert {item["skill"] for item in skills} == {"translate", "expense.approval"}
+    assert {item["agent"] for item in skills} == {"custom.agent"}
+    assert http.get("/v1/skills", headers={"x-tenant-id": "t2"}).json()["skills"] == []
+
+    invalid = _body(name="bad.skills")
+    invalid["skills"] = ["BAD SKILL"]
+    assert (
+        http.post("/v1/agents", json=invalid, headers={"x-tenant-id": "t1"}).status_code
+        == 422
+    )
+
+
 def test_custom_agent_rejects_reserved_name_and_bad_capability(
     client: tuple[TestClient, AgentRegistry, InMemoryAgentStore],
 ) -> None:

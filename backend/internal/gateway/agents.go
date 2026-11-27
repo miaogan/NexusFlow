@@ -1,9 +1,11 @@
 package gateway
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -49,4 +51,58 @@ func (g *Gateway) decideApproval(c *gin.Context) {
 
 func (g *Gateway) listAudit(c *gin.Context) {
 	g.hubGet(c, "/v1/audit")
+}
+
+type agentCallRequest struct {
+	Capability string         `json:"capability"`
+	Input      map[string]any `json:"input"`
+	ApprovalID string         `json:"approval_id"`
+}
+
+// callAgent invokes a custom SubAgent through the hub's /v1/call. The caller's
+// bearer token is forwarded so a sandbox agent still has to pass the gateway's
+// sandbox:execute check on its own execution request.
+func (g *Gateway) callAgent(c *gin.Context) {
+	if !g.requireRAG(c) {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAgentBodyBytes)
+	raw, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "read body: " + err.Error()})
+		return
+	}
+	var req agentCallRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json: " + err.Error()})
+		return
+	}
+	capability := strings.TrimSpace(req.Capability)
+	if capability == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "capability is required"})
+		return
+	}
+	if req.Input == nil {
+		req.Input = map[string]any{}
+	}
+	envelope := map[string]any{}
+	if req.ApprovalID != "" {
+		envelope["approval_id"] = req.ApprovalID
+	}
+	payload := map[string]any{
+		"agent": map[string]any{
+			"name":       c.Param("name"),
+			"capability": capability,
+			"input":      req.Input,
+		},
+	}
+	if len(envelope) > 0 {
+		payload["envelope"] = envelope
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "encode agent call: " + err.Error()})
+		return
+	}
+	g.proxyRAG(c, http.MethodPost, "/v1/call", body)
 }

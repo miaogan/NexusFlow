@@ -14,6 +14,7 @@ from nexusflow_agents.agents.rag.services.hub_agents import (
 from nexusflow_agents.agents.rag.services.llm import AnswerGenerator
 from nexusflow_agents.agents.rag.services.reasoning import ReasoningLoop
 from nexusflow_agents.agents.rag.services.retrieval import GatewayRetriever
+from nexusflow_agents.agents.rag.services.skills import SkillRouter
 from nexusflow_agents.agents.rag.services.store import (
     ConversationStore,
     InMemoryConversationStore,
@@ -48,6 +49,11 @@ def get_chat_graph() -> ChatGraph:
     settings = get_settings()
     retriever = GatewayRetriever(settings.gateway_url, settings.search_timeout_seconds)
     return ChatGraph(retriever, get_generator())
+
+
+@lru_cache
+def get_skill_router() -> SkillRouter:
+    return SkillRouter()
 
 
 @lru_cache
@@ -105,4 +111,5 @@ def get_service() -> ChatService:
         get_memory_client(),
         get_corrected_provider(),
         get_reasoning(),
+        get_skill_router(),
     )

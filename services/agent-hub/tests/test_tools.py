@@ -187,6 +187,35 @@ def test_call_api_returns_202_for_approval(monkeypatch: pytest.MonkeyPatch) -> N
     assert resp.json()["detail"]["status"] == "approval_required"
 
 
+def test_agent_call_works_without_tools_and_forwards_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class CtxHub:
+        def call(self, capability: str, payload: dict[str, Any], ctx: dict[str, Any], **_: Any):
+            from nexusflow_agents.core.hub import AgentResult
+
+            captured.update(ctx)
+            return AgentResult(ok=True, data={"capability": capability}, agent="local.intent")
+
+    monkeypatch.setattr(call_api, "get_hub_settings", lambda: HubSettings(_env_file=None))
+    monkeypatch.setattr(call_api, "get_tools", lambda: _service())
+    monkeypatch.setattr(call_api, "get_hub", lambda: CtxHub())
+    app = FastAPI()
+    app.include_router(call_api.router)
+
+    resp = TestClient(app).post(
+        "/v1/call",
+        json={"agent": {"capability": "intent.classify", "input": {}}},
+        headers={"authorization": "Bearer user-token", "x-tenant-id": "t1"},
+    )
+
+    assert resp.status_code == 200
+    assert captured["auth_header"] == "Bearer user-token"
+    assert captured["tenant_id"] == "t1"
+
+
 def test_call_api_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(call_api, "get_hub_settings", lambda: HubSettings(_env_file=None))
     monkeypatch.setattr(call_api, "get_tools", lambda: _service())

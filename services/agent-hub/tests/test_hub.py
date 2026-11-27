@@ -105,3 +105,35 @@ def test_hub_returns_degraded_without_agents() -> None:
     assert result.ok is False
     assert result.degraded is True
     assert "no healthy agent" in result.error
+
+
+def test_call_skill_routes_to_tenant_agent() -> None:
+    registry = AgentRegistry()
+    registry.register(
+        AgentSpec(
+            name="shared.translate",
+            capabilities=frozenset({"agent.call"}),
+            kind="local",
+            skills=frozenset({"translate"}),
+            priority=100,
+        )
+    )
+    registry.register(
+        AgentSpec(
+            name="tenant.translate",
+            capabilities=frozenset({"agent.call"}),
+            kind="local",
+            skills=frozenset({"translate"}),
+            priority=10,
+            tenant_id="t1",
+        )
+    )
+    hub = Hub(registry, {"local": _Executor()})
+
+    own = hub.call_skill("translate", {"text": "hi"}, {"tenant_id": "t1"})
+    shared = hub.call_skill("translate", {"text": "hi"}, {"tenant_id": "t2"})
+    missing = hub.call_skill("unknown", {}, {"tenant_id": "t1"})
+
+    assert own.ok is True and own.agent == "tenant.translate"
+    assert shared.ok is True and shared.agent == "shared.translate"
+    assert missing.ok is False and missing.degraded is True

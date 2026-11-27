@@ -26,7 +26,7 @@ VALID_CAPABILITIES = {
 class AgentSpec:
     name: str
     capabilities: frozenset[str]
-    kind: Literal["local", "http"]
+    kind: Literal["local", "http", "sandbox"]
     endpoint: str = ""
     timeout_ms: int = 5000
     priority: int = 100
@@ -39,6 +39,10 @@ class AgentSpec:
     permissions: frozenset[str] = frozenset()
     tenant_scope: str = ""
     tools: frozenset[str] = frozenset()
+    # Named capabilities exposed to dynamic skill routing, e.g. "expense.approval".
+    skills: frozenset[str] = frozenset()
+    # Sandbox SubAgent payload: {code, runtime, timeout_seconds, packages, env_vars}.
+    sandbox: dict[str, Any] = field(default_factory=dict)
     model: str = ""
     max_turns: int = 0
     token_budget: int = 0
@@ -150,6 +154,53 @@ class AgentRegistry:
         )
         return specs
 
+    def resolve_skill(self, skill: str, tenant_id: str = "") -> list[AgentSpec]:
+        self.prune_expired()
+        with self._lock:
+            specs = [
+                state.spec
+                for state in self._agents.values()
+                if state.healthy
+                and skill in state.spec.skills
+                and state.spec.tenant_id in {"", tenant_id}
+            ]
+        specs.sort(
+            key=lambda spec: (
+                spec.priority,
+                0 if spec.tenant_id == tenant_id else 1,
+                spec.name,
+            )
+        )
+        return specs
+
+    def available_skills(self, tenant_id: str = "") -> list[dict[str, Any]]:
+        """Named skills visible to a tenant, to feed Intent/Router."""
+        self.prune_expired()
+        selected: dict[str, dict[str, Any]] = {}
+        with self._lock:
+            states = list(self._agents.values())
+        for state in states:
+            spec = state.spec
+            if not state.healthy or spec.tenant_id not in {"", tenant_id}:
+                continue
+            for skill in spec.skills:
+                rank = (spec.priority, 0 if spec.tenant_id == tenant_id else 1)
+                current = selected.get(skill)
+                if current is not None and current["_rank"] <= rank:
+                    continue
+                selected[skill] = {
+                    "skill": skill,
+                    "agent": spec.name,
+                    "tenant_id": spec.tenant_id,
+                    "capabilities": sorted(spec.capabilities),
+                    "priority": spec.priority,
+                    "_rank": rank,
+                }
+        return [
+            {key: value for key, value in item.items() if key != "_rank"}
+            for item in sorted(selected.values(), key=lambda item: item["skill"])
+        ]
+
     def snapshot(self, tenant_id: str | None = None) -> list[dict[str, Any]]:
         now = time.monotonic()
         with self._lock:
@@ -173,6 +224,8 @@ class AgentRegistry:
                     "risk": state.spec.risk,
                     "model": state.spec.model,
                     "tools": sorted(state.spec.tools),
+                    "skills": sorted(state.spec.skills),
+                    "sandbox": _sandbox_summary(state.spec.sandbox),
                     "tenant_scope": state.spec.tenant_scope,
                     "input_schema": state.spec.input_schema,
                     "output_schema": state.spec.output_schema,
@@ -200,3 +253,17 @@ class AgentRegistry:
     def clear(self) -> None:
         with self._lock:
             self._agents.clear()
+
+
+def _sandbox_summary(config: dict[str, Any]) -> dict[str, Any]:
+    """Redacted sandbox metadata; the code itself is never listed."""
+    if not config:
+        return {}
+    code = config.get("code")
+    return {
+        "runtime": str(config.get("runtime") or "python"),
+        "timeout_seconds": int(config.get("timeout_seconds") or 10),
+        "packages": list(config.get("packages") or []),
+        "code_bytes": len(code.encode("utf-8")) if isinstance(code, str) else 0,
+        "configured": bool(code),
+    }

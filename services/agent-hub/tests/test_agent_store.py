@@ -22,6 +22,7 @@ def _spec(name: str = "custom", tenant_id: str = "t1") -> AgentSpec:
         permissions=frozenset({"search:use"}),
         tenant_scope="t1",
         tools=frozenset({"search.query"}),
+        skills=frozenset({"translate"}),
         model="gpt-4o-mini",
         max_turns=3,
         token_budget=4000,
@@ -114,6 +115,8 @@ def test_spec_from_row_maps_contract_fields() -> None:
             "permissions": ["search:use"],
             "tenant_scope": "t1",
             "tools": ["search.query"],
+            "skills": ["translate", "expense.approval"],
+            "sandbox": {"code": "print(1)", "runtime": "python"},
             "model": "deepseek-chat",
             "max_turns": 4,
             "token_budget": 6000,
@@ -124,6 +127,8 @@ def test_spec_from_row_maps_contract_fields() -> None:
     assert spec.capabilities == frozenset({"agent.call", "tool.call"})
     assert spec.permissions == frozenset({"search:use"})
     assert spec.tools == frozenset({"search.query"})
+    assert spec.skills == frozenset({"translate", "expense.approval"})
+    assert spec.sandbox["code"] == "print(1)"
     assert spec.tenant_id == "t1"
     assert spec.risk == "write"
     assert spec.kind == "http"

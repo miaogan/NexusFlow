@@ -20,16 +20,27 @@ const maxChatBodyBytes = 1 << 20 // 1 MiB
 // stays the single entry point: it authenticates the caller, then forwards the
 // principal so the RAG service can scope conversations per tenant/user.
 type ragProxy struct {
-	baseURL string
-	client  *http.Client
+	baseURL      string
+	serviceToken string
+	client       *http.Client
 }
 
-func newRAGProxy(raw string) *ragProxy {
+// newRAGProxy optionally attaches the hub admin token so /v1/call, approvals
+// and audit keep working when AGENT_HUB_ADMIN_TOKEN is configured.
+func newRAGProxy(raw string, serviceToken ...string) *ragProxy {
 	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
 	if raw == "" {
 		return nil
 	}
-	return &ragProxy{baseURL: raw, client: &http.Client{Timeout: 120 * time.Second}}
+	token := ""
+	if len(serviceToken) > 0 {
+		token = serviceToken[0]
+	}
+	return &ragProxy{
+		baseURL:      raw,
+		serviceToken: token,
+		client:       &http.Client{Timeout: 120 * time.Second},
+	}
 }
 
 func (p *ragProxy) do(c *gin.Context, method, path string, body []byte) (*http.Response, error) {
@@ -43,6 +54,9 @@ func (p *ragProxy) do(c *gin.Context, method, path string, body []byte) (*http.R
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if p.serviceToken != "" {
+		req.Header.Set("x-service-token", p.serviceToken)
 	}
 	// Pass the bearer token through so the RAG service can reuse /v1/search
 	// without inventing a second credential.

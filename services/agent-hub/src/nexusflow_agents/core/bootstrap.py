@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from nexusflow_agents.agents.rag.core.config import settings as rag_settings
 from nexusflow_agents.core.agent_store import AgentStore, build_agent_store
 from nexusflow_agents.core.config import HubSettings, get_hub_settings
-from nexusflow_agents.core.executor import HttpExecutor, LocalExecutor
+from nexusflow_agents.core.executor import (
+    HttpExecutor,
+    LocalExecutor,
+    SandboxAgentExecutor,
+)
 from nexusflow_agents.core.hub import Hub
 from nexusflow_agents.core.lifecycle import AgentLifecycle, BackgroundPool
 from nexusflow_agents.core.local_agents import LOCAL_HANDLERS
@@ -164,13 +168,18 @@ def build_runtime(settings: HubSettings | None = None) -> Runtime:
     _load_custom_agents(registry, agent_store)
     local_executor = LocalExecutor(LOCAL_HANDLERS)
     http_executor = HttpExecutor(settings.health_timeout_seconds)
+    sandbox_executor = SandboxAgentExecutor(rag_settings.gateway_url)
     background = BackgroundPool(
         settings.background_workers,
         max_pending=max(16, settings.background_workers * 8),
     )
     hub = Hub(
         registry,
-        {"local": local_executor, "http": http_executor},
+        {
+            "local": local_executor,
+            "http": http_executor,
+            "sandbox": sandbox_executor,
+        },
         max_attempts=settings.max_attempts,
         fail_threshold=settings.fail_threshold,
         background=background,

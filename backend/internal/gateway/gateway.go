@@ -88,8 +88,8 @@ func WithTracer(t tracing.Tracer) Option {
 
 // WithRAGAgent enables the RAG chat endpoints by pointing the gateway at the
 // Python rag-agent service. An empty URL leaves chat disabled.
-func WithRAGAgent(rawURL string) Option {
-	return func(g *Gateway) { g.rag = newRAGProxy(rawURL) }
+func WithRAGAgent(rawURL string, serviceToken ...string) Option {
+	return func(g *Gateway) { g.rag = newRAGProxy(rawURL, serviceToken...) }
 }
 
 // WithWorkflow enables the DAG validate/run proxy. The service token is
@@ -209,6 +209,9 @@ func (g *Gateway) Router() *gin.Engine {
 	v1.GET("/corrected-answers", RequirePermission("search:use"), g.listCorrectedAnswers)
 	v1.GET("/traces", g.listTraces)
 	v1.GET("/traces/:id", g.getTrace)
+	// Custom SubAgent invocation (proxied to the hub /v1/call). Sandbox agents
+	// additionally require sandbox:execute on their own execution request.
+	v1.POST("/agents/:name/call", RequirePermission("search:use"), g.callAgent)
 	// Human-in-the-loop approvals and audit (proxied to the Agent Hub).
 	v1.GET("/approvals", RequirePermission("workflow:run"), g.listApprovals)
 	v1.GET("/approvals/:id", RequirePermission("workflow:run"), g.getApproval)

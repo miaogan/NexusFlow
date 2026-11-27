@@ -14,6 +14,22 @@ def test_graph_falls_back_to_rules_without_llm() -> None:
     assert result["source"] == "rules"
 
 
+def test_graph_routes_available_skill() -> None:
+    result = _graph().invoke(
+        "please translate this paragraph",
+        [],
+        ["translate", "expense.approval"],
+    )
+    assert result["intent"] == "skill"
+    assert result["skill"] == "translate"
+    assert result["need_retrieval"] is False
+
+
+def test_graph_ignores_skill_without_offer() -> None:
+    result = _graph().invoke("please translate this paragraph", [], [])
+    assert result["intent"] != "skill"
+
+
 def test_graph_classifies_knowledge_question() -> None:
     result = _graph().invoke("Rerank 是怎么工作的？", [{"role": "user", "content": "之前聊过检索"}])
     assert result["intent"] == "knowledge_qa"

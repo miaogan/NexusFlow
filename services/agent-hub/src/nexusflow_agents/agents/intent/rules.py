@@ -45,7 +45,23 @@ QUESTION_HINTS = (
 )
 
 
-def classify_rules(message: str) -> IntentResult:
+def match_skill(message: str, skills: list[str] | None) -> str | None:
+    """Cheap keyword match used by the no-LLM fallback."""
+    lowered = message.lower()
+    for skill in sorted(skills or []):
+        candidates = {
+            skill.lower(),
+            skill.split(".")[-1].lower(),
+            skill.replace(".", " ").lower(),
+        }
+        if any(candidate and candidate in lowered for candidate in candidates):
+            return skill
+    return None
+
+
+def classify_rules(
+    message: str, skills: list[str] | None = None
+) -> IntentResult:
     """Deterministic fallback used when no LLM is configured or it fails."""
     text = message.strip()
     lowered = text.lower()
@@ -66,6 +82,16 @@ def classify_rules(message: str) -> IntentResult:
             confidence=0.8,
             need_retrieval=False,
             reason="检测到问候或寒暄",
+            source="rules",
+        )
+
+    if skill := match_skill(text, skills):
+        return IntentResult(
+            intent="skill",
+            confidence=0.75,
+            need_retrieval=False,
+            skill=skill,
+            reason=f"命中技能 {skill}",
             source="rules",
         )
 

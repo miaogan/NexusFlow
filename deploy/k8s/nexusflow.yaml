@@ -92,6 +92,9 @@ stringData:
   # the direct-access check (dev only).
   WORKFLOW_SERVICE_TOKEN: ""
   AGENT_HUB_WORKFLOW_SERVICE_TOKEN: ""
+  # Gateway -> hub service token; keep equal to AGENT_HUB_ADMIN_TOKEN.
+  AGENT_HUB_TOKEN: ""
+  AGENT_HUB_ADMIN_TOKEN: ""
   LLAMAINDEX_EMBEDDING_API_KEY: ""
   RAG_LLM_BASE_URL: ""
   RAG_LLM_API_KEY: ""

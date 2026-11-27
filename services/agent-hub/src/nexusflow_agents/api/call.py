@@ -69,26 +69,30 @@ def _envelope(request: Request, body: CallEnvelope) -> CallEnvelope:
     return CallEnvelope(**data)
 
 
-def _enabled() -> None:
+def _require_tools() -> None:
     settings = get_hub_settings()
     if not (settings.tools_enabled or settings.workflow_enabled):
-        raise HTTPException(status_code=404, detail="/v1/call is disabled")
+        raise HTTPException(status_code=404, detail="tools are disabled")
 
 
 @router.get("/tools")
 def list_tools() -> dict[str, Any]:
-    _enabled()
+    _require_tools()
     return {"tools": get_tools().specs()}
 
 
 @router.post("/call")
 def call(request: Request, body: CallRequest) -> dict[str, Any]:
-    _enabled()
+    # Agent calls stay available for custom SubAgents; tools need their switch.
     _authorize(request)
     envelope = _envelope(request, body.envelope)
     ctx = envelope.context()
+    if auth := request.headers.get("authorization"):
+        # Sandbox agents forward this to the gateway's sandbox:execute check.
+        ctx["auth_header"] = auth
 
     if body.tool is not None:
+        _require_tools()
         return _call_tool(body.tool, ctx)
     if body.agent is not None:
         return _call_agent(body.agent, ctx)

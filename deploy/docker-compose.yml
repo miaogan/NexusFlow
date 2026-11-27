@@ -94,6 +94,8 @@ services:
       AUTH_TARGET: "auth-service:9096"
       USER_TARGET: "user-service:9097"
       RAG_AGENT_URL: "http://agent-hub:8001"
+      # Forwarded to the hub when AGENT_HUB_ADMIN_TOKEN is configured.
+      AGENT_HUB_TOKEN: ${AGENT_HUB_ADMIN_TOKEN:-}
       # DAG validate/run proxy (RBAC: workflow:run).
       WORKFLOW_TARGET: "http://workflow-engine:8081"
       WORKFLOW_SERVICE_TOKEN: ${WORKFLOW_SERVICE_TOKEN:-}

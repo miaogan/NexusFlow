@@ -361,21 +361,23 @@ flowchart LR
 ```
 
 - **星型调度**：Hub 按 capability（`intent.classify` / `summary.compact` / `memory.recall` / `memory.extract`）从注册表选择 Agent；支持 `local` 进程内执行与 `http` 远程 worker、优先级、超时、健康摘除、故障转移和运行时注册。`AGENT_HUB_MODE=local|remote|hybrid` 控制拓扑。
-- **自定义 SubAgent**：`POST /v1/agents` 注册租户级 HTTP Agent（需 `AGENT_HUB_DYNAMIC_REGISTRATION=true`），注册表以 `(tenant_id, name)` 隔离，内置 Agent 为全局共享；`AGENT_HUB_REGISTRY_DRIVER=postgres` 时持久化到 `custom_agents` 并在启动时自动加载，`GET /v1/agents` / `GET|DELETE /v1/agents/{name}` 均按 `x-tenant-id` 限定。
+- **自定义 SubAgent**：`POST /v1/agents` 注册租户级 Agent（需 `AGENT_HUB_DYNAMIC_REGISTRATION=true`），支持 `kind=http` 与 `kind=sandbox`；注册表以 `(tenant_id, name)` 隔离，内置 Agent 为全局共享；`AGENT_HUB_REGISTRY_DRIVER=postgres` 时持久化到 `custom_agents` 并在启动时自动加载，`GET /v1/agents` / `GET|DELETE /v1/agents/{name}` 均按 `x-tenant-id` 限定。
+- **Sandbox SubAgent**：`kind=sandbox` 将 `{code,runtime,timeout_seconds,packages}` 存入注册表，由 `SandboxAgentExecutor` 经 Gateway `/v1/sandbox/execute` 执行；调用入口 `POST /v1/agents/{name}/call` 透传用户 Bearer，实际运行仍要求 `sandbox:execute`，代码上限 64KB、超时上限 60s，列表只返回脱敏元数据。
+- **动态技能路由**：自定义 Agent 可声明 `skills`（如 `expense.approval`）；Intent 节点接收该租户的可用技能（`GET /v1/skills`），返回 `intent=skill` 与技能名；Chat 直接调用对应 SubAgent，失败/技能不存在时自动回退 RAG。SSE 增加 `intent.skill` 与 `stage(skill)` 事件。
 - **身份联动**：网关校验 JWT 后将 `x-tenant-id` / `x-user-id` / `Authorization` 透传给 agent-hub；会话与消息按「租户 + 用户」隔离，匿名调用者落在 `default/anonymous`。
 - **意图路由**：Hub 调用 `intent.classify` 做 `knowledge_qa | chitchat | clarify` 分类；`chitchat` / `clarify` 跳过检索直接回答，Agent 不可用时降级为知识问答。
 - **上下文压缩**：会话超出 `RAG_MAX_HISTORY` 时，Hub 调用 `summary.compact` 生成滚动摘要并写入 `rag_conversations.summary`；失败时改回原文窗口，仅损失上下文、不影响正确性。
 - **长期记忆**：Hub 调用 `memory.recall` 按「租户 + 用户」召回 top-k 注入 prompt；回答落库后通过 Hub 有界后台池提交 `memory.extract`。记忆正文在 Postgres，向量在 Qdrant。
 - **检索复用**：agent-hub 通过 `RAG_GATEWAY_URL` 调用网关 `/v1/search`，复用统一的多路召回 + RRF + 重排链路与 trace。
 - **LangGraph 生成**：`retrieve → generate` 两节点状态图；配置 `RAG_LLM_BASE_URL` + `RAG_LLM_API_KEY` 时调用大模型，未配置时降级为抽取式片段摘要。
-- **SSE 契约兼容**：`/v1/chat/stream` 仍推送 `stage(intent) → intent → stage(retrieve) → sources → stage(generate) → token* → done`；开启推理后新增 `stage(reasoning)` / `tool_call` / `tool_result` / `approval_required`，旧事件语义不变。
+- **SSE 契约兼容**：`/v1/chat/stream` 仍推送 `stage(intent) → intent → stage(retrieve) → sources → stage(generate) → token* → done`；命中技能时插入 `stage(skill)`，`intent` 事件携带 `skill`；开启推理后新增 `stage(reasoning)` / `tool_call` / `tool_result` / `approval_required`，旧事件语义不变。
 - **会话存储**：`RAG_DATABASE_URL` 指向 Postgres 时持久化到 `rag_conversations` / `rag_messages`；为空则使用进程内存储。
 
 ### 工具调用、双向联动、MCP 与人机协同
 
 四项能力均由开关控制，默认关闭；关闭即回滚到原有 `retrieve → generate` 与 `/v1/workflows/run` 路径。
 
-- **工具契约与通用调用**（`AGENT_HUB_TOOLS_ENABLED`）：`ToolSpec{input/output schema, risk, timeout, requires_approval}` 与 `CallEnvelope{tenant,user,trace,request,approval,deadline,budget}` 统一；`POST /v1/call` 可调用指定 agent 或工具，`GET /v1/tools` 列出工具。
+- **工具契约与通用调用**（`AGENT_HUB_TOOLS_ENABLED`）：`ToolSpec{input/output schema, risk, timeout, requires_approval}` 与 `CallEnvelope{tenant,user,trace,request,approval,deadline,budget}` 统一；`POST /v1/call` 的 agent 分支始终可用，tool 分支需开启该开关；`GET /v1/tools` 列出工具。
 - **多轮自助推理**（`AGENT_HUB_REASONING_ENABLED`）：LLM `bind_tools` 后循环 `plan → tool_call → observe → answer`；受 `MAX_TURNS` / 工具调用数 / Token / 总时限预算约束，重复 `tool+args` 自动抑制，工具失败交回模型决策，预算耗尽回退原生成。
 - **DAG 双向联动**（`AGENT_HUB_WORKFLOW_ENABLED` / `WORKFLOW_AGENT_NODE`）：DAG 新增 `agent` 节点调用 Hub `/v1/call`；Hub 的 `workflow.run` 工具经网关（携带用户身份）或服务令牌触发 DAG。`x-tenant-id` / `x-trace-id` / deadline 全程透传；网关 `/v1/workflows/*` 统一要求 `workflow:run`。
 - **MCP**（`AGENT_HUB_MCP_ENABLED`）：`POST /mcp` 提供 `initialize` / `tools/list` / `tools/call`；`AGENT_HUB_MCP_SERVERS=name=url,...` 接入外部 MCP，工具注册为 `mcp.<server>.<tool>`。外部工具默认需审批，sandbox 默认不对外暴露。
@@ -392,11 +394,14 @@ flowchart LR
 | `GET /v1/approvals`、`/v1/approvals/{id}` | `workflow:run` | 工具审批待办 / 详情 |
 | `POST /v1/approvals/{id}/decide` | `workflow:run` | 批准 / 拒绝高风险工具 |
 | `GET /v1/audit` | `trace:read` | 工具与审批审计查询 |
-| `POST /v1/call`、`GET /v1/tools` | `AGENT_HUB_TOOLS_ENABLED` 或 `AGENT_HUB_WORKFLOW_ENABLED` | Hub 内部通用调用 / 工具列表（供 DAG `agent` 节点使用） |
+| `POST /v1/call` | agent 分支恒可用；tool 分支需 `AGENT_HUB_TOOLS_ENABLED` 或 `AGENT_HUB_WORKFLOW_ENABLED` | Hub 内部通用调用（供 DAG `agent` 节点与 Sandbox SubAgent 使用） |
+| `GET /v1/tools` | `AGENT_HUB_TOOLS_ENABLED` 或 `AGENT_HUB_WORKFLOW_ENABLED` | 工具契约列表 |
+| `POST /v1/agents/{name}/call` | `search:use`；sandbox agent 另需 `sandbox:execute` | Gateway 调用自定义 SubAgent |
+| `GET /v1/skills` | Hub 内部 | 租户可见技能（供 Intent/Router 使用） |
 | `POST /mcp` | `AGENT_HUB_MCP_ENABLED` | MCP Server：initialize / tools/list / tools/call（直连 Agent Hub） |
 | `GET/POST /v1/agents`、`GET/DELETE /v1/agents/{name}` | Hub 内部；写操作需 `AGENT_HUB_DYNAMIC_REGISTRATION` | 租户级自定义 SubAgent CRUD |
 
-> `agent` 节点依赖 `AGENT_HUB_TOOLS_ENABLED` 启用 `/v1/call`；`/mcp` 与 `/v1/call` 为 Hub 内部入口，不对 Gateway 公网暴露。
+> `/v1/call` 的 agent 分支始终可用，tool 分支需 `AGENT_HUB_TOOLS_ENABLED`；`/mcp`、`/v1/call`、`/v1/tools` 为 Hub 内部入口，外部经 Gateway 的 `/v1/agents/{name}/call` 调用自定义 SubAgent。
 
 本地运行（单容器，先启动 dev-all 提供网关与检索）：
 

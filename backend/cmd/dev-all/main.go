@@ -289,7 +289,7 @@ func main() {
 			pb.NewUserServiceClient(userConn),
 		),
 		gateway.WithKnowledgeBases(pb.NewKnowledgeBaseServiceClient(userConn)),
-		gateway.WithRAGAgent(cfg.RAGAgentURL),
+		gateway.WithRAGAgent(cfg.RAGAgentURL, cfg.AgentHubToken),
 		gateway.WithWorkflow(cfg.WorkflowTarget, cfg.WorkflowServiceToken),
 		gateway.WithFeedbackStore(feedbackStore),
 		gateway.WithMetering(meterStore, metering.Quota{

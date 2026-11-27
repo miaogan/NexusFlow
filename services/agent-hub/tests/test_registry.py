@@ -101,6 +101,53 @@ def test_tenant_agent_wins_priority_tie() -> None:
     assert [s.name for s in specs] == ["custom", "shared"]
 
 
+def test_skill_resolution_is_tenant_scoped() -> None:
+    registry = AgentRegistry()
+    registry.register(
+        AgentSpec(
+            name="shared.translate",
+            capabilities=frozenset({"agent.call"}),
+            kind="http",
+            endpoint="http://shared:9000",
+            skills=frozenset({"translate"}),
+            priority=100,
+        )
+    )
+    registry.register(
+        AgentSpec(
+            name="tenant.assistant",
+            capabilities=frozenset({"agent.call"}),
+            kind="http",
+            endpoint="http://tenant:9000",
+            skills=frozenset({"translate", "expense.approval"}),
+            priority=10,
+            tenant_id="t1",
+        )
+    )
+
+    assert [s.name for s in registry.resolve_skill("translate", "t1")] == [
+        "tenant.assistant",
+        "shared.translate",
+    ]
+    assert [s.name for s in registry.resolve_skill("expense.approval", "t1")] == [
+        "tenant.assistant"
+    ]
+    assert registry.resolve_skill("expense.approval", "t2") == []
+
+    skills = {item["skill"]: item for item in registry.available_skills("t1")}
+    assert set(skills) == {"translate", "expense.approval"}
+    assert skills["translate"]["agent"] == "tenant.assistant"
+    assert registry.available_skills("t2") == [
+        {
+            "skill": "translate",
+            "agent": "shared.translate",
+            "tenant_id": "",
+            "capabilities": ["agent.call"],
+            "priority": 100,
+        }
+    ]
+
+
 def test_tenant_lookup_and_delete_are_scoped() -> None:
     registry = AgentRegistry()
     registry.register(_tenant_spec("shared", "", CAPABILITY_SUMMARY))

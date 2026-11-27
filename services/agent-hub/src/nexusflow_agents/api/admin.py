@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from nexusflow_agents.core.config import get_hub_settings
+from nexusflow_agents.core.executor import validate_sandbox_config
 from nexusflow_agents.core.registry import VALID_CAPABILITIES, AgentSpec
 from nexusflow_agents.core.runtime import get_agent_store, get_registry
 
@@ -15,12 +16,17 @@ router = APIRouter(prefix="/v1", tags=["hub"])
 _NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
 # Built-in spokes are shared; a custom agent must not shadow their names.
 RESERVED_PREFIXES = ("local.", "remote.")
+MAX_SKILLS = 16
 
 
 class AgentRegistration(BaseModel):
     name: str = Field(min_length=2, max_length=64)
     capabilities: list[str] = Field(min_length=1)
-    endpoint: str = Field(min_length=1, max_length=512)
+    kind: Literal["http", "sandbox"] = "http"
+    # Required for http agents; unused for sandbox agents.
+    endpoint: str = Field(default="", max_length=512)
+    # Sandbox agents: {code, runtime, timeout_seconds, packages, env_vars}.
+    sandbox: dict[str, Any] = Field(default_factory=dict)
     timeout_ms: int = Field(default=5000, ge=100, le=120000)
     priority: int = Field(default=100, ge=0, le=1000)
     ttl_seconds: int = Field(default=0, ge=0, le=86400)
@@ -31,6 +37,8 @@ class AgentRegistration(BaseModel):
     permissions: list[str] = Field(default_factory=list)
     tenant_scope: str = Field(default="", max_length=128)
     tools: list[str] = Field(default_factory=list)
+    # Names exposed to dynamic skill routing, e.g. ["expense.approval"].
+    skills: list[str] = Field(default_factory=list, max_length=MAX_SKILLS)
     model: str = Field(default="", max_length=128)
     max_turns: int = Field(default=0, ge=0, le=50)
     token_budget: int = Field(default=0, ge=0)
@@ -72,6 +80,15 @@ def list_agents(request: Request) -> dict[str, object]:
     }
 
 
+@router.get("/skills")
+def list_skills(request: Request) -> dict[str, Any]:
+    tenant_id = _tenant(request)
+    return {
+        "tenant_id": tenant_id,
+        "skills": get_registry().available_skills(tenant_id),
+    }
+
+
 @router.get("/agents/{name}")
 def get_agent(request: Request, name: str) -> dict[str, Any]:
     tenant_id = _tenant(request)
@@ -89,19 +106,34 @@ def register_agent(request: Request, body: AgentRegistration) -> dict[str, objec
         raise HTTPException(status_code=422, detail="invalid agent name")
     if body.name.startswith(RESERVED_PREFIXES):
         raise HTTPException(status_code=422, detail="agent name is reserved")
-    if not body.endpoint.startswith(("http://", "https://")):
-        raise HTTPException(status_code=422, detail="endpoint must be http(s)")
     invalid = sorted(set(body.capabilities) - VALID_CAPABILITIES)
     if invalid:
         raise HTTPException(
             status_code=422, detail=f"unknown capabilities: {', '.join(invalid)}"
         )
+    invalid_skills = sorted(
+        skill for skill in body.skills if not _NAME.match(skill)
+    )
+    if invalid_skills:
+        raise HTTPException(
+            status_code=422,
+            detail=f"invalid skill names: {', '.join(invalid_skills)}",
+        )
+
+    sandbox_config: dict[str, Any] = {}
+    if body.kind == "sandbox":
+        try:
+            sandbox_config = validate_sandbox_config(body.sandbox)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    elif not body.endpoint.startswith(("http://", "https://")):
+        raise HTTPException(status_code=422, detail="endpoint must be http(s)")
 
     spec = AgentSpec(
         name=body.name,
         capabilities=frozenset(body.capabilities),
-        kind="http",
-        endpoint=body.endpoint,
+        kind=body.kind,
+        endpoint="" if body.kind == "sandbox" else body.endpoint,
         timeout_ms=body.timeout_ms,
         priority=body.priority,
         # Custom agents persist until deleted unless a heartbeat TTL is asked for.
@@ -112,10 +144,13 @@ def register_agent(request: Request, body: AgentRegistration) -> dict[str, objec
         permissions=frozenset(body.permissions),
         tenant_scope=body.tenant_scope,
         tools=frozenset(body.tools),
+        skills=frozenset(body.skills),
+        sandbox=sandbox_config,
         model=body.model,
         max_turns=body.max_turns,
         token_budget=body.token_budget,
-        risk=body.risk,
+        # Running user code is always an execute-risk agent.
+        risk="execute" if body.kind == "sandbox" else body.risk,
         tenant_id=tenant_id,
     )
     try:
@@ -130,6 +165,7 @@ def register_agent(request: Request, body: AgentRegistration) -> dict[str, objec
     return {
         "registered": body.name,
         "tenant_id": tenant_id,
+        "kind": body.kind,
         "ttl_seconds": body.ttl_seconds,
     }
 

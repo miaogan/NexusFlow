@@ -70,17 +70,60 @@ class FakeStreamGraph:
 
 
 class StaticIntent:
-    def __init__(self, intent: str = "knowledge_qa") -> None:
+    def __init__(self, intent: str = "knowledge_qa", skill: str | None = None) -> None:
         self.intent = intent
+        self.skill = skill
 
-    def classify(self, message: str, history: list[dict[str, str]]) -> dict[str, Any]:
+    def classify(
+        self,
+        message: str,
+        history: list[dict[str, str]],
+        tenant_id: str = "",
+        skills: list[str] | None = None,
+    ) -> dict[str, Any]:
         return {
             "intent": self.intent,
             "confidence": 0.9,
             "need_retrieval": self.intent == "knowledge_qa",
+            "skill": self.skill,
             "reason": "test",
             "source": "test",
         }
+
+
+class FakeSkills:
+    def __init__(self, answer: str = "skill answer", fail: bool = False) -> None:
+        self.answer_text = answer
+        self.fail = fail
+        self.calls: list[dict[str, Any]] = []
+
+    def available(self, tenant_id: str) -> list[str]:
+        return ["translate"]
+
+    def invoke(
+        self,
+        skill: str,
+        message: str,
+        history: list[dict[str, str]],
+        *,
+        tenant_id: str,
+        user_id: str,
+        auth_header: str | None = None,
+    ) -> dict[str, Any]:
+        self.calls.append(
+            {
+                "skill": skill,
+                "message": message,
+                "tenant": tenant_id,
+                "user": user_id,
+            }
+        )
+        if self.fail:
+            raise RuntimeError("skill down")
+        return {"answer": self.answer_text, "trace_id": "tr-skill"}
+
+    def answer(self, data: dict[str, Any]) -> str:
+        return str(data.get("answer") or "")
 
 
 def _service() -> tuple[ChatService, InMemoryConversationStore, FakeGraph]:
@@ -204,6 +247,70 @@ def test_chat_stream_skips_retrieval_for_chitchat() -> None:
     assert done["answer"] == "chat reply"
     assert done["citations"] == []
     assert done["trace_id"] is None
+
+
+def test_chat_routes_to_tenant_skill() -> None:
+    store = InMemoryConversationStore()
+    graph = FakeGraph()
+    skills = FakeSkills()
+    service = ChatService(
+        store,
+        graph,
+        Settings(_env_file=None),
+        StaticIntent("skill", "translate"),
+        skills=skills,
+    )
+
+    resp = service.chat(ChatRequest(message="translate this"), "t1", "u1", None)
+
+    assert resp.answer == "skill answer"
+    assert resp.trace_id == "tr-skill"
+    assert graph.calls == []
+    assert skills.calls[0]["skill"] == "translate"
+    assert skills.calls[0]["tenant"] == "t1"
+
+
+def test_chat_falls_back_to_rag_when_skill_fails() -> None:
+    store = InMemoryConversationStore()
+    graph = FakeGraph()
+    skills = FakeSkills(fail=True)
+    service = ChatService(
+        store,
+        graph,
+        Settings(_env_file=None),
+        StaticIntent("skill", "translate"),
+        skills=skills,
+    )
+
+    resp = service.chat(ChatRequest(message="translate this"), "t1", "u1", None)
+
+    assert resp.answer == "generated answer"
+    assert len(graph.calls) == 1
+
+
+def test_chat_stream_routes_to_tenant_skill() -> None:
+    store = InMemoryConversationStore()
+    graph = FakeStreamGraph()
+    skills = FakeSkills()
+    service = ChatService(
+        store,
+        graph,
+        Settings(_env_file=None),
+        StaticIntent("skill", "translate"),
+        skills=skills,
+    )
+
+    events = _collect_stream(service, ChatRequest(message="translate this"), "t1", "u1")
+
+    assert any(
+        event.get("stage") == "skill" and event.get("status") == "start"
+        for event in events
+    )
+    done = events[-1]
+    assert done["type"] == "done"
+    assert done["answer"] == "skill answer"
+    assert done["trace_id"] == "tr-skill"
+    assert graph.retrieve_calls == []
 
 
 def test_intent_classifier_falls_back_without_url() -> None:

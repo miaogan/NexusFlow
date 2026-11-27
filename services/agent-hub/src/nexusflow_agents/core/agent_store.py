@@ -80,6 +80,8 @@ class PostgresAgentStore:
                     permissions    JSONB NOT NULL DEFAULT '[]'::jsonb,
                     tenant_scope   VARCHAR(128) NOT NULL DEFAULT '',
                     tools          JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    skills         JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    sandbox        JSONB NOT NULL DEFAULT '{}'::jsonb,
                     model          VARCHAR(128) NOT NULL DEFAULT '',
                     max_turns      INTEGER NOT NULL DEFAULT 0,
                     token_budget   INTEGER NOT NULL DEFAULT 0,
@@ -90,6 +92,15 @@ class PostgresAgentStore:
                     PRIMARY KEY (tenant_id, name)
                 )
                 """
+            )
+            # Upgrade databases created before sandbox SubAgents existed.
+            conn.execute(
+                "ALTER TABLE custom_agents "
+                "ADD COLUMN IF NOT EXISTS sandbox JSONB NOT NULL DEFAULT '{}'::jsonb"
+            )
+            conn.execute(
+                "ALTER TABLE custom_agents "
+                "ADD COLUMN IF NOT EXISTS skills JSONB NOT NULL DEFAULT '[]'::jsonb"
             )
             conn.execute(
                 """
@@ -120,13 +131,13 @@ class PostgresAgentStore:
                 INSERT INTO custom_agents (
                     tenant_id, name, capabilities, kind, endpoint, timeout_ms,
                     priority, ttl_seconds, version, input_schema, output_schema,
-                    permissions, tenant_scope, tools, model, max_turns,
-                    token_budget, risk, created_by
+                    permissions, tenant_scope, tools, skills, sandbox, model,
+                    max_turns, token_budget, risk, created_by
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s,
-                    %s, %s, %s
+                    %s, %s, %s, %s, %s
                 )
                 ON CONFLICT (tenant_id, name) DO UPDATE SET
                     capabilities = EXCLUDED.capabilities,
@@ -141,6 +152,8 @@ class PostgresAgentStore:
                     permissions = EXCLUDED.permissions,
                     tenant_scope = EXCLUDED.tenant_scope,
                     tools = EXCLUDED.tools,
+                    skills = EXCLUDED.skills,
+                    sandbox = EXCLUDED.sandbox,
                     model = EXCLUDED.model,
                     max_turns = EXCLUDED.max_turns,
                     token_budget = EXCLUDED.token_budget,
@@ -162,6 +175,8 @@ class PostgresAgentStore:
                     Jsonb(sorted(spec.permissions)),
                     spec.tenant_scope,
                     Jsonb(sorted(spec.tools)),
+                    Jsonb(sorted(spec.skills)),
+                    Jsonb(spec.sandbox),
                     spec.model,
                     spec.max_turns,
                     spec.token_budget,
@@ -183,6 +198,7 @@ def spec_from_row(row: dict[str, Any]) -> AgentSpec:
     capabilities = row.get("capabilities") or []
     permissions = row.get("permissions") or []
     tools = row.get("tools") or []
+    skills = row.get("skills") or []
     return AgentSpec(
         name=str(row["name"]),
         capabilities=frozenset(str(item) for item in capabilities),
@@ -197,6 +213,8 @@ def spec_from_row(row: dict[str, Any]) -> AgentSpec:
         permissions=frozenset(str(item) for item in permissions),
         tenant_scope=str(row.get("tenant_scope") or ""),
         tools=frozenset(str(item) for item in tools),
+        skills=frozenset(str(item) for item in skills),
+        sandbox=dict(row.get("sandbox") or {}),
         model=str(row.get("model") or ""),
         max_turns=int(row.get("max_turns") or 0),
         token_budget=int(row.get("token_budget") or 0),

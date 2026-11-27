@@ -16,6 +16,7 @@ def intent_classify(payload: dict[str, Any], ctx: dict[str, Any]) -> dict[str, A
     return get_graph().invoke(
         str(payload.get("message") or ""),
         list(payload.get("history") or []),
+        [str(item) for item in (payload.get("skills") or [])],
     )
 
 

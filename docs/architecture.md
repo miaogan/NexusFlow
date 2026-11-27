@@ -151,6 +151,8 @@ Agent Hub 是 intent / summary / memory 的中心节点，Hub 与 Agent 构成�
 - **动态调度**：按优先级尝试，失败/超时切换到下一个；可选能力全部失败时返回降级结果（知识问答 / 不压缩 / 空记忆），不阻断主链路。
 - **健康与注册**：后台任务探活 HTTP Agent，连续失败摘除、恢复后回归；动态注册默认关闭，开启时需 Admin Token 与 TTL 心跳。
 - **自定义 SubAgent**：`AgentSpec.tenant_id` 为空表示全局内置 Agent，自定义 Agent 以 `(tenant_id, name)` 注册且仅所属租户可解析；`/v1/agents` 提供租户内 CRUD，`AGENT_HUB_REGISTRY_DRIVER=postgres` 时启动幂等建表并从 `custom_agents` 加载。
+- **Sandbox SubAgent**：`kind=sandbox` 的 Agent 将 `{code, runtime, timeout_seconds, packages}` 存于 `custom_agents.sandbox`，由 `SandboxAgentExecutor` 通过 Gateway `/v1/sandbox/execute` 执行；运行请求透传用户 Bearer，仍受 `sandbox:execute` 约束，代码/入参有大小上限，列表仅返回脱敏元数据。
+- **动态技能路由**：自定义 Agent 通过 `skills` 声明可处理技能；`AgentRegistry.available_skills(tenant)` 汇总租户可见技能，Intent 节点输出 `intent=skill + skill`，`SkillRouter` 经 `Hub.call_skill` 选择该租户优先级最高的 Agent，失败回退 RAG。技能名与 Agent 名均受格式校验，避免注入与越权路由。
 - **部署形态**：默认 `ROLE=all`、`MODE=local` 单容器；`ROLE=intent|summary|memory` + `MODE=remote|hybrid` 支持拆分与回滚。
 
 ### 3.2 工具、推理、双向联动与人机协同
@@ -184,7 +186,7 @@ Agent Hub 是 intent / summary / memory 的中心节点，Hub 与 Agent 构成�
 - 多副本：同一 run 的挂起与审批需要共享 `RunStore`，或由网关做粘性路由；否则跨副本无法恢复。
 - MCP：仅 HTTP JSON-RPC（initialize / tools/list / tools/call），未实现 SSE / stdio 传输与 resources / prompts 原语。
 - 推理输出：工具调用与结果逐条流式，最终回答以单个 `token` 事件下发；预算耗尽或工具异常回退普通生成。
-- `agent` 节点依赖 `AGENT_HUB_TOOLS_ENABLED` 启用 `/v1/call`；`/mcp`、`/v1/call`、`/v1/tools` 为 Hub 内部接口，不直接对公网暴露。
+- `/v1/call` 的 agent 分支始终可用，tool 分支需 `AGENT_HUB_TOOLS_ENABLED`；`/mcp`、`/v1/call`、`/v1/tools` 为 Hub 内部接口，外部经 Gateway `/v1/agents/{name}/call` 调用自定义 SubAgent。
 
 ## 4. LlamaIndex 数据处理服务设计
 

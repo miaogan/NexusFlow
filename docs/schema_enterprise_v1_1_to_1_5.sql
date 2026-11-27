@@ -246,7 +246,7 @@ CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_retry
 -- v1.2.0: 自定义 SubAgent 注册表 (Agent Hub)
 -- ----------------------------------------------------------------------------
 
--- 12. 租户级自定义 SubAgent（HTTP spoke）
+-- 12. 租户级自定义 SubAgent（HTTP / Sandbox spoke）
 CREATE TABLE IF NOT EXISTS custom_agents (
     tenant_id      VARCHAR(64) NOT NULL,
     name           VARCHAR(64) NOT NULL,
@@ -262,6 +262,8 @@ CREATE TABLE IF NOT EXISTS custom_agents (
     permissions    JSONB NOT NULL DEFAULT '[]'::jsonb,
     tenant_scope   VARCHAR(128) NOT NULL DEFAULT '',
     tools          JSONB NOT NULL DEFAULT '[]'::jsonb,
+    skills         JSONB NOT NULL DEFAULT '[]'::jsonb, -- 动态技能路由名，如 ["expense.approval"]
+    sandbox        JSONB NOT NULL DEFAULT '{}'::jsonb, -- {code, runtime, timeout_seconds, packages, env_vars}
     model          VARCHAR(128) NOT NULL DEFAULT '',
     max_turns      INTEGER NOT NULL DEFAULT 0,
     token_budget   INTEGER NOT NULL DEFAULT 0,

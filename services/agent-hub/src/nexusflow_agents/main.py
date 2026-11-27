@@ -36,10 +36,11 @@ app = FastAPI(
 app.mount("/metrics", make_asgi_app())
 app.include_router(admin_router)
 
-if hub.tools_enabled or hub.workflow_enabled:
-    from nexusflow_agents.api.call import router as call_router
+# /v1/call also serves custom SubAgents, so it stays mounted even when tools
+# are disabled; the tool branch enforces its own switch.
+from nexusflow_agents.api.call import router as call_router
 
-    app.include_router(call_router)
+app.include_router(call_router)
 
 if hub.hitl_enabled or hub.tools_enabled or hub.workflow_enabled:
     from nexusflow_agents.api.approvals import router as approvals_router

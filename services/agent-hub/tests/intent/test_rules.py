@@ -29,3 +29,18 @@ def test_unsupported_action_needs_clarification() -> None:
 def test_short_ambiguous_message_needs_clarification() -> None:
     result = classify_rules("这个呢")
     assert result.intent == "clarify"
+
+
+def test_skill_keyword_routes_to_skill() -> None:
+    result = classify_rules(
+        "please translate this paragraph", ["translate", "expense.approval"]
+    )
+    assert result.intent == "skill"
+    assert result.skill == "translate"
+    assert result.need_retrieval is False
+
+
+def test_unknown_skill_is_not_selected() -> None:
+    result = classify_rules("please translate this paragraph", ["expense.approval"])
+    assert result.intent == "knowledge_qa"
+    assert result.skill is None

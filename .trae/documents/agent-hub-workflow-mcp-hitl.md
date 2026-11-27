@@ -18,7 +18,7 @@ Agent Hub 已完成单容器与星型调度，但目前仍是固定能力（inte
 | 阶段 | 状态 | 已交付 | 边界 / 后续 |
 | --- | --- | --- | --- |
 | P0 统一契约 | 已完成 | `ToolSpec` / `ToolRegistry` / `ToolService`、`CallEnvelope`、`AgentSpec` 契约扩展、`POST /v1/call`、`GET /v1/tools` | — |
-| P1 双向联动 | 已完成 | Go `agent` 节点、`ExecutionContext` 身份元数据、Gateway `/v1/workflows/*` 代理、服务令牌、Hub `workflow.run` 工具 | `agent` 节点依赖 `AGENT_HUB_TOOLS_ENABLED` 启用 `/v1/call` |
+| P1 双向联动 | 已完成 | Go `agent` 节点、`ExecutionContext` 身份元数据、Gateway `/v1/workflows/*` 代理、服务令牌、Hub `workflow.run` 工具 | `/v1/call` 的 agent 分支恒可用；tool 分支需 `AGENT_HUB_TOOLS_ENABLED` |
 | P2 推理循环 | 已完成 | `ReasoningLoop`（预算/重复检测/失败回退）、`tool_call` / `tool_result` / `approval_required` SSE、`ChatService` 集成 | 推理模式的最终回答以单个 `token` 事件下发 |
 | P3 MCP 与契约 | 已完成 | `POST /mcp`（initialize / tools/list / tools/call）、MCP Client、`mcp.<server>.<tool>`、动态注册复用同一 Schema | HTTP JSON-RPC；SSE / stdio 传输未实现 |
 | P4 人机协同 | 已完成 | `ApprovalService`、高风险工具 202 + `approval_id`、审批 API、`human_approval` 节点、`RunStore`、runs / approve / resume | 运行、审批与审计当前为进程内存储；Postgres 表待接入 |
@@ -118,7 +118,7 @@ Agent Hub 已完成单容器与星型调度，但目前仍是固定能力（inte
 
 | 开关 | 默认 | 作用 |
 | --- | --- | --- |
-| `AGENT_HUB_TOOLS_ENABLED` | false | 工具注册、`POST /v1/call`、`GET /v1/tools`、`GET /v1/audit` |
+| `AGENT_HUB_TOOLS_ENABLED` | false | 工具注册、`/v1/call` 的 tool 分支、`GET /v1/tools`、`GET /v1/audit` |
 | `AGENT_HUB_WORKFLOW_ENABLED` | false | 注册 Hub → DAG 的 `workflow.run` 工具 |
 | `WORKFLOW_AGENT_NODE` | false | Go `agent` 节点（DAG → Hub） |
 | `AGENT_HUB_REASONING_ENABLED` | false | ReasoningLoop 与工具调用循环 |
@@ -134,7 +134,8 @@ Agent Hub 已完成单容器与星型调度，但目前仍是固定能力（inte
 
 | 方法 / 路径 | 所属 | 开关 / 权限 | 说明 |
 | --- | --- | --- | --- |
-| `POST /v1/call` | Agent Hub | `AGENT_HUB_TOOLS_ENABLED` 或 `AGENT_HUB_WORKFLOW_ENABLED` | 调用指定 agent 或 tool，body 携带 `envelope` |
+| `POST /v1/call` | Agent Hub | agent 分支恒可用；tool 分支需 `AGENT_HUB_TOOLS_ENABLED` | 调用指定 agent 或 tool，body 携带 `envelope` |
+| `POST /v1/agents/{name}/call` | Gateway | `search:use`；sandbox agent 另需 `sandbox:execute` | 调用自定义 SubAgent |
 | `GET /v1/tools` | Agent Hub | 同上 | 工具契约列表 |
 | `GET /v1/approvals`、`GET /v1/approvals/{id}` | Agent Hub | 审批开关 | 待办与详情 |
 | `POST /v1/approvals/{id}/decide` | Agent Hub / Gateway | `workflow:run` | 批准 / 拒绝，重复决策 409 |

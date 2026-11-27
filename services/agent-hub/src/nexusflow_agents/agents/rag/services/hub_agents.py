@@ -23,21 +23,37 @@ class HubIntentClassifier:
         self._hub = hub or get_hub()
 
     def classify(
-        self, message: str, history: list[dict[str, str]]
+        self,
+        message: str,
+        history: list[dict[str, str]],
+        tenant_id: str = "",
+        skills: list[str] | None = None,
     ) -> dict[str, Any]:
+        offered = list(skills or [])
         result = self._hub.call(
-            CAPABILITY_INTENT, {"message": message, "history": history}
+            CAPABILITY_INTENT,
+            {
+                "message": message,
+                "history": history,
+                "tenant_id": tenant_id,
+                "skills": offered,
+            },
+            {"tenant_id": tenant_id},
         )
         data = result.data if result.ok else {}
         intent = str(data.get("intent") or "")
         if intent not in VALID_INTENTS:
             return fallback_intent(result.error or "意图 Agent 不可用")
+        skill = str(data.get("skill") or "").strip() or None
+        if intent == "skill" and skill not in offered:
+            return fallback_intent("意图 Agent 返回了不可用技能")
         return {
             "intent": intent,
             "confidence": float(data.get("confidence") or 0.0),
             "need_retrieval": bool(
                 data.get("need_retrieval", intent == "knowledge_qa")
             ),
+            "skill": skill,
             "reason": str(data.get("reason") or ""),
             "source": str(data.get("source") or "llm"),
         }
