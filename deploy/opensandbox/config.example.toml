@@ -1,0 +1,53 @@
+# OpenSandbox Server (Docker runtime) configuration for local end-to-end tests.
+#
+# Usage:
+#   mkdir -p /tmp/opensandbox && cp deploy/opensandbox/config.example.toml /tmp/opensandbox/config.toml
+#   docker run -d --name opensandbox-server -p 28080:8080 \
+#     -v /var/run/docker.sock:/var/run/docker.sock \
+#     -v /tmp/opensandbox:/etc/opensandbox:ro \
+#     sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/server:latest
+#
+# Reference: https://github.com/opensandbox-group/OpenSandbox/blob/main/server/configuration.md
+
+[server]
+host = "0.0.0.0"
+port = 8080
+max_sandbox_timeout_seconds = 86400
+# Must match OPENSANDBOX_TOKEN of sandbox-execution. Never leave this empty in
+# environments reachable by untrusted clients.
+api_key = "change-me"
+
+[proxy]
+# The SDK can route execd traffic through the server (UseServerProxy), which is
+# required when sandbox endpoints are not directly reachable from the client.
+resolve_internal = true
+
+[log]
+level = "INFO"
+
+[runtime]
+type = "docker"
+# Keep this aligned with the server image version.
+execd_image = "opensandbox/execd:v1.1.0"
+
+[storage]
+allowed_host_paths = []
+volume_default_size = "1Gi"
+
+[store]
+type = "sqlite"
+path = "/tmp/opensandbox.db"
+
+[docker]
+network_mode = "bridge"
+port_range_min = 40000
+port_range_max = 60000
+drop_capabilities = ["AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
+no_new_privileges = true
+pids_limit = 4096
+
+[ingress]
+mode = "direct"
+
+[renew_intent]
+enabled = false

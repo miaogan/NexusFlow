@@ -1,3 +1,5 @@
+github.com/alibaba/OpenSandbox/sdks/sandbox/go v1.2.1 h1:oikjPivbXj/9MenqLRhNUU6+1TeWHa6RuXz4QodLoeo=
+github.com/alibaba/OpenSandbox/sdks/sandbox/go v1.2.1/go.mod h1:c3C+dMDq0EdnZAgui4ot4hiZhQKUb57/tK97TQO5aHk=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/bsm/ginkgo/v2 v2.12.0 h1:Ny8MWAHyOepLGlLKYmXG4IEkioBysk6GpaRTLC8zwWs=

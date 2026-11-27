@@ -80,6 +80,10 @@ type Config struct {
 	SandboxWorkDir   string
 	OpenSandboxURL   string
 	OpenSandboxToken string
+	// OpenSandboxPythonImage / OpenSandboxNodeImage back bare "python"/"node"
+	// runtimes; versioned runtimes such as "python:3.11" are used as images.
+	OpenSandboxPythonImage string
+	OpenSandboxNodeImage   string
 
 	VectorStoreURL string
 	EmbeddingModel string
@@ -167,10 +171,12 @@ func Load() Config {
 		SeedAdminUsername: env("SEED_ADMIN_USERNAME", "admin"),
 		SeedAdminPassword: env("SEED_ADMIN_PASSWORD", "admin123"),
 
-		SandboxBackend:   env("SANDBOX_BACKEND", "local"),
-		SandboxWorkDir:   env("SANDBOX_WORK_DIR", "/tmp/nexusflow-sandboxes"),
-		OpenSandboxURL:   env("OPENSANDBOX_URL", ""),
-		OpenSandboxToken: env("OPENSANDBOX_TOKEN", ""),
+		SandboxBackend:         env("SANDBOX_BACKEND", "local"),
+		SandboxWorkDir:         env("SANDBOX_WORK_DIR", "/tmp/nexusflow-sandboxes"),
+		OpenSandboxURL:         env("OPENSANDBOX_URL", ""),
+		OpenSandboxToken:       env("OPENSANDBOX_TOKEN", ""),
+		OpenSandboxPythonImage: env("OPENSANDBOX_PYTHON_IMAGE", "python:3.12"),
+		OpenSandboxNodeImage:   env("OPENSANDBOX_NODE_IMAGE", "node:18"),
 
 		VectorStoreURL: env("VECTOR_STORE_URL", "http://127.0.0.1:6333"),
 		EmbeddingModel: env("EMBEDDING_MODEL", "text-embedding-3-large"),

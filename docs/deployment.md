@@ -99,7 +99,52 @@ kubectl -n nexusflow describe hpa processing-worker
 
 索引清理失败时接口返回 `503` 且保留任务记录，便于重试，避免「任务已删但向量残留」。未配置 `LLAMAINDEX_URL` 时跳过第 1 步。
 
-## 8. 回滚与升级
+## 9. 沙箱后端（OpenSandbox）
+
+`sandbox-execution` 支持两种后端：
+
+| `SANDBOX_BACKEND` | 说明 |
+| --- | --- |
+| `local` | 进程内临时目录执行，仅用于开发，**不是安全边界** |
+| `remote` | 通过官方 OpenSandbox Go SDK 调用 server，生产必须使用 |
+
+remote 后端完全基于官方 SDK（`github.com/alibaba/OpenSandbox/sdks/sandbox/go`）实现：创建并等待沙箱就绪 → 通过 execd 上传代码/输入 → SSE 执行命令 → 下载输出 → 强制删除。鉴权使用 `OPEN-SANDBOX-API-KEY` 请求头（由 SDK 从 `OPENSANDBOX_TOKEN` 注入）。
+
+```bash
+SANDBOX_BACKEND=remote
+OPENSANDBOX_URL=http://opensandbox.nexusflow.svc:8080   # 可带 /v1，SDK 会自行拼接
+OPENSANDBOX_TOKEN=<server 的 api_key>
+# 仅当运行时传裸 "python"/"node" 时生效；"python:3.11" 这类带版本的运行时直接作为镜像
+OPENSANDBOX_PYTHON_IMAGE=python:3.12
+OPENSANDBOX_NODE_IMAGE=node:18
+```
+
+注意事项：
+
+- 运行时镜像必须包含 shell（server 需要注入 execd），并预装业务依赖；`packages` 参数不会在创建时安装。
+- `egress_allow` 非空时转换为 deny-default 出网策略，空值沿用 server 默认。
+- 每次执行都会创建并销毁独立沙箱，TTL 由请求超时强制约束。
+- 可选的 `OPENSANDBOX_PYTHON_IMAGE` / `OPENSANDBOX_NODE_IMAGE` 用于指向内网镜像仓库。
+
+本地可用 Docker 模式启动 server 做端到端验证（需要挂载 docker.sock，并使用已设置 `api_key` 的配置）：
+
+```bash
+mkdir -p /tmp/opensandbox
+cp deploy/opensandbox/config.example.toml /tmp/opensandbox/config.toml   # 修改 api_key
+docker run -d --name opensandbox-server -p 28080:8080 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /tmp/opensandbox:/etc/opensandbox:ro \
+  sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/server:latest
+
+OPENSANDBOX_TEST_URL=http://127.0.0.1:28080 \
+OPENSANDBOX_TEST_TOKEN=<api_key> \
+OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
+  go test ./backend/internal/sandbox -run Remote -v
+```
+
+集成测试会走完整链路：创建沙箱 → 上传代码与输入 → execd 执行 → 回读 `/tmp/output.json` → 删除，并校验沙箱没有残留。
+
+## 10. 回滚与升级
 
 - 滚动升级：逐个更新 `image` 标签后 `kubectl apply`，Deployment 默认使用 RollingUpdate。
 - 数据库/模式：身份表在服务启动时以 advisory lock 自动迁移；多副本并发启动是安全的。

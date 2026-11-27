@@ -24,8 +24,15 @@ func main() {
 
 	var backend sandbox.Backend
 	if cfg.SandboxBackend == "remote" {
-		logger.Info("using remote OpenSandbox backend", "url", cfg.OpenSandboxURL)
-		backend = sandbox.NewRemoteBackend(cfg.OpenSandboxURL, cfg.OpenSandboxToken)
+		logger.Info("using remote OpenSandbox backend",
+			"url", cfg.OpenSandboxURL,
+			"python_image", cfg.OpenSandboxPythonImage,
+			"node_image", cfg.OpenSandboxNodeImage,
+		)
+		backend = sandbox.NewRemoteBackendWithImages(
+			cfg.OpenSandboxURL, cfg.OpenSandboxToken,
+			cfg.OpenSandboxPythonImage, cfg.OpenSandboxNodeImage,
+		)
 	} else {
 		logger.Warn("using local sandbox backend, not a security boundary")
 		backend = sandbox.NewLocalBackend(cfg.SandboxWorkDir)

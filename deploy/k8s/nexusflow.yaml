@@ -26,6 +26,9 @@ data:
   SANDBOX_BACKEND: "remote"
   SANDBOX_WORK_DIR: "/data/sandboxes"
   OPENSANDBOX_URL: "http://opensandbox.nexusflow.svc:8080"
+  # Runtime images used when the caller passes a bare "python"/"node".
+  OPENSANDBOX_PYTHON_IMAGE: "python:3.12"
+  OPENSANDBOX_NODE_IMAGE: "node:18"
   METRICS_ADDR: ":9100"
   INGESTION_TARGET: "ingestion:9095"
   QUERY_TARGET: "query-service:9094"
