@@ -5,11 +5,21 @@ import (
 	"sync"
 )
 
+// Meta is the request identity propagated to agent/tool/MCP calls so the same
+// tenant and trace span the gateway, workflow engine and Agent Hub.
+type Meta struct {
+	TenantID  string
+	UserID    string
+	TraceID   string
+	RequestID string
+}
+
 // ExecutionContext carries data between DAG nodes. Upstream outputs are
 // written into the context and read by downstream nodes by name.
 type ExecutionContext struct {
 	mu   sync.RWMutex
 	vars map[string]any
+	meta Meta
 }
 
 func NewExecutionContext(input map[string]any) *ExecutionContext {
@@ -18,6 +28,20 @@ func NewExecutionContext(input map[string]any) *ExecutionContext {
 		vars[k] = v
 	}
 	return &ExecutionContext{vars: vars}
+}
+
+// SetMeta records the caller identity for nodes that call external services.
+func (c *ExecutionContext) SetMeta(meta Meta) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.meta = meta
+}
+
+// Meta returns the request identity attached to this run.
+func (c *ExecutionContext) Meta() Meta {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.meta
 }
 
 func (c *ExecutionContext) Set(key string, value any) {

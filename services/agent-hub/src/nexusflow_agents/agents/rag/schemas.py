@@ -7,6 +7,8 @@ class ChatRequest(BaseModel):
     top_k: int | None = Field(default=None, ge=1, le=50)
     kb_id: str | None = None
     filters: dict[str, str] | None = None
+    # Approved high-risk tool call to replay after /v1/approvals/{id}/decide.
+    approval_id: str | None = Field(default=None, max_length=64)
 
 
 class Citation(BaseModel):

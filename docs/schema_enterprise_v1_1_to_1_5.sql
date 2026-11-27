@@ -12,7 +12,11 @@
 --     并将旧 identity_knowledge_bases 数据一次性迁入 knowledge_bases（旧表仅保留读取兼容）。
 --   * 租户配额目前仍由 internal/metering 在 Redis / 内存中计量，tenant_quotas 是目标持久化
 --     模型，尚未落地；接入时需明确 Postgres 与 Redis 的主从关系，避免计数漂移。
---   * Milestone 2 及之后的表（data_connectors、document_media_assets 等）仍为规划草案，
+--   * workflow_executions / workflow_approvals / audit_logs 已定义目标模型，当前运行时
+--     分别由 MemoryRunStore / ApprovalService / AuditLog 承担（进程内、重启丢失），尚未
+--     建表或写入；接入时需将 run_id / approval_id / tenant_id / trace_id 与代码对齐。
+--     代码中的 run 状态已使用 COMPLETED / FAILED / REJECTED / WAITING_APPROVAL。
+--   * Milestone 2 及之后的其余表（data_connectors、document_media_assets 等）仍为规划草案，
 --     代码中尚未建表。
 --   * 所有状态/枚举字段以字符串存储，应用层常量必须与本文件的取值保持一致。
 --   * audit_logs 在生产环境建议按月分区（本文件只保留基表定义）。

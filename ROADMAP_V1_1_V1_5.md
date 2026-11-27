@@ -1,6 +1,7 @@
 # NexusFlow v1.1.0 – v1.5.0 企业级能力演进方案（ROADMAP_V1_1_V1_5）
 
-> **定位**：本文件是面向 v1.1.0 至 v1.5.0 的能力演进方案，共 5 个 Milestone、10 个结构化任务。
+> **定位**：本文件是面向 v1.1.0 至 v1.5.0 的能力演进方案，共 5 个 Milestone、11 个结构化任务。
+> **2026-11-27 增补**：Agent Hub × Workflow × MCP × HITL 已按规划文档 `.trae/documents/agent-hub-workflow-mcp-hitl.md` 交付；Task 3.2 完成（运行状态为进程内存储，跨副本持久化拆为 Task 3.3），Task 5.2 的 MCP Server 部分提前落地，其余任务状态不变。
 > **与 `ROADMAP_V1_1.md` 的关系**：`ROADMAP_V1_1.md` 是上一轮已执行完毕的交付清单（知识库实体、级联删除、配额计量、K8s HPA，对应提交 c880e64 / 44b9284 / 9bc2c01 / a244bd7）。本文件在此基础上重新规划更完整的企业级能力，Milestone 1 为增量升级。
 > **执行约定**：按 Milestone 顺序逐个执行，禁止跨任务并发；每个任务验证通过后提交独立 Commit，并将任务状态更新为 `[x]`；接口变更优先更新 proto 契约，存储扩展保留 Memory/Mock 降级路径。
 > **数据契约**：涉及数据库表结构新增或变更时，必须严格对齐 [docs/schema_enterprise_v1_1_to_1_5.sql](docs/schema_enterprise_v1_1_to_1_5.sql) 中的表名、字段名与状态枚举值，并在 Postgres 初始化逻辑中保证幂等建表。
@@ -34,8 +35,13 @@
 * **[ ] Task 3.1: 升级 DAG 引擎，支持基于上下文的条件分支（condition）节点与并发迭代批处理（loop）节点**
   * 条件节点按上游上下文结果选择分支；loop 节点对集合元素并发执行子图并聚合输出；保持现有拓扑校验、层级并发与失败语义不回退。
 
-* **[ ] Task 3.2: 引入工作流人工介入机制（Human-in-the-Loop），支持 human_approval 审批挂起、上下文快照持久化及审批恢复**
+* **[x] Task 3.2: 引入工作流人工介入机制（Human-in-the-Loop），支持 human_approval 审批挂起、上下文快照持久化及审批恢复**
   * 审批节点触发后持久化执行上下文并挂起实例；提供查询待办、批准/驳回接口；审批通过后从快照恢复继续执行，驳回则按失败或指定分支收尾。
+  * 交付情况：新增 `human_approval` 节点、`MemoryRunStore` 检查点、`GET /v1/workflows/runs`、`POST /v1/workflows/runs/{id}/{approve,resume}`；状态对齐 schema 的 `COMPLETED / FAILED / REJECTED / WAITING_APPROVAL`，重复审批返回 409。同时交付 Hub 侧高风险工具审批（202 + `approval_id`、`/v1/approvals/{id}/decide`）。
+  * 边界：检查点与审批记录当前为进程内存储，跨副本/重启恢复由 Task 3.3 承接。
+
+* **[ ] Task 3.3: 将工作流运行、审批与审计状态接入 Postgres，支持多副本恢复**
+  * 按 `docs/schema_enterprise_v1_1_to_1_5.sql` 落库 `workflow_executions` / `workflow_approvals` / `audit_logs`，以 `RunStore` / `ApprovalService` 接口替换内存实现；明确同一 run 的副本粘性或乐观锁，保证审批并发与幂等；审计按月分区并支持保留策略。
 
 ---
 
@@ -43,6 +49,7 @@
 
 * **[ ] Task 4.1: 实现 PII 敏感信息双向脱敏引擎与结构化合规审计日志中间件，支持安全追溯**
   * 入口对提示词与上传文本做 PII 识别与脱敏，出口对模型回复做还原或再次脱敏；审计日志记录操作者、资源、动作与脱敏命中项，支持按租户与时间检索。
+  * 进展：工具调用与审批决策审计已落地（`AuditLog` + `GET /v1/audit`，进程内）；PII 识别/脱敏与 `audit_logs` 持久化待实现。
 
 * **[ ] Task 4.2: 建设多模型路由网关（主备自动故障转移）与租户级用量计量/配额管控（防 429 溢出）**
   * 统一 LLM 调用入口，按模型与租户路由至主/备通道，失败自动切换并熔断；复用并扩展已有计量能力，按租户累计 token 与调用量，超限前置拦截并避免上游 429 溢出。
@@ -56,3 +63,4 @@
 
 * **[ ] Task 5.2: 支持租户级异步事件 Webhook 订阅（HMAC 签名与指数退避重试）以及标准 MCP Server 适配模块**
   * 提供事件订阅管理（任务完成、索引完成、审批结果等），投递时携带 HMAC 签名，失败按指数退避重试并记录投递日志；实现标准 MCP Server，暴露检索、问答与工作流能力供外部 Agent 调用。
+  * 进展：MCP Server 已提前落地（Agent Hub `POST /mcp`，`initialize` / `tools/list` / `tools/call`，工具源为 `ToolRegistry`）；Webhook 订阅、HMAC 签名与事件投递仍待实现。

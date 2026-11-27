@@ -100,6 +100,7 @@ func main() {
 		),
 		gateway.WithKnowledgeBases(pb.NewKnowledgeBaseServiceClient(userConn)),
 		gateway.WithRAGAgent(cfg.RAGAgentURL),
+		gateway.WithWorkflow(cfg.WorkflowTarget, cfg.WorkflowServiceToken),
 		gateway.WithFeedbackStore(feedbackStore),
 		gateway.WithMetering(meterStore, metering.Quota{
 			MaxStorageBytes: cfg.QuotaMaxStorageBytes,

@@ -2,19 +2,23 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 CAPABILITY_INTENT = "intent.classify"
 CAPABILITY_SUMMARY = "summary.compact"
 CAPABILITY_MEMORY_RECALL = "memory.recall"
 CAPABILITY_MEMORY_EXTRACT = "memory.extract"
+CAPABILITY_AGENT_CALL = "agent.call"
+CAPABILITY_TOOL_CALL = "tool.call"
 
 VALID_CAPABILITIES = {
     CAPABILITY_INTENT,
     CAPABILITY_SUMMARY,
     CAPABILITY_MEMORY_RECALL,
     CAPABILITY_MEMORY_EXTRACT,
+    CAPABILITY_AGENT_CALL,
+    CAPABILITY_TOOL_CALL,
 }
 
 
@@ -27,6 +31,18 @@ class AgentSpec:
     timeout_ms: int = 5000
     priority: int = 100
     ttl_seconds: int = 0
+    # Standard agent contract: schema, version and scope used by /v1/call,
+    # dynamic registration and MCP exposure.
+    version: str = "1.0"
+    input_schema: dict[str, Any] = field(default_factory=dict)
+    output_schema: dict[str, Any] = field(default_factory=dict)
+    permissions: frozenset[str] = frozenset()
+    tenant_scope: str = ""
+    tools: frozenset[str] = frozenset()
+    model: str = ""
+    max_turns: int = 0
+    token_budget: int = 0
+    risk: Literal["read", "write", "execute", "external"] = "read"
 
 
 @dataclass
@@ -50,6 +66,11 @@ class AgentRegistry:
         )
         with self._lock:
             self._agents[spec.name] = AgentState(spec=spec, expires_at=expires_at)
+
+    def get(self, name: str) -> AgentSpec | None:
+        with self._lock:
+            state = self._agents.get(name)
+            return state.spec if state is not None else None
 
     def deregister(self, name: str) -> bool:
         with self._lock:
@@ -115,6 +136,14 @@ class AgentRegistry:
                     "healthy": state.healthy,
                     "failures": state.failures,
                     "ttl_seconds": state.spec.ttl_seconds,
+                    "version": state.spec.version,
+                    "risk": state.spec.risk,
+                    "model": state.spec.model,
+                    "tools": sorted(state.spec.tools),
+                    "tenant_scope": state.spec.tenant_scope,
+                    "input_schema": state.spec.input_schema,
+                    "output_schema": state.spec.output_schema,
+                    "permissions": sorted(state.spec.permissions),
                     "expires_in": (
                         round(state.expires_at - now, 1)
                         if state.expires_at is not None

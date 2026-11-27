@@ -211,6 +211,49 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 
 集成测试会走完整链路：创建沙箱 → 上传代码与输入 → execd 执行 → 回读 `/tmp/output.json` → 删除，并校验沙箱没有残留。
 
+### 8.4 工具 / 推理 / MCP / HITL 开关
+
+按 `P0 → P1 → P2 → P3 → P4 → P5` 顺序灰度，任一开关关闭即回到原 `retrieve → generate` 与 `/v1/workflows/run` 路径：
+
+| 环境变量 | 默认 | 作用 |
+| --- | --- | --- |
+| `AGENT_HUB_TOOLS_ENABLED` | false | 注册工具、启用 `POST /v1/call`、`GET /v1/tools`、`GET /v1/audit` |
+| `AGENT_HUB_WORKFLOW_ENABLED` | false | 注册 `workflow.run` 工具（Hub → DAG） |
+| `WORKFLOW_AGENT_NODE` | false | 注册 DAG `agent` 节点（DAG → Hub） |
+| `AGENT_HUB_REASONING_ENABLED` | false | 多轮推理与工具调用循环 |
+| `AGENT_HUB_MCP_ENABLED` | false | `/mcp` Server 与外部 MCP Client |
+| `AGENT_HUB_HITL_ENABLED` | false | 工具审批与 `POST /v1/approvals/{id}/decide` |
+| `HITL_ENABLED` | false | DAG `human_approval` 节点与 runs 持久化 |
+
+- 生产必须设置 `WORKFLOW_SERVICE_TOKEN`（gateway / workflow 两侧一致），agent-hub 通过 `AGENT_HUB_WORKFLOW_SERVICE_TOKEN` 使用同一值；为空表示不做直连校验，仅限本机开发。
+- `WORKFLOW_AGENT_NODE` 依赖 `AGENT_HUB_TOOLS_ENABLED`：`/v1/call` 由后者启用；只开 DAG 节点会导致 agent 调用返回 404。
+- 工具审批：Hub 返回 `202 + approval_id`，批准后带 `approval_id` 重试；DAG 审批经网关 `POST /v1/workflows/runs/{id}/approve|resume`（需 `workflow:run`），重复审批返回 409。
+- 审计查询：`GET /v1/audit?action=tool.call&decision=denied`（按 `x-tenant-id` 过滤）。
+- 生产环境（`APP_ENV=prod`）的 `SANDBOX_BACKEND=local` 会拒绝启动，除非显式设置 `SANDBOX_ALLOW_LOCAL=true`；网关侧 `/v1/sandbox/execute` 仍要求 `sandbox:execute` 权限。
+- 当前 `RunStore` 为进程内 `MemoryRunStore`。多副本启用 HITL 前需改为共享存储或对同一 run 做粘性路由，否则跨副本无法恢复。
+
+### 8.5 审批、MCP 与审计运维
+
+**审批**
+
+- 工具审批（Hub）：`GET /v1/approvals?status=pending` 查看待办，`POST /v1/approvals/{id}/decide` 提交 `{"decision":"approve|reject","reason":"..."}`；两条路径经 Gateway 时均要求 `workflow:run`。
+- 审批有效期默认 600 秒（`ApprovalService` TTL），过期记录自动清理；仅第一次决策生效，重复决策返回 409。
+- 审批通过后需重放调用：Chat 请求带 `approval_id`，`/v1/call` 通过 `envelope.approval_id`；DAG 使用 `POST /v1/workflows/runs/{id}/approve|resume`。
+- `MemoryRunStore` 与 `ApprovalService` 均为进程内状态；滚动重启会使挂起的 run 和待审批工具丢失，生产应先接入共享存储。
+
+**MCP**
+
+- Server 入口为 Agent Hub 的 `POST /mcp`（HTTP JSON-RPC），网关不代理；建议仅在内网暴露，并设置 `AGENT_HUB_ADMIN_TOKEN` 保护。
+- `AGENT_HUB_MCP_SERVERS=name=url,...` 在启动时连接外部 MCP；不可达只记录告警并跳过，不影响 Hub 启动。
+- 外部工具注册为 `mcp.<server>.<tool>`，默认 `risk=external` 且需审批；`sandbox.execute` 默认不暴露，确需开放时设置 `AGENT_HUB_MCP_ALLOW_SANDBOX=true`。
+- 当前仅支持 `initialize` / `tools/list` / `tools/call`，未实现 SSE / stdio 传输与 resources / prompts。
+
+**审计**
+
+- `GET /v1/audit?limit=100&action=tool.call&decision=denied`，按 `x-tenant-id` 过滤；经 Gateway 时要求 `trace:read`。
+- `AuditLog` 为进程内环形缓冲（默认 2000 条），仅用于近期排障；合规留存需接入 `audit_logs` 表并按月分区。
+- 审计不保存工具入参全文，仅记录参数键、风险、决策、租户与 trace，避免凭据/代码泄漏。
+
 ## 9. 回滚与升级
 
 - 滚动升级：逐个更新 `image` 标签后 `kubectl apply`，Deployment 默认使用 RollingUpdate。
@@ -218,4 +261,5 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 - 从 v1.1.0 之前升级：历史任务没有 `markdown_key`，重建索引会返回 `400`，需重新上传文件；既有向量与检索不受影响。
 - 长期记忆存储迁移：先设置 `MEMORY_DRIVER=qdrant` + `MEMORY_QDRANT_URL` 并运行 `python -m nexusflow_agents.agents.memory.backfill` 回填旧 pgvector 向量，再切换流量；回滚 `MEMORY_DRIVER=postgres` 后，qdrant 模式期间新增的记忆需要重新抽取才能恢复语义召回。
 - Agent Hub 迁移：K8s Deployment 已改为 `agent-hub`，旧 `rag-agent` Service 仍指向同一 selector，Gateway 的 `RAG_AGENT_URL` 无需修改；回滚可把镜像切回旧 `rag-agent` 版本。
+- 能力回滚：关闭 `AGENT_HUB_TOOLS_ENABLED` / `AGENT_HUB_REASONING_ENABLED` / `AGENT_HUB_WORKFLOW_ENABLED` / `AGENT_HUB_MCP_ENABLED` / `AGENT_HUB_HITL_ENABLED` / `WORKFLOW_AGENT_NODE` / `HITL_ENABLED` 后滚动重启即可回到旧路径，无需回滚镜像。
 - 回滚：`kubectl -n nexusflow rollout undo deploy/<name>`。PVC 中的数据不会随回滚删除。

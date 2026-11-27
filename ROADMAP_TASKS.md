@@ -1,6 +1,7 @@
 # NexusFlow 版本演进与 Agent 自动执行任务清单 (ROADMAP_TASKS)
 
 > **状态：已归档（全部任务已交付）。** 本文件是 v1.0.0 – v1.2.0 的历史执行清单，仅作交付记录；后续演进以 [ROADMAP_V1_1_V1_5.md](ROADMAP_V1_1_V1_5.md) 为准。
+> **2026-11-27 增补**：Agent Hub 工具调用 / 多轮推理 / MCP / 人机审批已交付，方案与状态见 `.trae/documents/agent-hub-workflow-mcp-hitl.md`；不在本归档清单范围内。
 >
 > **Agent 执行全局指令：** 严格按顺序执行；修改前检索架构与契约；每完成后运行验证命令、更新任务状态（`[x]`）并提交独立 Commit；所有外部依赖保留内存降级路径。
 

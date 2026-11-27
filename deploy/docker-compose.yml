@@ -14,6 +14,9 @@ x-app-env: &app-env
   OBJECT_STORE_DIR: /data/objects
   OBJECT_STORE_BASE: http://minio:9000/nexusflow
   SANDBOX_BACKEND: local
+  # Compose is a local/demo topology; the local backend is explicitly allowed.
+  # Production clusters must use SANDBOX_BACKEND=remote (see deploy/k8s).
+  SANDBOX_ALLOW_LOCAL: "true"
   SANDBOX_WORK_DIR: /tmp/nexusflow-sandboxes
   METRICS_ADDR: ":9100"
 
@@ -91,6 +94,9 @@ services:
       AUTH_TARGET: "auth-service:9096"
       USER_TARGET: "user-service:9097"
       RAG_AGENT_URL: "http://agent-hub:8001"
+      # DAG validate/run proxy (RBAC: workflow:run).
+      WORKFLOW_TARGET: "http://workflow-engine:8081"
+      WORKFLOW_SERVICE_TOKEN: ${WORKFLOW_SERVICE_TOKEN:-}
       # Persist ratings/implicit feedback even when tracing is a no-op.
       FEEDBACK_DRIVER: postgres
       FEEDBACK_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
@@ -256,6 +262,14 @@ services:
     environment:
       <<: *app-env
       WORKFLOW_HTTP_ADDR: ":8081"
+      # Gateway/agent calls carry this token; direct access is rejected.
+      WORKFLOW_SERVICE_TOKEN: ${WORKFLOW_SERVICE_TOKEN:-}
+      # DAG -> Agent Hub node and human approval runs.
+      WORKFLOW_AGENT_NODE: ${WORKFLOW_AGENT_NODE:-false}
+      AGENT_HUB_URL: "http://agent-hub:8001"
+      AGENT_HUB_TOKEN: ${AGENT_HUB_ADMIN_TOKEN:-}
+      AGENT_HUB_TIMEOUT: 30s
+      HITL_ENABLED: ${HITL_ENABLED:-false}
       # nl2sql node: read-only structured queries over the shared Postgres.
       # Production must point this at a SELECT-only role.
       NL2SQL_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
@@ -310,6 +324,19 @@ services:
       AGENT_HUB_PREFER: ${AGENT_HUB_PREFER:-local}
       AGENT_HUB_DYNAMIC_REGISTRATION: ${AGENT_HUB_DYNAMIC_REGISTRATION:-false}
       AGENT_HUB_ADMIN_TOKEN: ${AGENT_HUB_ADMIN_TOKEN:-}
+      # Tool calling, reasoning, MCP and human approval (all default off).
+      AGENT_HUB_TOOLS_ENABLED: ${AGENT_HUB_TOOLS_ENABLED:-false}
+      AGENT_HUB_REASONING_ENABLED: ${AGENT_HUB_REASONING_ENABLED:-false}
+      AGENT_HUB_MCP_ENABLED: ${AGENT_HUB_MCP_ENABLED:-false}
+      AGENT_HUB_HITL_ENABLED: ${AGENT_HUB_HITL_ENABLED:-false}
+      AGENT_HUB_WORKFLOW_ENABLED: ${AGENT_HUB_WORKFLOW_ENABLED:-false}
+      AGENT_HUB_WORKFLOW_URL: "http://workflow-engine:8081"
+      AGENT_HUB_WORKFLOW_SERVICE_TOKEN: ${WORKFLOW_SERVICE_TOKEN:-}
+      AGENT_HUB_REASONING_MAX_TURNS: ${AGENT_HUB_REASONING_MAX_TURNS:-6}
+      AGENT_HUB_REASONING_TIMEOUT_SECONDS: ${AGENT_HUB_REASONING_TIMEOUT_SECONDS:-60}
+      AGENT_HUB_REASONING_TOOL_BUDGET: ${AGENT_HUB_REASONING_TOOL_BUDGET:-12}
+      AGENT_HUB_REASONING_TOKEN_BUDGET: ${AGENT_HUB_REASONING_TOKEN_BUDGET:-20000}
+      AGENT_HUB_MCP_SERVERS: ${AGENT_HUB_MCP_SERVERS:-}
       # Retrieval goes through the gateway so chat reuses the unified
       # multi-route recall + rerank pipeline.
       RAG_APP_ENV: prod

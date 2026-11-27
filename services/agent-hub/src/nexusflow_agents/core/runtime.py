@@ -6,6 +6,7 @@ from nexusflow_agents.core.bootstrap import Runtime, build_runtime
 from nexusflow_agents.core.hub import Hub
 from nexusflow_agents.core.lifecycle import AgentLifecycle
 from nexusflow_agents.core.registry import AgentRegistry
+from nexusflow_agents.core.tooling import ToolService
 
 
 @lru_cache
@@ -23,3 +24,7 @@ def get_registry() -> AgentRegistry:
 
 def get_lifecycle() -> AgentLifecycle:
     return get_runtime().lifecycle
+
+
+def get_tools() -> ToolService:
+    return get_runtime().tools

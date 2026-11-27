@@ -36,6 +36,26 @@ app = FastAPI(
 app.mount("/metrics", make_asgi_app())
 app.include_router(admin_router)
 
+if hub.tools_enabled or hub.workflow_enabled:
+    from nexusflow_agents.api.call import router as call_router
+
+    app.include_router(call_router)
+
+if hub.hitl_enabled or hub.tools_enabled or hub.workflow_enabled:
+    from nexusflow_agents.api.approvals import router as approvals_router
+
+    app.include_router(approvals_router)
+
+if hub.mcp_enabled:
+    from nexusflow_agents.mcp.server import router as mcp_router
+
+    app.include_router(mcp_router)
+
+if hub.tools_enabled or hub.workflow_enabled or hub.hitl_enabled:
+    from nexusflow_agents.api.audit import router as audit_router
+
+    app.include_router(audit_router)
+
 if hub.role in {"all", "rag"}:
     from nexusflow_agents.agents.rag.api.routes import router as rag_router
 

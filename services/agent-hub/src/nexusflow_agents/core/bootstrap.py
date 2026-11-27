@@ -16,6 +16,7 @@ from nexusflow_agents.core.registry import (
     AgentRegistry,
     AgentSpec,
 )
+from nexusflow_agents.core.tooling import ToolRegistry, ToolService
 
 INTENT_CAPABILITIES = frozenset({CAPABILITY_INTENT})
 SUMMARY_CAPABILITIES = frozenset({CAPABILITY_SUMMARY})
@@ -105,12 +106,36 @@ def build_registry(settings: HubSettings | None = None) -> AgentRegistry:
     return registry
 
 
+def build_tool_service(settings: HubSettings | None = None) -> ToolService:
+    """Registers tools according to the capability switches.
+
+    Tools are only imported when a switch is on so a default deployment has no
+    extra HTTP client or workflow dependency at startup.
+    """
+    settings = settings or get_hub_settings()
+    service = ToolService(ToolRegistry())
+    if settings.tools_enabled or settings.reasoning_enabled or settings.mcp_enabled:
+        from nexusflow_agents.agents.rag.tools.gateway import register_gateway_tools
+
+        register_gateway_tools(service)
+    if settings.workflow_enabled:
+        from nexusflow_agents.agents.rag.tools.workflow import register_workflow_tools
+
+        register_workflow_tools(service)
+    if settings.mcp_enabled and settings.mcp_servers:
+        from nexusflow_agents.mcp.client import register_mcp_tools
+
+        register_mcp_tools(service, settings)
+    return service
+
+
 @dataclass
 class Runtime:
     registry: AgentRegistry
     hub: Hub
     lifecycle: AgentLifecycle
     http_executor: HttpExecutor
+    tools: ToolService
 
 
 def build_runtime(settings: HubSettings | None = None) -> Runtime:
@@ -140,4 +165,5 @@ def build_runtime(settings: HubSettings | None = None) -> Runtime:
         hub=hub,
         lifecycle=lifecycle,
         http_executor=http_executor,
+        tools=build_tool_service(settings),
     )

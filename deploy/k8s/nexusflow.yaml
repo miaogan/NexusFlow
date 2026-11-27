@@ -48,6 +48,24 @@ data:
   AGENT_HUB_PORT: "8001"
   AGENT_HUB_PREFER: "local"
   AGENT_HUB_DYNAMIC_REGISTRATION: "false"
+  # Tools / reasoning / MCP / HITL switches (roll out in order).
+  AGENT_HUB_TOOLS_ENABLED: "false"
+  AGENT_HUB_REASONING_ENABLED: "false"
+  AGENT_HUB_MCP_ENABLED: "false"
+  AGENT_HUB_HITL_ENABLED: "false"
+  AGENT_HUB_WORKFLOW_ENABLED: "false"
+  AGENT_HUB_WORKFLOW_URL: "http://workflow-engine:8081"
+  AGENT_HUB_REASONING_MAX_TURNS: "6"
+  AGENT_HUB_REASONING_TIMEOUT_SECONDS: "60"
+  AGENT_HUB_REASONING_TOOL_BUDGET: "12"
+  AGENT_HUB_REASONING_TOKEN_BUDGET: "20000"
+  AGENT_HUB_MCP_SERVERS: ""
+  # Workflow engine proxy + DAG -> Agent Hub node.
+  WORKFLOW_TARGET: "http://workflow-engine:8081"
+  WORKFLOW_AGENT_NODE: "false"
+  AGENT_HUB_URL: "http://rag-agent:8001"
+  AGENT_HUB_TIMEOUT: "30s"
+  HITL_ENABLED: "false"
   # Memory content lives in Postgres; vectors live in Qdrant.
   MEMORY_DRIVER: "qdrant"
   MEMORY_DATABASE_URL: "postgresql://nexusflow:change-me@postgres.nexusflow.svc:5432/nexusflow"
@@ -67,6 +85,10 @@ type: Opaque
 stringData:
   JWT_SECRET: "change-me-in-production"
   OPENSANDBOX_TOKEN: ""
+  # Shared by gateway -> workflow and agent-hub -> workflow; empty disables
+  # the direct-access check (dev only).
+  WORKFLOW_SERVICE_TOKEN: ""
+  AGENT_HUB_WORKFLOW_SERVICE_TOKEN: ""
   LLAMAINDEX_EMBEDDING_API_KEY: ""
   RAG_LLM_BASE_URL: ""
   RAG_LLM_API_KEY: ""

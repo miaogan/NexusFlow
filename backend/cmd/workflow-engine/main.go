@@ -29,11 +29,22 @@ func main() {
 		registry.Register(workflow.StageNode{Name: stage})
 	}
 	registry.Register(newNL2SQLNode(ctx, cfg, logger))
+	if cfg.WorkflowAgentNode {
+		registry.Register(workflow.NewAgentNode(cfg.AgentHubURL, cfg.AgentHubToken, cfg.AgentHubTimeout))
+	}
+	if cfg.WorkflowHITL {
+		registry.Register(workflow.HumanApprovalNode{})
+	}
 	engine := workflow.NewEngine(registry, logger)
+	runStore := workflow.NewMemoryRunStore(500)
 
 	srv := &http.Server{
-		Addr:              cfg.WorkflowHTTPAddr,
-		Handler:           workflow.NewHTTPHandler(engine, registry),
+		Addr: cfg.WorkflowHTTPAddr,
+		Handler: workflow.NewHTTPHandler(
+			engine, registry,
+			workflow.WithServiceToken(cfg.WorkflowServiceToken),
+			workflow.WithRunStore(runStore),
+		),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	if err := httpserver.Serve(ctx, srv, logger); err != nil {

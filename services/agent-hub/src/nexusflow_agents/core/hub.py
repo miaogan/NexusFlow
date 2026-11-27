@@ -127,6 +127,69 @@ class Hub:
             attempts=attempts,
         )
 
+    def call_agent(
+        self,
+        name: str,
+        capability: str,
+        payload: dict[str, Any],
+        ctx: dict[str, Any] | None = None,
+        *,
+        required: bool = False,
+    ) -> AgentResult:
+        """Invokes one named spoke instead of resolving by capability."""
+        context = ctx or {}
+        spec = self._registry.get(name)
+        if spec is None:
+            message = f"unknown agent: {name}"
+            if required:
+                raise AgentUnavailable(message)
+            return AgentResult(ok=False, error=message, degraded=True)
+        if capability and capability not in spec.capabilities:
+            message = f"agent {name} does not provide {capability}"
+            if required:
+                raise AgentUnavailable(message)
+            return AgentResult(ok=False, error=message, degraded=True, agent=name)
+
+        executor = self._executors.get(spec.kind)
+        if executor is None:
+            message = f"no executor for kind {spec.kind}"
+            if required:
+                raise AgentUnavailable(message)
+            return AgentResult(ok=False, error=message, degraded=True, agent=name)
+
+        target = capability or next(iter(sorted(spec.capabilities)), "")
+        started = time.perf_counter()
+        try:
+            data = executor.call(spec, target, payload, context)
+        except Exception as exc:
+            elapsed = (time.perf_counter() - started) * 1000
+            message = str(exc) or exc.__class__.__name__
+            HUB_CALLS.labels(capability=target, agent=spec.name, status="error").inc()
+            HUB_LATENCY.labels(capability=target, agent=spec.name).observe(elapsed / 1000)
+            self._registry.mark_failure(spec.name, self._fail_threshold)
+            if required:
+                raise AgentUnavailable(message) from exc
+            return AgentResult(
+                ok=False,
+                error=message,
+                agent=spec.name,
+                latency_ms=round(elapsed, 2),
+                degraded=True,
+                attempts=1,
+            )
+
+        elapsed = (time.perf_counter() - started) * 1000
+        HUB_CALLS.labels(capability=target, agent=spec.name, status="ok").inc()
+        HUB_LATENCY.labels(capability=target, agent=spec.name).observe(elapsed / 1000)
+        self._registry.mark_success(spec.name)
+        return AgentResult(
+            ok=True,
+            data=data,
+            agent=spec.name,
+            latency_ms=round(elapsed, 2),
+            attempts=1,
+        )
+
     def submit_background(
         self,
         capability: str,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -21,6 +22,17 @@ class AgentRegistration(BaseModel):
     timeout_ms: int = Field(default=5000, ge=100, le=120000)
     priority: int = Field(default=100, ge=0, le=1000)
     ttl_seconds: int = Field(default=0, ge=0, le=86400)
+    # Standard agent contract shared with /v1/call and MCP.
+    version: str = Field(default="1.0", max_length=32)
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    output_schema: dict[str, Any] = Field(default_factory=dict)
+    permissions: list[str] = Field(default_factory=list)
+    tenant_scope: str = Field(default="", max_length=128)
+    tools: list[str] = Field(default_factory=list)
+    model: str = Field(default="", max_length=128)
+    max_turns: int = Field(default=0, ge=0, le=50)
+    token_budget: int = Field(default=0, ge=0)
+    risk: Literal["read", "write", "execute", "external"] = "read"
 
 
 def _authorize(request: Request) -> None:
@@ -59,6 +71,16 @@ def register_agent(request: Request, body: AgentRegistration) -> dict[str, objec
             timeout_ms=body.timeout_ms,
             priority=body.priority,
             ttl_seconds=ttl,
+            version=body.version,
+            input_schema=body.input_schema,
+            output_schema=body.output_schema,
+            permissions=frozenset(body.permissions),
+            tenant_scope=body.tenant_scope,
+            tools=frozenset(body.tools),
+            model=body.model,
+            max_turns=body.max_turns,
+            token_budget=body.token_budget,
+            risk=body.risk,
         )
     )
     return {"registered": body.name, "ttl_seconds": ttl}

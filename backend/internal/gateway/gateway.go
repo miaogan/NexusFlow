@@ -53,6 +53,8 @@ type Gateway struct {
 	feedbackStore feedback.Store
 	// rag proxies chat/conversation calls to the Python RAG agent.
 	rag *ragProxy
+	// workflow proxies DAG validate/run calls to the workflow engine.
+	workflow *workflowProxy
 	// blacklist rejects revoked access tokens at the edge.
 	blacklist revocation.Blacklist
 	// allowedUploadHosts restricts presigned upload URLs; empty disables the check.
@@ -88,6 +90,12 @@ func WithTracer(t tracing.Tracer) Option {
 // Python rag-agent service. An empty URL leaves chat disabled.
 func WithRAGAgent(rawURL string) Option {
 	return func(g *Gateway) { g.rag = newRAGProxy(rawURL) }
+}
+
+// WithWorkflow enables the DAG validate/run proxy. The service token is
+// attached to upstream calls so the engine can reject direct access.
+func WithWorkflow(rawURL, serviceToken string) Option {
+	return func(g *Gateway) { g.workflow = newWorkflowProxy(rawURL, serviceToken) }
 }
 
 // WithIdentity attaches the authentication and user-management gRPC clients.
@@ -201,7 +209,20 @@ func (g *Gateway) Router() *gin.Engine {
 	v1.GET("/corrected-answers", RequirePermission("search:use"), g.listCorrectedAnswers)
 	v1.GET("/traces", g.listTraces)
 	v1.GET("/traces/:id", g.getTrace)
-	v1.POST("/sandbox/execute", g.executeSandbox)
+	// Human-in-the-loop approvals and audit (proxied to the Agent Hub).
+	v1.GET("/approvals", RequirePermission("workflow:run"), g.listApprovals)
+	v1.GET("/approvals/:id", RequirePermission("workflow:run"), g.getApproval)
+	v1.POST("/approvals/:id/decide", RequirePermission("workflow:run"), g.decideApproval)
+	v1.GET("/audit", RequirePermission("trace:read"), g.listAudit)
+	v1.POST("/sandbox/execute", RequirePermission("sandbox:execute"), g.executeSandbox)
+	// Workflow DAG validation and execution (proxied to the Go engine).
+	v1.POST("/workflows/validate", RequirePermission("workflow:run"), g.workflowValidate)
+	v1.POST("/workflows/run", RequirePermission("workflow:run"), g.workflowRun)
+	// Persisted runs and human-in-the-loop approval.
+	v1.GET("/workflows/runs", RequirePermission("workflow:run"), g.workflowRuns)
+	v1.GET("/workflows/runs/:id", RequirePermission("workflow:run"), g.workflowRunDetail)
+	v1.POST("/workflows/runs/:id/approve", RequirePermission("workflow:run"), g.workflowApprove)
+	v1.POST("/workflows/runs/:id/resume", RequirePermission("workflow:run"), g.workflowResume)
 	v1.GET("/me", g.me)
 
 	// Knowledge-base management and namespace discovery.

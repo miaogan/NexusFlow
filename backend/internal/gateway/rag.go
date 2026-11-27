@@ -93,6 +93,8 @@ type chatReq struct {
 	TopK           int               `json:"top_k"`
 	KBID           string            `json:"kb_id"`
 	Filters        map[string]string `json:"filters"`
+	// ApprovalID replays an approved high-risk tool call.
+	ApprovalID string `json:"approval_id"`
 }
 
 func (g *Gateway) chat(c *gin.Context) {

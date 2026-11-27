@@ -12,12 +12,15 @@ from nexusflow_agents.agents.rag.services.hub_agents import (
     HubSummarizer,
 )
 from nexusflow_agents.agents.rag.services.llm import AnswerGenerator
+from nexusflow_agents.agents.rag.services.reasoning import ReasoningLoop
 from nexusflow_agents.agents.rag.services.retrieval import GatewayRetriever
 from nexusflow_agents.agents.rag.services.store import (
     ConversationStore,
     InMemoryConversationStore,
     PostgresConversationStore,
 )
+from nexusflow_agents.core.config import get_hub_settings
+from nexusflow_agents.core.runtime import get_tools
 
 
 @lru_cache
@@ -29,17 +32,41 @@ def get_store() -> ConversationStore:
 
 
 @lru_cache
-def get_chat_graph() -> ChatGraph:
+def get_generator() -> AnswerGenerator:
     settings = get_settings()
-    retriever = GatewayRetriever(settings.gateway_url, settings.search_timeout_seconds)
-    generator = AnswerGenerator(
+    return AnswerGenerator(
         base_url=settings.llm_base_url,
         api_key=settings.llm_api_key,
         model=settings.llm_model,
         timeout_seconds=settings.llm_timeout_seconds,
         max_context_chars=settings.max_context_chars,
     )
-    return ChatGraph(retriever, generator)
+
+
+@lru_cache
+def get_chat_graph() -> ChatGraph:
+    settings = get_settings()
+    retriever = GatewayRetriever(settings.gateway_url, settings.search_timeout_seconds)
+    return ChatGraph(retriever, get_generator())
+
+
+@lru_cache
+def get_reasoning() -> ReasoningLoop | None:
+    hub_settings = get_hub_settings()
+    if not hub_settings.reasoning_enabled:
+        return None
+    from nexusflow_agents.agents.rag.services.approvals import (
+        approval_checker,
+        get_approvals,
+    )
+
+    return ReasoningLoop(
+        get_generator(),
+        get_tools(),
+        hub_settings,
+        approval_checker=approval_checker(),
+        approvals=get_approvals(),
+    )
 
 
 @lru_cache
@@ -77,4 +104,5 @@ def get_service() -> ChatService:
         get_summarizer(),
         get_memory_client(),
         get_corrected_provider(),
+        get_reasoning(),
     )

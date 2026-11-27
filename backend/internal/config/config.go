@@ -21,6 +21,18 @@ type Config struct {
 	AuthGRPCAddr       string
 	UserGRPCAddr       string
 	WorkflowHTTPAddr   string
+	// WorkflowTarget is the workflow engine base URL used by the gateway proxy.
+	WorkflowTarget string
+	// WorkflowServiceToken authenticates gateway/agent calls to the engine.
+	WorkflowServiceToken string
+	// WorkflowAgentNode registers the DAG -> Agent Hub node.
+	WorkflowAgentNode bool
+	// WorkflowHITL registers the human_approval node and run persistence.
+	WorkflowHITL bool
+	// AgentHubURL/AgentHubToken point the agent node at POST /v1/call.
+	AgentHubURL     string
+	AgentHubToken   string
+	AgentHubTimeout time.Duration
 
 	// Downstream endpoints used by the gateway / workers.
 	IngestionTarget string
@@ -76,10 +88,13 @@ type Config struct {
 	SeedAdminUsername string
 	SeedAdminPassword string
 
-	SandboxBackend   string
-	SandboxWorkDir   string
-	OpenSandboxURL   string
-	OpenSandboxToken string
+	SandboxBackend string
+	// SandboxAllowLocal permits the non-isolated local backend in prod; it is
+	// a development convenience, not a security boundary.
+	SandboxAllowLocal bool
+	SandboxWorkDir    string
+	OpenSandboxURL    string
+	OpenSandboxToken  string
 	// OpenSandboxPythonImage / OpenSandboxNodeImage back bare "python"/"node"
 	// runtimes; versioned runtimes such as "python:3.11" are used as images.
 	OpenSandboxPythonImage string
@@ -121,14 +136,21 @@ func Load() Config {
 	return Config{
 		Env: env("APP_ENV", "dev"),
 
-		GatewayHTTPAddr:    env("GATEWAY_HTTP_ADDR", ":8080"),
-		IngestionGRPCAddr:  env("INGESTION_GRPC_ADDR", ":9095"),
-		ProcessingGRPCAddr: env("PROCESSING_GRPC_ADDR", ":9092"),
-		SandboxGRPCAddr:    env("SANDBOX_GRPC_ADDR", ":9093"),
-		QueryGRPCAddr:      env("QUERY_GRPC_ADDR", ":9094"),
-		AuthGRPCAddr:       env("AUTH_GRPC_ADDR", ":9096"),
-		UserGRPCAddr:       env("USER_GRPC_ADDR", ":9097"),
-		WorkflowHTTPAddr:   env("WORKFLOW_HTTP_ADDR", ":8081"),
+		GatewayHTTPAddr:      env("GATEWAY_HTTP_ADDR", ":8080"),
+		IngestionGRPCAddr:    env("INGESTION_GRPC_ADDR", ":9095"),
+		ProcessingGRPCAddr:   env("PROCESSING_GRPC_ADDR", ":9092"),
+		SandboxGRPCAddr:      env("SANDBOX_GRPC_ADDR", ":9093"),
+		QueryGRPCAddr:        env("QUERY_GRPC_ADDR", ":9094"),
+		AuthGRPCAddr:         env("AUTH_GRPC_ADDR", ":9096"),
+		UserGRPCAddr:         env("USER_GRPC_ADDR", ":9097"),
+		WorkflowHTTPAddr:     env("WORKFLOW_HTTP_ADDR", ":8081"),
+		WorkflowTarget:       env("WORKFLOW_TARGET", "http://127.0.0.1:8081"),
+		WorkflowServiceToken: env("WORKFLOW_SERVICE_TOKEN", ""),
+		WorkflowAgentNode:    envBool("WORKFLOW_AGENT_NODE", false),
+		WorkflowHITL:         envBool("HITL_ENABLED", false),
+		AgentHubURL:          env("AGENT_HUB_URL", "http://127.0.0.1:8001"),
+		AgentHubToken:        env("AGENT_HUB_TOKEN", ""),
+		AgentHubTimeout:      envDuration("AGENT_HUB_TIMEOUT", 30*time.Second),
 
 		IngestionTarget: env("INGESTION_TARGET", "127.0.0.1:9095"),
 		QueryTarget:     env("QUERY_TARGET", "127.0.0.1:9094"),
@@ -172,6 +194,7 @@ func Load() Config {
 		SeedAdminPassword: env("SEED_ADMIN_PASSWORD", "admin123"),
 
 		SandboxBackend:         env("SANDBOX_BACKEND", "local"),
+		SandboxAllowLocal:      envBool("SANDBOX_ALLOW_LOCAL", false),
 		SandboxWorkDir:         env("SANDBOX_WORK_DIR", "/tmp/nexusflow-sandboxes"),
 		OpenSandboxURL:         env("OPENSANDBOX_URL", ""),
 		OpenSandboxToken:       env("OPENSANDBOX_TOKEN", ""),

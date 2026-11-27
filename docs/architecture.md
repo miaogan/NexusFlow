@@ -68,7 +68,7 @@ V2.0 技术选型的核心考量如下：
         v                            v                         v
 +----------------------------------------------------------------------------------+
 | 编排调度层                                                                       |
-|  Ingestion（元数据 · 任务 · 级联删除 · Reindex）        Workflow Engine（DAG 调度）   |
+|  Ingestion（元数据 · 任务 · 级联删除 · Reindex）  Workflow Engine（DAG · agent · human_approval） |
 +----------------------------------------------------------------------------------+
         | 任务事件 / 解析产物         | 节点执行
         v                             v
@@ -86,6 +86,8 @@ V2.0 技术选型的核心考量如下：
 |    └─ 负反馈计数（rag_feedback，降权用） --> PostgreSQL                            |
 |  Agent Hub（星型调度 · capability 路由 · 超时/故障转移/健康摘除）                  |
 |    ├─ intent / summary / memory（in-process，或拆分 remote worker）                 |
+|    ├─ ToolService / ReasoningLoop（search · sandbox · workflow.run · mcp.*）         |
+|    ├─ MCP Server（/mcp） <--> 外部 MCP / Agent；ApprovalService / AuditLog          |
 |    ├─ 复用 /v1/search --> Gateway / Query Service                                 |
 |    ├─ 会话/记忆正文 --> PostgreSQL      └─ 记忆向量 --> Qdrant                      |
 +----------------------------------------------------------------------------------+
@@ -149,6 +151,39 @@ Agent Hub 是 intent / summary / memory 的中心节点，Hub 与 Agent 构成�
 - **动态调度**：按优先级尝试，失败/超时切换到下一个；可选能力全部失败时返回降级结果（知识问答 / 不压缩 / 空记忆），不阻断主链路。
 - **健康与注册**：后台任务探活 HTTP Agent，连续失败摘除、恢复后回归；动态注册默认关闭，开启时需 Admin Token 与 TTL 心跳。
 - **部署形态**：默认 `ROLE=all`、`MODE=local` 单容器；`ROLE=intent|summary|memory` + `MODE=remote|hybrid` 支持拆分与回滚。
+
+### 3.2 工具、推理、双向联动与人机协同
+
+在星型调度之上，Agent Hub 增加统一工具契约、推理循环与外部生态接入；Go Workflow 增加 `agent` / `human_approval` 节点与运行持久化。两者通过 `/v1/call` 与 `/v1/workflows/*` 形成双向闭环：
+
+```text
+ Gateway ──/v1/chat(stream)──> Agent Hub ──retrieve──> Gateway /v1/search
+    │                             │
+    │                             ├── ReasoningLoop: plan -> tool -> observe -> answer
+    │                             │       └── ToolService: search / sandbox / workflow.run / mcp.*
+    │                             │
+    │                             └── POST /v1/call <──────────────┐
+    │                                                             │
+    └──/v1/workflows/{validate,run,runs,approve}──> Workflow Engine
+                                                     ├── agent 节点 ──POST /v1/call──┘
+                                                     ├── human_approval -> WAITING_APPROVAL
+                                                     └── MemoryRunStore（检查点/恢复）
+```
+
+- **统一契约**：`ToolSpec{name, description, input_schema, output_schema, risk, timeout_ms, requires_approval}`、`CallEnvelope{tenant_id, user_id, trace_id, request_id, approval_id, deadline_ms, budget}`；`AgentSpec` 同步暴露 schema/version/permissions/tenant_scope/tools，供动态注册与 MCP 复用。
+- **推理循环**：`AGENT_HUB_REASONING_ENABLED` 开启后，Chat 在检索后进入 `plan → tool_call → observe → answer`；`max_turns`、工具调用数、Token 与总时限构成硬预算，重复 `tool+args` 抑制，失败回退原 `generate`。SSE 新增 `tool_call` / `tool_result` / `approval_required`。
+- **双向联动**：DAG 的 `agent` 节点将 `config.{agent,capability,input}` 与运行身份发往 Hub `/v1/call`；Hub 的 `workflow.run` 工具优先经网关（携带用户 Bearer）调用 DAG，无用户身份时使用 `WORKFLOW_SERVICE_TOKEN` 直连。网关统一校验 `workflow:run`，workflow 服务校验服务令牌，防止绕过网关。
+- **MCP**：Hub 作为 MCP Server 暴露 `initialize` / `tools/list` / `tools/call`（`POST /mcp`），工具来源为 `ToolRegistry`；作为 Client 通过 `AGENT_HUB_MCP_SERVERS=name=url` 注册外部工具为 `mcp.<server>.<tool>`，外部工具默认 `risk=external` 且需审批，sandbox 默认不暴露。
+- **人机协同**：高风险工具返回 202 + `approval_id`，`ApprovalService` 保存一次性决策（TTL、租户隔离、重复决策 409）；DAG 的 `human_approval` 节点将运行挂起为 `WAITING_APPROVAL`，检查点写入 `RunStore`，批准后从已完成节点继续，拒绝则终止为 `REJECTED`。
+- **安全与审计**：风险分级、JSON Schema 入参校验、输出大小截断、预算超限 429、工具结果包裹为不可信数据；`AuditLog` 记录工具调用与审批决策，可通过 `GET /v1/audit` 按租户/动作查询。
+
+**实现边界（2026-11-27）**
+
+- 运行、审批与审计状态：`MemoryRunStore` / `ApprovalService` / `AuditLog` 均为进程内实现，重启即丢失；目标持久化表已定义在 `docs/schema_enterprise_v1_1_to_1_5.sql`（`workflow_executions` / `workflow_approvals` / `audit_logs`），尚未接入。
+- 多副本：同一 run 的挂起与审批需要共享 `RunStore`，或由网关做粘性路由；否则跨副本无法恢复。
+- MCP：仅 HTTP JSON-RPC（initialize / tools/list / tools/call），未实现 SSE / stdio 传输与 resources / prompts 原语。
+- 推理输出：工具调用与结果逐条流式，最终回答以单个 `token` 事件下发；预算耗尽或工具异常回退普通生成。
+- `agent` 节点依赖 `AGENT_HUB_TOOLS_ENABLED` 启用 `/v1/call`；`/mcp`、`/v1/call`、`/v1/tools` 为 Hub 内部接口，不直接对公网暴露。
 
 ## 4. LlamaIndex 数据处理服务设计
 

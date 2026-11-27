@@ -19,7 +19,7 @@ flowchart TB
     end
 
     subgraph B[编排调度层]
-        WF[Workflow Engine<br/>DAG 校验 · 节点调度]
+        WF[Workflow Engine<br/>DAG 校验 · 节点调度 · agent / human_approval]
         ING[Ingestion Service<br/>元数据 · 任务 · 删除 · Reindex]
     end
 
@@ -32,10 +32,11 @@ flowchart TB
 
     subgraph D[检索问答层]
         QS[Query Service<br/>多路召回 · RRF · Rerank]
-        AGH[Agent Hub<br/>星型调度 · 能力路由 · 故障转移]
+        AGH[Agent Hub<br/>星型调度 · 工具/推理 · MCP · HITL]
         INT[Intent Agent]
         SUM[Summary Agent]
         MEM[Memory Agent]
+        EXT[MCP Server<br/>外部工具 / Agent]
     end
 
     subgraph E[存储层]
@@ -56,6 +57,9 @@ flowchart TB
     AGH -->|intent.classify| INT
     AGH -->|summary.compact| SUM
     AGH -->|memory.recall/extract| MEM
+    AGH <-->|/mcp · tools/call| EXT
+    WF -->|agent 节点 · /v1/call| AGH
+    AGH -->|workflow.run| WF
     AUTH --> RD
     AUTH -->|身份/角色| PG
     MET --> RD
@@ -363,8 +367,34 @@ flowchart LR
 - **长期记忆**：Hub 调用 `memory.recall` 按「租户 + 用户」召回 top-k 注入 prompt；回答落库后通过 Hub 有界后台池提交 `memory.extract`。记忆正文在 Postgres，向量在 Qdrant。
 - **检索复用**：agent-hub 通过 `RAG_GATEWAY_URL` 调用网关 `/v1/search`，复用统一的多路召回 + RRF + 重排链路与 trace。
 - **LangGraph 生成**：`retrieve → generate` 两节点状态图；配置 `RAG_LLM_BASE_URL` + `RAG_LLM_API_KEY` 时调用大模型，未配置时降级为抽取式片段摘要。
-- **SSE 契约不变**：`/v1/chat/stream` 依次推送 `stage(intent) → intent → stage(retrieve) → sources → stage(generate) → token* → done`，Web 端无需改动。
+- **SSE 契约兼容**：`/v1/chat/stream` 仍推送 `stage(intent) → intent → stage(retrieve) → sources → stage(generate) → token* → done`；开启推理后新增 `stage(reasoning)` / `tool_call` / `tool_result` / `approval_required`，旧事件语义不变。
 - **会话存储**：`RAG_DATABASE_URL` 指向 Postgres 时持久化到 `rag_conversations` / `rag_messages`；为空则使用进程内存储。
+
+### 工具调用、双向联动、MCP 与人机协同
+
+四项能力均由开关控制，默认关闭；关闭即回滚到原有 `retrieve → generate` 与 `/v1/workflows/run` 路径。
+
+- **工具契约与通用调用**（`AGENT_HUB_TOOLS_ENABLED`）：`ToolSpec{input/output schema, risk, timeout, requires_approval}` 与 `CallEnvelope{tenant,user,trace,request,approval,deadline,budget}` 统一；`POST /v1/call` 可调用指定 agent 或工具，`GET /v1/tools` 列出工具。
+- **多轮自助推理**（`AGENT_HUB_REASONING_ENABLED`）：LLM `bind_tools` 后循环 `plan → tool_call → observe → answer`；受 `MAX_TURNS` / 工具调用数 / Token / 总时限预算约束，重复 `tool+args` 自动抑制，工具失败交回模型决策，预算耗尽回退原生成。
+- **DAG 双向联动**（`AGENT_HUB_WORKFLOW_ENABLED` / `WORKFLOW_AGENT_NODE`）：DAG 新增 `agent` 节点调用 Hub `/v1/call`；Hub 的 `workflow.run` 工具经网关（携带用户身份）或服务令牌触发 DAG。`x-tenant-id` / `x-trace-id` / deadline 全程透传；网关 `/v1/workflows/*` 统一要求 `workflow:run`。
+- **MCP**（`AGENT_HUB_MCP_ENABLED`）：`POST /mcp` 提供 `initialize` / `tools/list` / `tools/call`；`AGENT_HUB_MCP_SERVERS=name=url,...` 接入外部 MCP，工具注册为 `mcp.<server>.<tool>`。外部工具默认需审批，sandbox 默认不对外暴露。
+- **人机协同**（`AGENT_HUB_HITL_ENABLED` / `HITL_ENABLED`）：高风险工具不执行，返回 202 + `approval_id`，由 `POST /v1/approvals/{id}/decide` 批准/拒绝后重试；DAG 的 `human_approval` 节点使 run 进入 `WAITING_APPROVAL` 并落盘检查点，经 `/v1/workflows/runs/{id}/approve|resume` 恢复，重复审批返回 409。
+- **安全护栏**：工具风险分级（`read/write/execute/external`）、入参 JSON Schema、输出截断、预算超限 429、工具与审批审计（`GET /v1/audit`），工具结果以不可信数据包裹以防提示注入；网关侧 `/v1/sandbox/execute` 要求 `sandbox:execute`。
+
+新增 / 变更接口：
+
+| 方法与路径 | 权限 / 开关 | 说明 |
+| --- | --- | --- |
+| `POST /v1/workflows/{validate,run}` | `workflow:run` | DAG 校验与执行（经 Gateway 代理） |
+| `GET /v1/workflows/runs`、`/v1/workflows/runs/{id}` | `workflow:run` | 运行列表 / 详情 |
+| `POST /v1/workflows/runs/{id}/{approve,resume}` | `workflow:run` | 审批并恢复挂起的 run，重复审批 409 |
+| `GET /v1/approvals`、`/v1/approvals/{id}` | `workflow:run` | 工具审批待办 / 详情 |
+| `POST /v1/approvals/{id}/decide` | `workflow:run` | 批准 / 拒绝高风险工具 |
+| `GET /v1/audit` | `trace:read` | 工具与审批审计查询 |
+| `POST /v1/call`、`GET /v1/tools` | `AGENT_HUB_TOOLS_ENABLED` 或 `AGENT_HUB_WORKFLOW_ENABLED` | Hub 内部通用调用 / 工具列表（供 DAG `agent` 节点使用） |
+| `POST /mcp` | `AGENT_HUB_MCP_ENABLED` | MCP Server：initialize / tools/list / tools/call（直连 Agent Hub） |
+
+> `agent` 节点依赖 `AGENT_HUB_TOOLS_ENABLED` 启用 `/v1/call`；`/mcp` 与 `/v1/call` 为 Hub 内部入口，不对 Gateway 公网暴露。
 
 本地运行（单容器，先启动 dev-all 提供网关与检索）：
 
@@ -583,3 +613,7 @@ make up / down     # 容器编排启停
 - 设计文档中的 NL2SQL 章节已落地为 `nl2sql` 工作流节点（只读 SQL 护栏 + 可选 LLM 生成）；LightRAG 图谱检索已落地为 `graph` 召回路由：LlamaIndex 提供 `/v1/graph/extract` 抽取接口与 `/v1/search` 的 graph 子路由（配置 `LLAMAINDEX_LLM_*` 时用 LLM 抽取实体/关系，否则或调用失败时自动退化为共现词图），Go 侧 `LlamaIndexRetriever` 将三路结果统一接入 RRF。长期记忆与 intent / summary 已合并到 `agent-hub`（默认 in-process，可用 `ROLE` 拆分）：记忆正文在 Postgres，向量在 Qdrant，两者职责分离。（可观测性 / Langfuse 导出与 dev trace viewer 已实现，见上节。）
 - 用户与角色支持三种存储：`memory`（dev-all 单进程默认）、`redis`（`IDENTITY_DRIVER=redis`）与 `postgres`（`IDENTITY_DRIVER=postgres` + `IDENTITY_DATABASE_URL`），后两者供独立部署的 Auth / User 服务跨进程共享；postgres 启动时自动建表并复用内置角色种子。Compose 真机冒烟已验证自动建表、种子管理员登录及 Gateway 身份读取。
 - 登出通过令牌吊销名单即时生效：JWT 携带 `jti`，登出时将该 id 写入 `TOKEN_BLACKLIST_DRIVER`（`memory` 单进程 / `redis` 供 gateway 与 auth-service 共享）并设置剩余有效期 TTL；网关在每次鉴权时拦截已吊销的 access token，auth-service 在 validate/refresh 时拒绝已吊销的 refresh token。Redis 不可用时自动降级为内存名单并告警。
+- 工具调用、审批、审计与工作流运行状态当前均为进程内实现（`ToolService` / `ApprovalService` / `AuditLog` / `MemoryRunStore`），重启会丢失；`docs/schema_enterprise_v1_1_to_1_5.sql` 已定义 `workflow_executions` / `workflow_approvals` / `audit_logs`，可作为后续 Postgres 持久化目标。多副本启用 HITL 前需共享存储或对同一 run 做粘性路由。
+- MCP 当前实现 HTTP JSON-RPC（`initialize` / `tools/list` / `tools/call`），未实现 SSE / stdio 传输及 resources / prompts 原语；外部工具默认 `risk=external` 且需审批，`sandbox.execute` 默认不通过 MCP 暴露（`AGENT_HUB_MCP_ALLOW_SANDBOX` 显式开启）。
+- 推理模式为保证工具循环的确定性，最终回答以单个 `token` 事件下发，`tool_call` / `tool_result` 逐条下发；预算耗尽或工具异常会回退到普通生成。
+- 审批重试：Chat 请求携带 `approval_id` 重放同一问题；`/v1/call` 通过 `envelope.approval_id` 重放；DAG 审批使用 `/v1/workflows/runs/{id}/approve|resume`。

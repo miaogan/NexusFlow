@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -77,6 +78,8 @@ type NodeResult struct {
 }
 
 type RunResult struct {
+	RunID   string         `json:"run_id,omitempty"`
+	Status  string         `json:"status,omitempty"`
 	DAG     string         `json:"dag"`
 	Order   []string       `json:"order"`
 	Results []NodeResult   `json:"results"`
@@ -156,8 +159,33 @@ func (e *Engine) Validate(dag *DAG) ([]string, error) {
 	return order, nil
 }
 
-// Run executes ready nodes concurrently, level by level.
+// RunOptions carries request identity, persistence and resume state.
+type RunOptions struct {
+	Meta Meta
+	// RunID is generated when empty; the same ID is returned for resumes.
+	RunID string
+	// Store persists runs that suspend on a human_approval node.
+	Store RunStore
+	// Resume replays a suspended run from its saved checkpoint.
+	Resume *RunState
+	// Approved marks the pending human_approval node as approved.
+	Approved       bool
+	ApprovedBy     string
+	ApprovalReason string
+}
+
+// Run executes a DAG with no request metadata.
 func (e *Engine) Run(ctx context.Context, dag *DAG, input map[string]any) (*RunResult, error) {
+	return e.RunWithOptions(ctx, dag, input, RunOptions{})
+}
+
+// RunWithOptions executes ready nodes concurrently, level by level.
+func (e *Engine) RunWithOptions(
+	ctx context.Context,
+	dag *DAG,
+	input map[string]any,
+	opts RunOptions,
+) (*RunResult, error) {
 	order, err := e.Validate(dag)
 	if err != nil {
 		return nil, err
@@ -167,77 +195,213 @@ func (e *Engine) Run(ctx context.Context, dag *DAG, input map[string]any) (*RunR
 	for _, n := range dag.Nodes {
 		specs[n.ID] = n
 	}
-	indeg := make(map[string]int, len(dag.Nodes))
 	adj := make(map[string][]string, len(dag.Nodes))
-	remaining := make(map[string]int, len(dag.Nodes))
-	for id := range specs {
-		indeg[id] = 0
-		remaining[id] = 0
-	}
 	for _, edge := range dag.Edges {
 		adj[edge.From] = append(adj[edge.From], edge.To)
-		indeg[edge.To]++
-		remaining[edge.To]++
 	}
 
+	completed := make(map[string]bool, len(dag.Nodes))
 	ec := NewExecutionContext(input)
-	result := &RunResult{DAG: dag.Name, Order: order}
-	ready := make([]string, 0)
-	for id, deg := range indeg {
-		if deg == 0 {
+	result := &RunResult{
+		DAG:    dag.Name,
+		Order:  order,
+		Status: string(RunRunning),
+		RunID:  opts.RunID,
+	}
+	if result.RunID == "" {
+		result.RunID = fmt.Sprintf("run-%d", time.Now().UnixNano())
+	}
+	if opts.Resume != nil {
+		state := opts.Resume
+		result.RunID = state.ID
+		result.Results = append(result.Results, state.Results...)
+		ec = NewExecutionContext(state.Output)
+		for _, res := range state.Results {
+			completed[res.NodeID] = true
+		}
+		// Keep the original input available to downstream nodes.
+		for key, value := range state.Input {
+			if _, ok := ec.Get(key); !ok {
+				ec.Set(key, value)
+			}
+		}
+	}
+	ec.SetMeta(opts.Meta)
+
+	ready := make([]string, 0, len(specs))
+	scheduled := make(map[string]bool, len(specs))
+	for id := range specs {
+		if completed[id] {
+			continue
+		}
+		pending := 0
+		for _, edge := range dag.Edges {
+			if edge.To == id && !completed[edge.From] {
+				pending++
+			}
+		}
+		if pending == 0 {
 			ready = append(ready, id)
+			scheduled[id] = true
 		}
 	}
 
-	doneCount := 0
 	for len(ready) > 0 {
 		sort.Strings(ready)
 		batch := ready
 		ready = nil
 
 		batchResults := make([]NodeResult, len(batch))
+		batchErrs := make([]error, len(batch))
 		var wg sync.WaitGroup
 		for i, id := range batch {
 			wg.Add(1)
 			go func(i int, id string) {
 				defer wg.Done()
 				spec := specs[id]
-				node, _ := e.registry.Get(spec.Type)
 				start := time.Now()
+				if spec.Type == "human_approval" {
+					if opts.Approved && opts.Resume != nil && id == opts.Resume.PendingNode {
+						batchResults[i] = NodeResult{
+							NodeID: id,
+							Output: map[string]any{
+								"approved": true,
+								"by":       opts.ApprovedBy,
+								"reason":   opts.ApprovalReason,
+							},
+							Duration: time.Since(start),
+						}
+						return
+					}
+					batchErrs[i] = ErrWaitingApproval
+					batchResults[i] = NodeResult{
+						NodeID:   id,
+						Duration: time.Since(start),
+						Error:    ErrWaitingApproval.Error(),
+					}
+					return
+				}
+				node, _ := e.registry.Get(spec.Type)
 				out, runErr := node.Run(ctx, ec, spec.Config)
 				res := NodeResult{NodeID: id, Output: out, Duration: time.Since(start)}
 				if runErr != nil {
 					res.Error = runErr.Error()
 				}
 				batchResults[i] = res
+				batchErrs[i] = runErr
 			}(i, id)
 		}
 		wg.Wait()
 
+		waiting := ""
 		for i, id := range batch {
 			res := batchResults[i]
-			if res.Error != "" {
+			if batchErrs[i] != nil {
+				if errors.Is(batchErrs[i], ErrWaitingApproval) {
+					waiting = id
+					continue
+				}
 				result.Results = append(result.Results, res)
 				e.logger.Warn("node failed", "dag", dag.Name, "node", id, "error", res.Error)
 				result.Output = ec.Snapshot()
+				result.Status = string(RunFailed)
+				e.save(opts, result, dag, input, res.Error)
 				return result, fmt.Errorf("node %s failed: %s", id, res.Error)
 			}
 			ec.mergeOutput(id, res.Output)
 			result.Results = append(result.Results, res)
 			e.logger.Info("node completed", "dag", dag.Name, "node", id, "duration", res.Duration)
-			doneCount++
+			completed[id] = true
 			for _, child := range adj[id] {
-				remaining[child]--
-				if remaining[child] == 0 {
+				if completed[child] {
+					continue
+				}
+				pending := false
+				for _, edge := range dag.Edges {
+					if edge.To == child && !completed[edge.From] {
+						pending = true
+						break
+					}
+				}
+				if !pending && !scheduled[child] {
+					scheduled[child] = true
 					ready = append(ready, child)
 				}
 			}
 		}
+
+		if waiting != "" {
+			result.Status = string(RunWaitingApproval)
+			result.Output = ec.Snapshot()
+			e.saveWithPending(opts, result, dag, input, waiting)
+			e.logger.Info("run waiting for approval", "dag", dag.Name, "node", waiting, "run", result.RunID)
+			return result, nil
+		}
 	}
 
-	if doneCount != len(specs) {
+	if len(completed) != len(specs) {
 		return result, fmt.Errorf("dag execution incomplete")
 	}
+	result.Status = string(RunSucceeded)
 	result.Output = ec.Snapshot()
+	e.save(opts, result, dag, input, "")
 	return result, nil
+}
+
+// save persists a finished or failed run when a store is configured.
+func (e *Engine) save(
+	opts RunOptions,
+	result *RunResult,
+	dag *DAG,
+	input map[string]any,
+	errText string,
+) {
+	if opts.Store == nil {
+		return
+	}
+	state := e.state(opts, result, dag, input, "", errText)
+	opts.Store.Save(state)
+}
+
+func (e *Engine) saveWithPending(
+	opts RunOptions,
+	result *RunResult,
+	dag *DAG,
+	input map[string]any,
+	pending string,
+) {
+	if opts.Store == nil {
+		return
+	}
+	state := e.state(opts, result, dag, input, pending, "")
+	opts.Store.Save(state)
+}
+
+func (e *Engine) state(
+	opts RunOptions,
+	result *RunResult,
+	dag *DAG,
+	input map[string]any,
+	pending string,
+	errText string,
+) *RunState {
+	now := time.Now()
+	created := now
+	if opts.Resume != nil {
+		created = opts.Resume.CreatedAt
+	}
+	return &RunState{
+		ID:          result.RunID,
+		DAG:         *dag,
+		Input:       input,
+		Meta:        opts.Meta,
+		Status:      result.Status,
+		Order:       result.Order,
+		Results:     result.Results,
+		Output:      result.Output,
+		PendingNode: pending,
+		Error:       errText,
+		CreatedAt:   created,
+		UpdatedAt:   now,
+	}
 }

@@ -20,9 +20,12 @@ from nexusflow_agents.agents.rag.services.corrected import (
 )
 from nexusflow_agents.agents.rag.services.intent import HttpIntentClassifier, IntentClassifier
 from nexusflow_agents.agents.rag.services.memory import ConversationMemory, HttpMemoryClient
+from nexusflow_agents.agents.rag.services.reasoning import ApprovalPending, ReasoningLoop
 from nexusflow_agents.agents.rag.services.retrieval import RetrievalUnavailable
 from nexusflow_agents.agents.rag.services.store import ConversationNotFound, ConversationStore
 from nexusflow_agents.agents.rag.services.summary import ConversationSummarizer, HttpSummarizer
+
+APPROVAL_PENDING_ANSWER = "该操作需要人工审批，已暂停执行。"
 
 
 class ChatService:
@@ -37,6 +40,7 @@ class ChatService:
         summarizer: ConversationSummarizer | None = None,
         memory: ConversationMemory | None = None,
         corrections: CorrectedAnswerProvider | None = None,
+        reasoning: ReasoningLoop | None = None,
     ) -> None:
         self._store = store
         self._graph = graph
@@ -51,6 +55,8 @@ class ChatService:
         self._corrections: CorrectedAnswerProvider = (
             corrections or NullCorrectedAnswerProvider()
         )
+        # Optional multi-turn tool loop; disabled unless reasoning is enabled.
+        self._reasoning = reasoning
 
     def _prepare_history(
         self, conv: dict[str, Any]
@@ -120,6 +126,73 @@ class ChatService:
         except Exception:  # noqa: BLE001 - corrections must never fail a turn
             return []
 
+    def _reasoning_state(
+        self,
+        *,
+        message: str,
+        history: list[dict[str, str]],
+        summary: str,
+        memories: list[str],
+        corrected: list[dict[str, Any]],
+        top_k: int,
+        req: ChatRequest,
+        tenant_id: str,
+        user_id: str,
+        auth_header: str | None,
+    ) -> dict[str, Any] | None:
+        """Runs retrieval + the reasoning loop; None means fall back."""
+        if self._reasoning is None or not self._reasoning.enabled:
+            return None
+        try:
+            retrieved = self._graph.retrieve(
+                query=message,
+                tenant_id=tenant_id,
+                top_k=top_k,
+                kb_id=req.kb_id,
+                filters=req.filters,
+                auth_header=auth_header,
+            )
+        except Exception:  # noqa: BLE001 - retrieval failure falls back to graph
+            return None
+        chunks = retrieved.get("chunks") or []
+        try:
+            outcome = self._reasoning.run(
+                query=message,
+                history=history,
+                chunks=chunks,
+                summary=summary,
+                memories=memories,
+                corrected=corrected,
+                envelope={
+                    "tenant_id": tenant_id,
+                    "user_id": user_id,
+                    "trace_id": retrieved.get("trace_id") or "",
+                    "approval_id": req.approval_id or "",
+                },
+                auth_header=auth_header,
+                extra_ctx={
+                    "kb_id": req.kb_id,
+                    "filters": req.filters,
+                    "top_k": top_k,
+                },
+            )
+        except ApprovalPending as exc:
+            return {
+                "answer": APPROVAL_PENDING_ANSWER
+                + f"（approval_id={exc.approval_id}）",
+                "citations": self._graph.citations(chunks),
+                "trace_id": retrieved.get("trace_id"),
+            }
+        except Exception:  # noqa: BLE001 - tool loop must never break chat
+            return None
+        if not outcome.answer:
+            return None
+        return {
+            "answer": outcome.answer,
+            "citations": self._graph.citations(chunks),
+            "trace_id": retrieved.get("trace_id"),
+        }
+
     def chat(
         self,
         req: ChatRequest,
@@ -150,19 +223,32 @@ class ChatService:
         intent = self._intent.classify(message, history)
         if intent.get("need_retrieval", True):
             corrected = self._corrected_answers(message, tenant_id, auth_header)
-            state = self._graph.invoke(
-                tenant_id=tenant_id,
-                user_id=user_id,
-                query=message,
+            state = self._reasoning_state(
+                message=message,
                 history=history,
                 summary=summary,
                 memories=memories,
-                top_k=top_k,
-                kb_id=req.kb_id,
-                filters=req.filters,
-                auth_header=auth_header,
                 corrected=corrected,
+                top_k=top_k,
+                req=req,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                auth_header=auth_header,
             )
+            if state is None:
+                state = self._graph.invoke(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    query=message,
+                    history=history,
+                    summary=summary,
+                    memories=memories,
+                    top_k=top_k,
+                    kb_id=req.kb_id,
+                    filters=req.filters,
+                    auth_header=auth_header,
+                    corrected=corrected,
+                )
             answer = state.get("answer") or ""
             citations: list[dict[str, Any]] = state.get("citations") or []
             trace_id = state.get("trace_id")
@@ -295,23 +381,60 @@ class ChatService:
         }
         yield {"type": "stage", "stage": "generate", "status": "start"}
 
-        parts: list[str] = []
-        try:
-            async for piece in self._graph.stream_answer(
-                message,
-                history,
-                chunks,
-                summary=summary,
-                memories=memories,
-                corrected=corrected,
-            ):
-                parts.append(piece)
-                yield {"type": "token", "content": piece}
-        except Exception as exc:  # noqa: BLE001 - surface upstream LLM failures
-            yield {"type": "error", "error": f"generation failed: {exc}"}
-            return
+        answer = ""
+        streamed = False
+        if self._reasoning is not None and self._reasoning.enabled:
+            try:
+                async for event in self._reasoning.astream(
+                    query=message,
+                    history=history,
+                    chunks=chunks,
+                    summary=summary,
+                    memories=memories,
+                    corrected=corrected,
+                    envelope={
+                        "tenant_id": tenant_id,
+                        "user_id": user_id,
+                        "trace_id": retrieved.get("trace_id") or "",
+                        "approval_id": req.approval_id or "",
+                    },
+                    auth_header=auth_header,
+                    extra_ctx={
+                        "kb_id": req.kb_id,
+                        "filters": req.filters,
+                        "top_k": top_k,
+                    },
+                ):
+                    if event["type"] == "final":
+                        answer = str(event.get("answer") or "")
+                        if event.get("stopped") == "approval_required" and not answer:
+                            answer = APPROVAL_PENDING_ANSWER
+                            if event.get("approval_id"):
+                                answer += f"（approval_id={event['approval_id']}）"
+                            yield {"type": "token", "content": answer}
+                        continue
+                    yield event
+                streamed = True
+            except Exception:  # noqa: BLE001 - tool loop falls back to generate
+                answer = ""
 
-        answer = "".join(parts)
+        if not streamed or not answer:
+            parts: list[str] = []
+            try:
+                async for piece in self._graph.stream_answer(
+                    message,
+                    history,
+                    chunks,
+                    summary=summary,
+                    memories=memories,
+                    corrected=corrected,
+                ):
+                    parts.append(piece)
+                    yield {"type": "token", "content": piece}
+            except Exception as exc:  # noqa: BLE001 - surface upstream LLM failures
+                yield {"type": "error", "error": f"generation failed: {exc}"}
+                return
+            answer = "".join(parts)
         msg = await run_in_threadpool(
             self._store.append, conv["id"], "assistant", answer, citations
         )

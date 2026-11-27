@@ -201,7 +201,14 @@ func main() {
 		}
 	}
 	wfRegistry.Register(workflow.NewNL2SQLNode(nl2sqlOpts...))
+	if cfg.WorkflowAgentNode {
+		wfRegistry.Register(workflow.NewAgentNode(cfg.AgentHubURL, cfg.AgentHubToken, cfg.AgentHubTimeout))
+	}
+	if cfg.WorkflowHITL {
+		wfRegistry.Register(workflow.HumanApprovalNode{})
+	}
 	wfEngine := workflow.NewEngine(wfRegistry, logger)
+	wfRunStore := workflow.NewMemoryRunStore(500)
 
 	errCh := make(chan error, 12)
 	go func() {
@@ -283,6 +290,7 @@ func main() {
 		),
 		gateway.WithKnowledgeBases(pb.NewKnowledgeBaseServiceClient(userConn)),
 		gateway.WithRAGAgent(cfg.RAGAgentURL),
+		gateway.WithWorkflow(cfg.WorkflowTarget, cfg.WorkflowServiceToken),
 		gateway.WithFeedbackStore(feedbackStore),
 		gateway.WithMetering(meterStore, metering.Quota{
 			MaxStorageBytes: cfg.QuotaMaxStorageBytes,
@@ -301,8 +309,12 @@ func main() {
 	}()
 
 	wfSrv := &http.Server{
-		Addr:              cfg.WorkflowHTTPAddr,
-		Handler:           workflow.NewHTTPHandler(wfEngine, wfRegistry),
+		Addr: cfg.WorkflowHTTPAddr,
+		Handler: workflow.NewHTTPHandler(
+			wfEngine, wfRegistry,
+			workflow.WithServiceToken(cfg.WorkflowServiceToken),
+			workflow.WithRunStore(wfRunStore),
+		),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {

@@ -34,6 +34,13 @@ func main() {
 			cfg.OpenSandboxPythonImage, cfg.OpenSandboxNodeImage,
 		)
 	} else {
+		if cfg.Env == "prod" && !cfg.SandboxAllowLocal {
+			logger.Error(
+				"local sandbox backend is not a security boundary; " +
+					"set SANDBOX_BACKEND=remote or explicitly allow it with SANDBOX_ALLOW_LOCAL=true",
+			)
+			os.Exit(1)
+		}
 		logger.Warn("using local sandbox backend, not a security boundary")
 		backend = sandbox.NewLocalBackend(cfg.SandboxWorkDir)
 	}

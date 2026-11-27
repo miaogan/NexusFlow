@@ -31,6 +31,23 @@ class HubSettings(BaseSettings):
     dynamic_registration: bool = False
     admin_token: str = ""
     background_workers: int = 8
+    # P0/P2–P5 capability switches. All default off for safe rollout.
+    tools_enabled: bool = False
+    reasoning_enabled: bool = False
+    mcp_enabled: bool = False
+    hitl_enabled: bool = False
+    workflow_enabled: bool = False
+    workflow_url: str = "http://127.0.0.1:8081"
+    workflow_service_token: str = ""
+    workflow_timeout_seconds: float = 15.0
+    reasoning_max_turns: int = 6
+    reasoning_timeout_seconds: float = 60.0
+    reasoning_tool_budget: int = 12
+    reasoning_token_budget: int = 20000
+    mcp_servers: str = ""
+    mcp_timeout_seconds: float = 10.0
+    mcp_max_bytes: int = 1 << 20
+    mcp_allow_sandbox: bool = False
 
 
 @lru_cache

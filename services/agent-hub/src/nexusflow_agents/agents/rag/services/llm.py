@@ -68,6 +68,22 @@ class AnswerGenerator:
     def llm_enabled(self) -> bool:
         return self._llm is not None
 
+    @property
+    def llm(self) -> Any:
+        """Underlying ChatOpenAI instance, used by the reasoning loop."""
+        return self._llm
+
+    def build_messages(
+        self,
+        query: str,
+        history: list[dict[str, str]],
+        chunks: list[dict[str, Any]],
+        summary: str = "",
+        memories: list[str] | None = None,
+        corrected: list[dict[str, Any]] | None = None,
+    ) -> list[Any]:
+        return self._messages(query, history, chunks, summary, memories, corrected)
+
     def generate(
         self,
         query: str,
