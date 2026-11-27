@@ -200,11 +200,12 @@ make web-dev        # http://localhost:5173
 | 任务中心 | `/tasks` | 任务列表、状态过滤、自动轮询、详情 |
 | 检索测试 | `/search` | 多路召回检索、赞/踩反馈与链路分解 |
 | 智能问答 | `/chat` | 多轮 RAG 问答、过程节点、检索知识、正文引用一键跳转 |
+| SubAgent 管理 | `/subagents` | 自定义 HTTP / Sandbox Agent 的注册、技能声明、在线调试（需 `user:read`，写操作需 `user:write`） |
 | 用户管理 | `/users` | 用户 CRUD、角色与权限点管理（需 `user:read`） |
 | 沙箱 Playground | `/sandbox` | 自定义代码执行与输入/输出合约调试 |
 | 工作流编排 | `/workflow` | 拖拽节点、连线、DAG 校验与试运行 |
 
-访问控制台会跳转 `/login`：用种子管理员 `admin / admin123` 登录，或自助注册（默认 viewer 角色），也可点"以匿名身份浏览"（需 `ALLOW_ANONYMOUS=true`）。登录后右上角显示当前身份、知识库切换器与当前库角色（管理员/编辑者/只读），拥有 `user:read` 的用户可见"用户管理"入口；知识库管理员可在"管理"弹窗中改名、删除与授权成员。
+访问控制台会跳转 `/login`：用种子管理员 `admin / admin123` 登录，或自助注册（默认 viewer 角色），也可点"以匿名身份浏览"（需 `ALLOW_ANONYMOUS=true`）。登录后右上角显示当前身份、知识库切换器与当前库角色（管理员/编辑者/只读），拥有 `user:read` 的用户可见"SubAgent 管理"与"用户管理"入口；SubAgent 页面写操作需 `user:write`，且 Hub 需开启 `AGENT_HUB_DYNAMIC_REGISTRATION`。知识库管理员可在"管理"弹窗中改名、删除与授权成员。
 
 ### 3. 完整容器编排
 
@@ -381,7 +382,7 @@ flowchart LR
 - **多轮自助推理**（`AGENT_HUB_REASONING_ENABLED`）：LLM `bind_tools` 后循环 `plan → tool_call → observe → answer`；受 `MAX_TURNS` / 工具调用数 / Token / 总时限预算约束，重复 `tool+args` 自动抑制，工具失败交回模型决策，预算耗尽回退原生成。
 - **DAG 双向联动**（`AGENT_HUB_WORKFLOW_ENABLED` / `WORKFLOW_AGENT_NODE`）：DAG 新增 `agent` 节点调用 Hub `/v1/call`；Hub 的 `workflow.run` 工具经网关（携带用户身份）或服务令牌触发 DAG。`x-tenant-id` / `x-trace-id` / deadline 全程透传；网关 `/v1/workflows/*` 统一要求 `workflow:run`。
 - **MCP**（`AGENT_HUB_MCP_ENABLED`）：`POST /mcp` 提供 `initialize` / `tools/list` / `tools/call`；`AGENT_HUB_MCP_SERVERS=name=url,...` 接入外部 MCP，工具注册为 `mcp.<server>.<tool>`。外部工具默认需审批，sandbox 默认不对外暴露。
-- **人机协同**（`AGENT_HUB_HITL_ENABLED` / `HITL_ENABLED`）：高风险工具不执行，返回 202 + `approval_id`，由 `POST /v1/approvals/{id}/decide` 批准/拒绝后重试；DAG 的 `human_approval` 节点使 run 进入 `WAITING_APPROVAL` 并落盘检查点，经 `/v1/workflows/runs/{id}/approve|resume` 恢复，重复审批返回 409。
+- **人机协同**（`AGENT_HUB_HITL_ENABLED` / `HITL_ENABLED`）：高风险工具不执行，返回 202 + `approval_id`，由 `POST /v1/approvals/{id}/decide` 批准/拒绝后重试；DAG 的 `human_approval` 节点使 run 进入 `WAITING_APPROVAL` 并落盘检查点，经 `/v1/workflows/runs/{id}/approve|resume` 恢复，重复审批返回 409。`WORKFLOW_RUN_STORE_DRIVER=postgres` 时运行与审批写入 `workflow_executions` / `workflow_approvals`，跨副本共享且审批只生效一次。
 - **安全护栏**：工具风险分级（`read/write/execute/external`）、入参 JSON Schema、输出截断、预算超限 429、工具与审批审计（`GET /v1/audit`），工具结果以不可信数据包裹以防提示注入；网关侧 `/v1/sandbox/execute` 要求 `sandbox:execute`。
 
 新增 / 变更接口：
@@ -620,7 +621,7 @@ make up / down     # 容器编排启停
 - 设计文档中的 NL2SQL 章节已落地为 `nl2sql` 工作流节点（只读 SQL 护栏 + 可选 LLM 生成）；LightRAG 图谱检索已落地为 `graph` 召回路由：LlamaIndex 提供 `/v1/graph/extract` 抽取接口与 `/v1/search` 的 graph 子路由（配置 `LLAMAINDEX_LLM_*` 时用 LLM 抽取实体/关系，否则或调用失败时自动退化为共现词图），Go 侧 `LlamaIndexRetriever` 将三路结果统一接入 RRF。长期记忆与 intent / summary 已合并到 `agent-hub`（默认 in-process，可用 `ROLE` 拆分）：记忆正文在 Postgres，向量在 Qdrant，两者职责分离。（可观测性 / Langfuse 导出与 dev trace viewer 已实现，见上节。）
 - 用户与角色支持三种存储：`memory`（dev-all 单进程默认）、`redis`（`IDENTITY_DRIVER=redis`）与 `postgres`（`IDENTITY_DRIVER=postgres` + `IDENTITY_DATABASE_URL`），后两者供独立部署的 Auth / User 服务跨进程共享；postgres 启动时自动建表并复用内置角色种子。Compose 真机冒烟已验证自动建表、种子管理员登录及 Gateway 身份读取。
 - 登出通过令牌吊销名单即时生效：JWT 携带 `jti`，登出时将该 id 写入 `TOKEN_BLACKLIST_DRIVER`（`memory` 单进程 / `redis` 供 gateway 与 auth-service 共享）并设置剩余有效期 TTL；网关在每次鉴权时拦截已吊销的 access token，auth-service 在 validate/refresh 时拒绝已吊销的 refresh token。Redis 不可用时自动降级为内存名单并告警。
-- 工具调用、审批、审计与工作流运行状态当前均为进程内实现（`ToolService` / `ApprovalService` / `AuditLog` / `MemoryRunStore`），重启会丢失；`docs/schema_enterprise_v1_1_to_1_5.sql` 已定义 `workflow_executions` / `workflow_approvals` / `audit_logs`，可作为后续 Postgres 持久化目标。多副本启用 HITL 前需共享存储或对同一 run 做粘性路由。
+- 工具调用、审批、审计与工作流运行状态默认仍为进程内实现（`ToolService` / `ApprovalService` / `AuditLog` / `MemoryRunStore`），重启会丢失；生产多副本按需开启 `AGENT_HUB_APPROVAL_DRIVER=postgres`、`AGENT_HUB_AUDIT_DRIVER=postgres`（`AGENT_HUB_STATE_DATABASE_URL`）与 `WORKFLOW_RUN_STORE_DRIVER=postgres`（`WORKFLOW_RUN_DATABASE_URL`），分别落库 `agent_approvals` / `audit_logs` 与 `workflow_executions` / `workflow_approvals`。`audit_logs` 建议按月分区并配置保留策略。
 - MCP 当前实现 HTTP JSON-RPC（`initialize` / `tools/list` / `tools/call`），未实现 SSE / stdio 传输及 resources / prompts 原语；外部工具默认 `risk=external` 且需审批，`sandbox.execute` 默认不通过 MCP 暴露（`AGENT_HUB_MCP_ALLOW_SANDBOX` 显式开启）。
 - 推理模式为保证工具循环的确定性，最终回答以单个 `token` 事件下发，`tool_call` / `tool_result` 逐条下发；预算耗尽或工具异常会回退到普通生成。
 - 审批重试：Chat 请求携带 `approval_id` 重放同一问题；`/v1/call` 通过 `envelope.approval_id` 重放；DAG 审批使用 `/v1/workflows/runs/{id}/approve|resume`。

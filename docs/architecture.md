@@ -153,6 +153,7 @@ Agent Hub 是 intent / summary / memory 的中心节点，Hub 与 Agent 构成�
 - **自定义 SubAgent**：`AgentSpec.tenant_id` 为空表示全局内置 Agent，自定义 Agent 以 `(tenant_id, name)` 注册且仅所属租户可解析；`/v1/agents` 提供租户内 CRUD，`AGENT_HUB_REGISTRY_DRIVER=postgres` 时启动幂等建表并从 `custom_agents` 加载。
 - **Sandbox SubAgent**：`kind=sandbox` 的 Agent 将 `{code, runtime, timeout_seconds, packages}` 存于 `custom_agents.sandbox`，由 `SandboxAgentExecutor` 通过 Gateway `/v1/sandbox/execute` 执行；运行请求透传用户 Bearer，仍受 `sandbox:execute` 约束，代码/入参有大小上限，列表仅返回脱敏元数据。
 - **动态技能路由**：自定义 Agent 通过 `skills` 声明可处理技能；`AgentRegistry.available_skills(tenant)` 汇总租户可见技能，Intent 节点输出 `intent=skill + skill`，`SkillRouter` 经 `Hub.call_skill` 选择该租户优先级最高的 Agent，失败回退 RAG。技能名与 Agent 名均受格式校验，避免注入与越权路由。
+- **控制台**：`/subagents` 页面经 Gateway 的 `/v1/agents` 与 `/v1/skills` 管理租户 Agent、声明技能并在线调用；读需 `user:read`，写需 `user:write`，写操作还受 Hub 的 `AGENT_HUB_DYNAMIC_REGISTRATION` 控制。
 - **部署形态**：默认 `ROLE=all`、`MODE=local` 单容器；`ROLE=intent|summary|memory` + `MODE=remote|hybrid` 支持拆分与回滚。
 
 ### 3.2 工具、推理、双向联动与人机协同
@@ -170,20 +171,21 @@ Agent Hub 是 intent / summary / memory 的中心节点，Hub 与 Agent 构成�
     └──/v1/workflows/{validate,run,runs,approve}──> Workflow Engine
                                                      ├── agent 节点 ──POST /v1/call──┘
                                                      ├── human_approval -> WAITING_APPROVAL
-                                                     └── MemoryRunStore（检查点/恢复）
+                                                     └── RunStore（内存 / Postgres 检查点）
 ```
 
 - **统一契约**：`ToolSpec{name, description, input_schema, output_schema, risk, timeout_ms, requires_approval}`、`CallEnvelope{tenant_id, user_id, trace_id, request_id, approval_id, deadline_ms, budget}`；`AgentSpec` 同步暴露 schema/version/permissions/tenant_scope/tools，供动态注册与 MCP 复用。
 - **推理循环**：`AGENT_HUB_REASONING_ENABLED` 开启后，Chat 在检索后进入 `plan → tool_call → observe → answer`；`max_turns`、工具调用数、Token 与总时限构成硬预算，重复 `tool+args` 抑制，失败回退原 `generate`。SSE 新增 `tool_call` / `tool_result` / `approval_required`。
 - **双向联动**：DAG 的 `agent` 节点将 `config.{agent,capability,input}` 与运行身份发往 Hub `/v1/call`；Hub 的 `workflow.run` 工具优先经网关（携带用户 Bearer）调用 DAG，无用户身份时使用 `WORKFLOW_SERVICE_TOKEN` 直连。网关统一校验 `workflow:run`，workflow 服务校验服务令牌，防止绕过网关。
 - **MCP**：Hub 作为 MCP Server 暴露 `initialize` / `tools/list` / `tools/call`（`POST /mcp`），工具来源为 `ToolRegistry`；作为 Client 通过 `AGENT_HUB_MCP_SERVERS=name=url` 注册外部工具为 `mcp.<server>.<tool>`，外部工具默认 `risk=external` 且需审批，sandbox 默认不暴露。
-- **人机协同**：高风险工具返回 202 + `approval_id`，`ApprovalService` 保存一次性决策（TTL、租户隔离、重复决策 409）；DAG 的 `human_approval` 节点将运行挂起为 `WAITING_APPROVAL`，检查点写入 `RunStore`，批准后从已完成节点继续，拒绝则终止为 `REJECTED`。
-- **安全与审计**：风险分级、JSON Schema 入参校验、输出大小截断、预算超限 429、工具结果包裹为不可信数据；`AuditLog` 记录工具调用与审批决策，可通过 `GET /v1/audit` 按租户/动作查询。
+- **人机协同**：高风险工具返回 202 + `approval_id`，`ApprovalService` 保存一次性决策（TTL、租户隔离、重复决策 409）；DAG 的 `human_approval` 节点将运行挂起为 `WAITING_APPROVAL`，检查点写入 `RunStore`，批准后从已完成节点继续，拒绝则终止为 `REJECTED`。`WORKFLOW_RUN_STORE_DRIVER=postgres` 时运行快照与审批单写入 `workflow_executions` / `workflow_approvals`，审批以行锁 + 状态 CAS 保证跨副本只生效一次。
+- **安全与审计**：风险分级、JSON Schema 入参校验、输出大小截断、预算超限 429、工具结果包裹为不可信数据；`AuditLog` 记录工具调用与审批决策，可通过 `GET /v1/audit` 按租户/动作查询；`AGENT_HUB_AUDIT_DRIVER=postgres` 时写入 `audit_logs`。
 
 **实现边界（2026-11-27）**
 
-- 运行、审批与审计状态：`MemoryRunStore` / `ApprovalService` / `AuditLog` 均为进程内实现，重启即丢失；目标持久化表已定义在 `docs/schema_enterprise_v1_1_to_1_5.sql`（`workflow_executions` / `workflow_approvals` / `audit_logs`），尚未接入。
-- 多副本：同一 run 的挂起与审批需要共享 `RunStore`，或由网关做粘性路由；否则跨副本无法恢复。
+- 运行、审批与审计状态：默认仍为进程内实现（`MemoryRunStore` / `ApprovalService` / `AuditLog`），重启即丢失；设置 `WORKFLOW_RUN_STORE_DRIVER=postgres`、`AGENT_HUB_APPROVAL_DRIVER=postgres`、`AGENT_HUB_AUDIT_DRIVER=postgres`（配合 `WORKFLOW_RUN_DATABASE_URL` / `AGENT_HUB_STATE_DATABASE_URL`）后分别落库 `workflow_executions` / `workflow_approvals`、`agent_approvals`、`audit_logs`，多副本共享。
+- 多副本：Postgres 模式下同一 run 的挂起与审批对所有副本可见；审批使用 `SELECT ... FOR UPDATE` + 状态 CAS，重复/并发决策返回 409。若继续使用内存模式，仍需粘性路由。
+- 审计留存：`audit_logs` 当前为单表，生产建议按月分区并配置保留策略；Hub 自身仍保留进程内环形缓冲作为降级路径。
 - MCP：仅 HTTP JSON-RPC（initialize / tools/list / tools/call），未实现 SSE / stdio 传输与 resources / prompts 原语。
 - 推理输出：工具调用与结果逐条流式，最终回答以单个 `token` 事件下发；预算耗尽或工具异常回退普通生成。
 - `/v1/call` 的 agent 分支始终可用，tool 分支需 `AGENT_HUB_TOOLS_ENABLED`；`/mcp`、`/v1/call`、`/v1/tools` 为 Hub 内部接口，外部经 Gateway `/v1/agents/{name}/call` 调用自定义 SubAgent。

@@ -162,16 +162,52 @@ func decideRun(c *gin.Context, engine *Engine, options httpOptions) {
 	if meta.TenantID == "" {
 		meta.TenantID = state.Meta.TenantID
 	}
-	if body.Decision == "reject" {
-		state.Status = string(RunRejected)
-		state.Error = body.Reason
-		state.UpdatedAt = time.Now()
-		options.store.Save(state)
-		c.JSON(http.StatusOK, state)
+	if body.Decision != "approve" && body.Decision != "reject" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "decision must be approve or reject"})
 		return
 	}
-	if body.Decision != "approve" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "decision must be approve or reject"})
+	if body.Decision == "reject" {
+		var rejected *RunState
+		ok, err := transitionRun(options.store, state.ID, RunWaitingApproval, func(st *RunState) error {
+			st.Status = string(RunRejected)
+			st.Error = body.Reason
+			st.ApprovedBy = meta.UserID
+			st.ApprovalReason = body.Reason
+			st.UpdatedAt = time.Now()
+			rejected = st
+			return nil
+		})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if !ok {
+			c.JSON(http.StatusConflict, gin.H{"error": "run is not waiting for approval", "status": state.Status})
+			return
+		}
+		updated, found := options.store.Get(state.ID)
+		if !found {
+			updated = rejected
+		}
+		c.JSON(http.StatusOK, updated)
+		return
+	}
+
+	// Claim the run before resuming so two replicas cannot both execute the
+	// approved node; the loser gets 409.
+	ok, err := transitionRun(options.store, state.ID, RunWaitingApproval, func(st *RunState) error {
+		st.Status = string(RunRunning)
+		st.ApprovedBy = meta.UserID
+		st.ApprovalReason = body.Reason
+		st.UpdatedAt = time.Now()
+		return nil
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusConflict, gin.H{"error": "run is not waiting for approval", "status": state.Status})
 		return
 	}
 
@@ -196,6 +232,25 @@ func decideRun(c *gin.Context, engine *Engine, options httpOptions) {
 		return
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+// transitionRun uses the store's atomic transition when available. The
+// Get + Save fallback is best-effort and only used by third-party stores.
+func transitionRun(
+	store RunStore, id string, from RunStatus, mutate func(*RunState) error,
+) (bool, error) {
+	if transitioner, ok := store.(RunTransitioner); ok {
+		return transitioner.Transition(id, from, mutate)
+	}
+	state, ok := store.Get(id)
+	if !ok || RunStatus(state.Status) != from {
+		return false, nil
+	}
+	if err := mutate(state); err != nil {
+		return false, err
+	}
+	store.Save(state)
+	return true, nil
 }
 
 func serviceAuth(token string) gin.HandlerFunc {

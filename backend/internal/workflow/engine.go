@@ -391,17 +391,19 @@ func (e *Engine) state(
 		created = opts.Resume.CreatedAt
 	}
 	return &RunState{
-		ID:          result.RunID,
-		DAG:         *dag,
-		Input:       input,
-		Meta:        opts.Meta,
-		Status:      result.Status,
-		Order:       result.Order,
-		Results:     result.Results,
-		Output:      result.Output,
-		PendingNode: pending,
-		Error:       errText,
-		CreatedAt:   created,
-		UpdatedAt:   now,
+		ID:             result.RunID,
+		DAG:            *dag,
+		Input:          input,
+		Meta:           opts.Meta,
+		Status:         result.Status,
+		Order:          result.Order,
+		Results:        result.Results,
+		Output:         result.Output,
+		PendingNode:    pending,
+		Error:          errText,
+		ApprovedBy:     opts.ApprovedBy,
+		ApprovalReason: opts.ApprovalReason,
+		CreatedAt:      created,
+		UpdatedAt:      now,
 	}
 }

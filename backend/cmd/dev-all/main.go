@@ -208,7 +208,10 @@ func main() {
 		wfRegistry.Register(workflow.HumanApprovalNode{})
 	}
 	wfEngine := workflow.NewEngine(wfRegistry, logger)
-	wfRunStore := workflow.NewMemoryRunStore(500)
+	wfRunStore, closeRunStore := workflow.NewRunStore(
+		ctx, cfg.WorkflowRunStoreDriver, cfg.WorkflowRunDatabaseURL,
+	)
+	defer closeRunStore()
 
 	errCh := make(chan error, 12)
 	go func() {

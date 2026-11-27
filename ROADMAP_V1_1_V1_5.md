@@ -1,11 +1,23 @@
 # NexusFlow v1.1.0 – v1.5.0 企业级能力演进方案（ROADMAP_V1_1_V1_5）
 
-> **定位**：本文件是面向 v1.1.0 至 v1.5.0 的能力演进方案，共 5 个 Milestone、11 个结构化任务。
-> **2026-11-27 增补**：Agent Hub × Workflow × MCP × HITL 已按规划文档 `.trae/documents/agent-hub-workflow-mcp-hitl.md` 交付；Task 3.2 完成（运行状态为进程内存储，跨副本持久化拆为 Task 3.3），Task 5.2 的 MCP Server 部分提前落地，其余任务状态不变。
-> **v1.2.0 范围调整**：最新版本计划见 [ROADMAP_V1_2.md](ROADMAP_V1_2.md)；本文件 Milestone 2 保留为原规划记录。
+> **定位**：本文件是面向 v1.1.0 至 v1.5.0 的能力演进方案，共 5 个 Milestone、11 个结构化任务；已交付 4 个，其余 7 个为当前待做项。
+> **2026-11-27 增补**：Agent Hub × Workflow × MCP × HITL 已按规划文档 `.trae/documents/agent-hub-workflow-mcp-hitl.md` 交付；Task 3.2 完成（运行状态持久化由 Task 3.3 补齐），Task 5.2 的 MCP Server 部分提前落地，其余任务状态不变。
+> **v1.2.0 已交付**：自定义 SubAgent（存储 + 多租户注册表 + SandboxAgentExecutor + 动态技能路由 + `/subagents` 控制台）已按 [ROADMAP_V1_2.md](ROADMAP_V1_2.md) Milestone 1–3 完成。本文件 Milestone 2（多模态、Connector）未能进入该版本，顺延为待做项，其原 v1.2.0 版本标签不再使用。
 > **与 `ROADMAP_V1_1.md` 的关系**：`ROADMAP_V1_1.md` 是上一轮已执行完毕的交付清单（知识库实体、级联删除、配额计量、K8s HPA，对应提交 c880e64 / 44b9284 / 9bc2c01 / a244bd7）。本文件在此基础上重新规划更完整的企业级能力，Milestone 1 为增量升级。
 > **执行约定**：按 Milestone 顺序逐个执行，禁止跨任务并发；每个任务验证通过后提交独立 Commit，并将任务状态更新为 `[x]`；接口变更优先更新 proto 契约，存储扩展保留 Memory/Mock 降级路径。
 > **数据契约**：涉及数据库表结构新增或变更时，必须严格对齐 [docs/schema_enterprise_v1_1_to_1_5.sql](docs/schema_enterprise_v1_1_to_1_5.sql) 中的表名、字段名与状态枚举值，并在 Postgres 初始化逻辑中保证幂等建表。
+
+## 当前待做总览
+
+| 任务 | 内容 | 状态 | 现状与前置 |
+| --- | --- | --- | --- |
+| Task 2.1 | MinerU 图文多模态检索与缩略图渲染 | 未开始 | 顺延；解析层图片/版面信息尚未保留 |
+| Task 2.2 | 统一 Connector 框架（web_crawler / s3_bucket / db_query） | 未开始 | 顺延；无代码基础 |
+| Task 3.1 | DAG 条件分支（condition）与并发迭代（loop）节点 | 未开始 | 现有拓扑校验与调度可直接扩展 |
+| Task 4.1 | PII 双向脱敏 + 合规审计检索 | 未开始 | 工具/审批审计已持久化到 `audit_logs`；PII 识别脱敏与按时间检索/保留策略待实现 |
+| Task 4.2 | LLM 多模型路由网关 + 租户级配额 | 未开始 | 可复用 `internal/metering`（memory / Redis） |
+| Task 5.1 | API Key 鉴权 + OpenAI 兼容端点 | 未开始 | 需与现有 JWT 并存，作用域可绑定知识库 |
+| Task 5.2 | 租户级 Webhook 订阅（HMAC + 退避重试） | 部分完成 | MCP Server 已交付（`POST /mcp`）；Webhook 未开始 |
 
 ---
 
@@ -21,7 +33,7 @@
 
 ---
 
-## Milestone 2: 多模态与外部数据源连接器（v1.2.0）
+## Milestone 2: 多模态与外部数据源连接器（原计划 v1.2.0，已顺延）
 
 * **[ ] Task 2.1: 释放 MinerU 图文多模态解析能力，在 RAG 问答中支持图文联合检索、图表缩略图渲染与点击放大**
   * 解析层保留 MinerU 输出的图片与版面信息，切块时建立图-文关联；检索结果返回图表资源引用，问答链路注入图片摘要；前端支持缩略图展示与点击放大。
@@ -41,8 +53,11 @@
   * 交付情况：新增 `human_approval` 节点、`MemoryRunStore` 检查点、`GET /v1/workflows/runs`、`POST /v1/workflows/runs/{id}/{approve,resume}`；状态对齐 schema 的 `COMPLETED / FAILED / REJECTED / WAITING_APPROVAL`，重复审批返回 409。同时交付 Hub 侧高风险工具审批（202 + `approval_id`、`/v1/approvals/{id}/decide`）。
   * 边界：检查点与审批记录当前为进程内存储，跨副本/重启恢复由 Task 3.3 承接。
 
-* **[ ] Task 3.3: 将工作流运行、审批与审计状态接入 Postgres，支持多副本恢复**
+* **[x] Task 3.3: 将工作流运行、审批与审计状态接入 Postgres，支持多副本恢复**
   * 按 `docs/schema_enterprise_v1_1_to_1_5.sql` 落库 `workflow_executions` / `workflow_approvals` / `audit_logs`，以 `RunStore` / `ApprovalService` 接口替换内存实现；明确同一 run 的副本粘性或乐观锁，保证审批并发与幂等；审计按月分区并支持保留策略。
+  * 交付情况：Go 新增 `PostgresRunStore`（`WORKFLOW_RUN_STORE_DRIVER=postgres`），幂等建表并持久化挂起快照与审批单；审批通过 `SELECT ... FOR UPDATE` + 状态 CAS 原子抢占，跨副本并发只有一次决策生效，其余返回 409；运行快照额外记录 `approved_by` / `approval_reason`，审批单以 `(execution_id, node_id)` 稳定 ID 幂等 upsert，run 结束后自动置为 APPROVED / REJECTED。Hub 新增 `PostgresApprovalService`（`agent_approvals`）与 `PostgresAuditLog`（`audit_logs`），由 `AGENT_HUB_APPROVAL_DRIVER` / `AGENT_HUB_AUDIT_DRIVER` + `AGENT_HUB_STATE_DATABASE_URL` 开启；数据库不可用时回退内存并告警。
+  * 验证：`go test ./internal/workflow`（含 `POSTGRES_TEST_DSN` 集成用例）与 `pytest tests/test_postgres_state.py`（`AGENT_HUB_TEST_DATABASE_URL`）均通过。
+  * 边界：`audit_logs` 仍为单表，按月分区与保留策略留给运维脚本；Hub 审计写入为尽力而为（失败只告警），不阻断业务请求。
 
 ---
 
@@ -50,7 +65,7 @@
 
 * **[ ] Task 4.1: 实现 PII 敏感信息双向脱敏引擎与结构化合规审计日志中间件，支持安全追溯**
   * 入口对提示词与上传文本做 PII 识别与脱敏，出口对模型回复做还原或再次脱敏；审计日志记录操作者、资源、动作与脱敏命中项，支持按租户与时间检索。
-  * 进展：工具调用与审批决策审计已落地（`AuditLog` + `GET /v1/audit`，进程内）；PII 识别/脱敏与 `audit_logs` 持久化待实现。
+  * 进展：工具调用与审批决策审计已落地并可通过 `AGENT_HUB_AUDIT_DRIVER=postgres` 持久化到 `audit_logs`（Task 3.3）；PII 识别/脱敏、按时间检索与保留策略待实现。
 
 * **[ ] Task 4.2: 建设多模型路由网关（主备自动故障转移）与租户级用量计量/配额管控（防 429 溢出）**
   * 统一 LLM 调用入口，按模型与租户路由至主/备通道，失败自动切换并熔断；复用并扩展已有计量能力，按租户累计 token 与调用量，超限前置拦截并避免上游 429 溢出。

@@ -95,7 +95,7 @@ services:
       USER_TARGET: "user-service:9097"
       RAG_AGENT_URL: "http://agent-hub:8001"
       # Forwarded to the hub when AGENT_HUB_ADMIN_TOKEN is configured.
-      AGENT_HUB_TOKEN: ${AGENT_HUB_ADMIN_TOKEN:-}
+      AGENT_HUB_TOKEN: ${AGENT_HUB_ADMIN_TOKEN:-nexusflow-agent-admin}
       # DAG validate/run proxy (RBAC: workflow:run).
       WORKFLOW_TARGET: "http://workflow-engine:8081"
       WORKFLOW_SERVICE_TOKEN: ${WORKFLOW_SERVICE_TOKEN:-}
@@ -269,9 +269,13 @@ services:
       # DAG -> Agent Hub node and human approval runs.
       WORKFLOW_AGENT_NODE: ${WORKFLOW_AGENT_NODE:-false}
       AGENT_HUB_URL: "http://agent-hub:8001"
-      AGENT_HUB_TOKEN: ${AGENT_HUB_ADMIN_TOKEN:-}
+      AGENT_HUB_TOKEN: ${AGENT_HUB_ADMIN_TOKEN:-nexusflow-agent-admin}
       AGENT_HUB_TIMEOUT: 30s
       HITL_ENABLED: ${HITL_ENABLED:-false}
+      # Suspended runs and approval tickets persist across restarts and are
+      # shared by every replica.
+      WORKFLOW_RUN_STORE_DRIVER: ${WORKFLOW_RUN_STORE_DRIVER:-postgres}
+      WORKFLOW_RUN_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
       # nl2sql node: read-only structured queries over the shared Postgres.
       # Production must point this at a SELECT-only role.
       NL2SQL_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
@@ -324,11 +328,18 @@ services:
       AGENT_HUB_MODE: ${AGENT_HUB_MODE:-local}
       AGENT_HUB_PORT: "8001"
       AGENT_HUB_PREFER: ${AGENT_HUB_PREFER:-local}
-      AGENT_HUB_DYNAMIC_REGISTRATION: ${AGENT_HUB_DYNAMIC_REGISTRATION:-false}
-      AGENT_HUB_ADMIN_TOKEN: ${AGENT_HUB_ADMIN_TOKEN:-}
+      # Local demo enables console-driven SubAgent management. Set an admin
+      # token outside local; the gateway/workflow forward it as AGENT_HUB_TOKEN.
+      AGENT_HUB_DYNAMIC_REGISTRATION: ${AGENT_HUB_DYNAMIC_REGISTRATION:-true}
+      AGENT_HUB_ADMIN_TOKEN: ${AGENT_HUB_ADMIN_TOKEN:-nexusflow-agent-admin}
       # Tenant-scoped custom SubAgents persist in Postgres.
       AGENT_HUB_REGISTRY_DRIVER: ${AGENT_HUB_REGISTRY_DRIVER:-postgres}
       AGENT_HUB_REGISTRY_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
+      # HITL approval tickets and the audit trail persist in Postgres so every
+      # replica sees the same pending/decided state.
+      AGENT_HUB_APPROVAL_DRIVER: ${AGENT_HUB_APPROVAL_DRIVER:-postgres}
+      AGENT_HUB_AUDIT_DRIVER: ${AGENT_HUB_AUDIT_DRIVER:-postgres}
+      AGENT_HUB_STATE_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
       # Tool calling, reasoning, MCP and human approval (all default off).
       AGENT_HUB_TOOLS_ENABLED: ${AGENT_HUB_TOOLS_ENABLED:-false}
       AGENT_HUB_REASONING_ENABLED: ${AGENT_HUB_REASONING_ENABLED:-false}

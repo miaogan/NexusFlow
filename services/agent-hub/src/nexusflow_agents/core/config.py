@@ -33,6 +33,11 @@ class HubSettings(BaseSettings):
     # Custom SubAgent registry: memory for dev, postgres for durable multi-replica.
     registry_driver: Literal["memory", "postgres"] = "memory"
     registry_database_url: str = ""
+    # Durable HITL approvals and compliance audit trail. Postgres keeps
+    # decisions shared across replicas; state_database_url is required for it.
+    approval_driver: Literal["memory", "postgres"] = "memory"
+    audit_driver: Literal["memory", "postgres"] = "memory"
+    state_database_url: str = ""
     background_workers: int = 8
     # P0/P2–P5 capability switches. All default off for safe rollout.
     tools_enabled: bool = False

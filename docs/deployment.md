@@ -224,14 +224,19 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 | `AGENT_HUB_MCP_ENABLED` | false | `/mcp` Server 与外部 MCP Client |
 | `AGENT_HUB_HITL_ENABLED` | false | 工具审批与 `POST /v1/approvals/{id}/decide` |
 | `HITL_ENABLED` | false | DAG `human_approval` 节点与 runs 持久化 |
+| `AGENT_HUB_APPROVAL_DRIVER` | memory | 工具审批存储：memory / postgres（`agent_approvals`） |
+| `AGENT_HUB_AUDIT_DRIVER` | memory | 审计存储：memory / postgres（`audit_logs`） |
+| `WORKFLOW_RUN_STORE_DRIVER` | memory | 工作流运行与审批存储：memory / postgres |
 
 - 自定义 SubAgent 注册表：`AGENT_HUB_REGISTRY_DRIVER=memory|postgres`；Postgres 模式需 `AGENT_HUB_REGISTRY_DATABASE_URL`，启动时幂等创建 `custom_agents` 并加载该租户的自定义 Agent。写接口仍受 `AGENT_HUB_DYNAMIC_REGISTRATION` 控制。
+- 审批与审计持久化：`AGENT_HUB_APPROVAL_DRIVER` / `AGENT_HUB_AUDIT_DRIVER=postgres` 时需 `AGENT_HUB_STATE_DATABASE_URL`，启动幂等创建 `agent_approvals` / `audit_logs`；数据库不可用时记录告警并回退内存，不影响 Hub 启动。
+- 工作流运行持久化：`WORKFLOW_RUN_STORE_DRIVER=postgres` 时需 `WORKFLOW_RUN_DATABASE_URL`，启动幂等创建 `workflow_executions` / `workflow_approvals`；连接失败回退 `MemoryRunStore` 并告警。
 - 生产必须设置 `WORKFLOW_SERVICE_TOKEN`（gateway / workflow 两侧一致），agent-hub 通过 `AGENT_HUB_WORKFLOW_SERVICE_TOKEN` 使用同一值；为空表示不做直连校验，仅限本机开发。
 - `/v1/call` 的 agent 分支始终可用（DAG `agent` 节点、自定义 SubAgent 依赖它）；tool 分支与 `GET /v1/tools` 需 `AGENT_HUB_TOOLS_ENABLED`。
 - 工具审批：Hub 返回 `202 + approval_id`，批准后带 `approval_id` 重试；DAG 审批经网关 `POST /v1/workflows/runs/{id}/approve|resume`（需 `workflow:run`），重复审批返回 409。
 - 审计查询：`GET /v1/audit?action=tool.call&decision=denied`（按 `x-tenant-id` 过滤）。
 - 生产环境（`APP_ENV=prod`）的 `SANDBOX_BACKEND=local` 会拒绝启动，除非显式设置 `SANDBOX_ALLOW_LOCAL=true`；网关侧 `/v1/sandbox/execute` 仍要求 `sandbox:execute` 权限。
-- 当前 `RunStore` 为进程内 `MemoryRunStore`。多副本启用 HITL 前需改为共享存储或对同一 run 做粘性路由，否则跨副本无法恢复。
+- Postgres 模式下 `RunStore` 为共享存储：挂起的 run 对所有副本可见，审批通过行锁 + 状态 CAS 只允许一次决策生效；内存模式多副本仍需对同一 run 做粘性路由。
 
 ### 8.5 自定义 SubAgent、审批、MCP 与审计运维
 
@@ -242,13 +247,14 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 - `GET /v1/agents` 只返回 sandbox 脱敏元数据（runtime / timeout / code_bytes），不返回代码正文。
 - 自定义 Agent 可声明 `skills`（最多 16 个，格式同 Agent 名）；`GET /v1/skills` 返回当前租户可见技能。Chat 的 Intent 节点会携带该列表，命中时直接调用 SubAgent，失败自动回退 RAG。
 - 启用 `AGENT_HUB_ADMIN_TOKEN` 时，Gateway / Workflow 需通过 `AGENT_HUB_TOKEN` 配置同一值；否则经 Gateway 的 `/v1/call`、审批与审计请求会被 Hub 拒绝。
+- 控制台 `/subagents` 的写操作需 `AGENT_HUB_DYNAMIC_REGISTRATION=true` 且调用者具备 `user:write`；Compose 默认开启并使用本地演示 token，生产应按 Secret 覆盖。
 
 **审批**
 
 - 工具审批（Hub）：`GET /v1/approvals?status=pending` 查看待办，`POST /v1/approvals/{id}/decide` 提交 `{"decision":"approve|reject","reason":"..."}`；两条路径经 Gateway 时均要求 `workflow:run`。
-- 审批有效期默认 600 秒（`ApprovalService` TTL），过期记录自动清理；仅第一次决策生效，重复决策返回 409。
+- 审批有效期默认 600 秒（`ApprovalService` TTL），过期记录自动清理；仅第一次决策生效，重复决策返回 409。Postgres 模式通过 `UPDATE ... WHERE status='pending' ... RETURNING` 保证原子性。
 - 审批通过后需重放调用：Chat 请求带 `approval_id`，`/v1/call` 通过 `envelope.approval_id`；DAG 使用 `POST /v1/workflows/runs/{id}/approve|resume`。
-- `MemoryRunStore` 与 `ApprovalService` 均为进程内状态；滚动重启会使挂起的 run 和待审批工具丢失，生产应先接入共享存储。
+- `WORKFLOW_RUN_STORE_DRIVER=postgres` 时，run 快照与审批单（`workflow_executions` / `workflow_approvals`）跨重启与副本保留；未配置时仍为进程内状态，滚动重启会丢失挂起的 run。
 
 **MCP**
 
@@ -260,7 +266,8 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 **审计**
 
 - `GET /v1/audit?limit=100&action=tool.call&decision=denied`，按 `x-tenant-id` 过滤；经 Gateway 时要求 `trace:read`。
-- `AuditLog` 为进程内环形缓冲（默认 2000 条），仅用于近期排障；合规留存需接入 `audit_logs` 表并按月分区。
+- `AGENT_HUB_AUDIT_DRIVER=postgres` 时事件写入 `audit_logs`（按租户、动作、时间可查）；未配置时退化为进程内环形缓冲（默认 2000 条），仅用于近期排障。
+- 合规留存：生产建议对 `audit_logs` 按月分区并配置保留策略；写入失败只记录告警，不阻断被审计的请求。
 - 审计不保存工具入参全文，仅记录参数键、风险、决策、租户与 trace，避免凭据/代码泄漏。
 
 ## 9. 回滚与升级

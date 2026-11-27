@@ -1,6 +1,6 @@
 # NexusFlow v1.2.0 演进与 Agent 自动执行任务清单 (ROADMAP_V1_2)
 
-> **状态：进行中（Milestone 1、Milestone 2 已交付；Milestone 3 待开始）。** 本文件是 v1.2.0 的版本计划摘要；任务拆解与验收命令在执行时补充。
+> **状态：已完成（Milestone 1–3 全部交付）。** 本文件是 v1.2.0 的版本计划摘要；任务拆解与验收命令在执行时补充。
 >
 > **核心目标**：实现**用户自定义 SubAgent + OpenSandbox 安全动态编排**，包含多租户表结构迁移、注册表隔离、沙箱执行器打通、动态技能路由以及前端管理控制台。
 >
@@ -22,5 +22,17 @@
 
 ## Milestone 3: 前端可视化编排控制台与全链路验收
 
-* **[ ] Task 3.1**: 前端控制台新增“自定义 SubAgent”管理与在线调试页 (`web/src/pages/SubAgents.tsx`)。
-* **[ ] Task 3.2**: 扩展真机冒烟测试并同步项目文档 (`scripts/smoke_test.py`)。
+* **[x] Task 3.1**: 前端控制台新增“自定义 SubAgent”管理与在线调试页 (`web/src/pages/SubAgents.tsx`)。
+  * 交付：新增 `/subagents` 页面与导航（`user:read` 可见，写操作需 `user:write`）；支持 HTTP / Sandbox Agent 的列表、创建/更新、删除、技能声明、在线调用调试与技能清单；Gateway 新增 `/v1/agents` CRUD 与 `/v1/skills` 代理；Sandbox 元数据更新可省略代码并复用已存代码。
+* **[x] Task 3.2**: 扩展真机冒烟测试并同步项目文档 (`scripts/smoke_test.py`)。
+  * 交付：冒烟脚本新增 Agent Hub `/readyz`、`/v1/agents`、`/v1/skills` 检查；README、架构、部署、`.env.example`、Compose/K8s 同步 SubAgent 管理、技能路由与权限说明。
+
+## 后续待办（未开始）
+
+> v1.2.0 的三阶段目标已全部交付。以下能力未纳入本版本，拆解与验收标准统一维护在 [ROADMAP_V1_1_V1_5.md](ROADMAP_V1_1_V1_5.md)，按编号执行即可。
+
+* **Task 4.1 安全合规**：PII 入口/出口双向脱敏，审计日志按租户、时间检索与保留策略（`audit_logs` 持久化已随 Task 3.3 完成）。
+* **Task 4.2 模型治理**：统一 LLM 路由网关（主备故障转移、熔断）与租户级 token/调用量配额前置拦截。
+* **Task 5.1 对外服务**：租户级 API Key 签发/吊销/作用域，以及 OpenAI 兼容 `/v1/openai/chat/completions`。
+* **Task 5.2 生态集成**：Webhook 订阅（HMAC 签名、指数退避、投递日志）；MCP Server 已交付，Webhook 未开始。
+* **原 v1.2.0 顺延项**：MinerU 图文多模态检索、统一 Connector 框架（web_crawler / s3_bucket / db_query）。

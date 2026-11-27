@@ -36,7 +36,10 @@ func main() {
 		registry.Register(workflow.HumanApprovalNode{})
 	}
 	engine := workflow.NewEngine(registry, logger)
-	runStore := workflow.NewMemoryRunStore(500)
+	runStore, closeRunStore := workflow.NewRunStore(
+		ctx, cfg.WorkflowRunStoreDriver, cfg.WorkflowRunDatabaseURL,
+	)
+	defer closeRunStore()
 
 	srv := &http.Server{
 		Addr: cfg.WorkflowHTTPAddr,

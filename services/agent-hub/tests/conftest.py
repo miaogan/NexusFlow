@@ -24,3 +24,8 @@ os.environ["AGENT_HUB_ROLE"] = "all"
 os.environ["AGENT_HUB_MODE"] = "local"
 os.environ["AGENT_HUB_DYNAMIC_REGISTRATION"] = "false"
 os.environ["MEMORY_DRIVER"] = "memory"
+# Approval/audit persistence must stay in memory for offline tests even when a
+# developer has a real Postgres DSN in services/agent-hub/.env.
+os.environ["AGENT_HUB_APPROVAL_DRIVER"] = "memory"
+os.environ["AGENT_HUB_AUDIT_DRIVER"] = "memory"
+os.environ["AGENT_HUB_STATE_DATABASE_URL"] = ""

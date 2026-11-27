@@ -51,6 +51,10 @@ data:
   # Tenant-scoped custom SubAgents persist in Postgres.
   AGENT_HUB_REGISTRY_DRIVER: "postgres"
   AGENT_HUB_REGISTRY_DATABASE_URL: "postgresql://nexusflow:change-me@postgres.nexusflow.svc:5432/nexusflow"
+  # HITL approval tickets and the audit trail are shared across replicas.
+  AGENT_HUB_APPROVAL_DRIVER: "postgres"
+  AGENT_HUB_AUDIT_DRIVER: "postgres"
+  AGENT_HUB_STATE_DATABASE_URL: "postgresql://nexusflow:change-me@postgres.nexusflow.svc:5432/nexusflow"
   # Tools / reasoning / MCP / HITL switches (roll out in order).
   AGENT_HUB_TOOLS_ENABLED: "false"
   AGENT_HUB_REASONING_ENABLED: "false"
@@ -69,6 +73,10 @@ data:
   AGENT_HUB_URL: "http://rag-agent:8001"
   AGENT_HUB_TIMEOUT: "30s"
   HITL_ENABLED: "false"
+  # Suspended workflow runs and approval tickets survive restarts and are
+  # visible to every workflow-engine replica.
+  WORKFLOW_RUN_STORE_DRIVER: "postgres"
+  WORKFLOW_RUN_DATABASE_URL: "postgresql://nexusflow:change-me@postgres.nexusflow.svc:5432/nexusflow"
   # Memory content lives in Postgres; vectors live in Qdrant.
   MEMORY_DRIVER: "qdrant"
   MEMORY_DATABASE_URL: "postgresql://nexusflow:change-me@postgres.nexusflow.svc:5432/nexusflow"

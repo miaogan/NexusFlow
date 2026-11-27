@@ -110,3 +110,43 @@ func TestHumanApprovalRejectsRun(t *testing.T) {
 		t.Fatalf("get status = %d", rec.Code)
 	}
 }
+
+// TestConcurrentApprovalsOnlyOneWins guards the multi-replica guarantee: the
+// atomic transition lets exactly one decision resume the run.
+func TestConcurrentApprovalsOnlyOneWins(t *testing.T) {
+	handler, _ := newApprovalHandler()
+	rec := doJSON(t, handler, http.MethodPost, "/v1/workflows/run", HTTPRunRequest{
+		DAG: approvalDAG(),
+	})
+	var result RunResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	path := "/v1/workflows/runs/" + result.RunID + "/approve"
+
+	start := make(chan struct{})
+	codes := make(chan int, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			<-start
+			response := doJSON(t, handler, http.MethodPost, path, approvalRequest{Decision: "approve"})
+			codes <- response.Code
+		}()
+	}
+	close(start)
+
+	ok, conflict := 0, 0
+	for i := 0; i < 2; i++ {
+		switch code := <-codes; code {
+		case http.StatusOK:
+			ok++
+		case http.StatusConflict:
+			conflict++
+		default:
+			t.Fatalf("unexpected status %d", code)
+		}
+	}
+	if ok != 1 || conflict != 1 {
+		t.Fatalf("ok=%d conflict=%d, want 1/1", ok, conflict)
+	}
+}

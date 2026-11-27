@@ -14,14 +14,18 @@
 --     模型，尚未落地；接入时需明确 Postgres 与 Redis 的主从关系，避免计数漂移。
 --   * custom_agents（v1.2.0）已落地：Agent Hub 在 AGENT_HUB_REGISTRY_DRIVER=postgres 时
 --     启动幂等建表，用于租户级自定义 SubAgent；内置 Agent 仅存于进程内注册表。
---   * workflow_executions / workflow_approvals / audit_logs 已定义目标模型，当前运行时
---     分别由 MemoryRunStore / ApprovalService / AuditLog 承担（进程内、重启丢失），尚未
---     建表或写入；接入时需将 run_id / approval_id / tenant_id / trace_id 与代码对齐。
---     代码中的 run 状态已使用 COMPLETED / FAILED / REJECTED / WAITING_APPROVAL。
+--   * workflow_executions / workflow_approvals 已落地：Go workflow-engine 在
+--     WORKFLOW_RUN_STORE_DRIVER=postgres 时启动幂等建表；挂起快照写入 context_snapshot，
+--     审批单以 (execution_id, node_id) 派生的稳定 ID 幂等 upsert，审批并发通过行锁 +
+--     状态 CAS 保证只有一次决策生效。Run 状态取值为 RUNNING / WAITING_APPROVAL /
+--     COMPLETED / FAILED / REJECTED。
+--   * audit_logs 已落地：Agent Hub 在 AGENT_HUB_AUDIT_DRIVER=postgres 时启动幂等建表，
+--     记录工具调用与审批事件；Agent Hub 的 HITL 工具审批使用本文件末尾的
+--     agent_approvals（工作流审批仍走 workflow_approvals），两者不要混用。
 --   * Milestone 2 及之后的其余表（data_connectors、document_media_assets 等）仍为规划草案，
 --     代码中尚未建表。
 --   * 所有状态/枚举字段以字符串存储，应用层常量必须与本文件的取值保持一致。
---   * audit_logs 在生产环境建议按月分区（本文件只保留基表定义）。
+--   * audit_logs 在生产环境建议按月分区（本文件只保留基表定义）并配置保留策略。
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
@@ -276,3 +280,25 @@ CREATE TABLE IF NOT EXISTS custom_agents (
 
 CREATE INDEX IF NOT EXISTS custom_agents_tenant_idx
     ON custom_agents (tenant_id, updated_at DESC);
+
+-- 13. Agent Hub 工具调用审批单（Human-in-the-Loop）
+-- 与 workflow_approvals 的区别：本表服务于工具/SubAgent 的高风险调用，
+-- 不绑定工作流执行实例；状态取值为 pending / approved / rejected。
+CREATE TABLE IF NOT EXISTS agent_approvals (
+    id          VARCHAR(64) PRIMARY KEY,
+    tenant_id   VARCHAR(64) NOT NULL,
+    tool        VARCHAR(128) NOT NULL,
+    args        JSONB NOT NULL DEFAULT '{}'::jsonb,
+    risk        VARCHAR(16) NOT NULL DEFAULT 'read',
+    user_id     VARCHAR(64) NOT NULL DEFAULT '',
+    trace_id    VARCHAR(64) NOT NULL DEFAULT '',
+    status      VARCHAR(16) NOT NULL DEFAULT 'pending',
+    reason      TEXT NOT NULL DEFAULT '',
+    decided_by  VARCHAR(64) NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    decided_at  TIMESTAMPTZ,
+    expires_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS agent_approvals_pending_idx
+    ON agent_approvals (tenant_id, status, created_at DESC);

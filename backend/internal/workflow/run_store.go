@@ -29,16 +29,29 @@ type RunState struct {
 	Output      map[string]any `json:"output,omitempty"`
 	PendingNode string         `json:"pending_node,omitempty"`
 	Error       string         `json:"error,omitempty"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
+	// ApprovedBy and ApprovalReason record who resumed the run so audit and
+	// approval tickets keep the reviewer instead of the original requester.
+	ApprovedBy     string    `json:"approved_by,omitempty"`
+	ApprovalReason string    `json:"approval_reason,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // RunStore persists run checkpoints. MemoryRunStore is the single-process
-// implementation; a PostgreSQL-backed store can replace it later.
+// implementation; PostgresRunStore keeps runs across replicas and restarts.
 type RunStore interface {
 	Save(*RunState)
 	Get(id string) (*RunState, bool)
 	List(limit int) []*RunState
+}
+
+// RunTransitioner is an optional RunStore extension that applies a status
+// change atomically. decideRun uses it to guarantee two replicas cannot both
+// approve the same suspended run; stores without it fall back to Get + Save.
+type RunTransitioner interface {
+	// Transition applies mutate when the stored run is still in `from` status.
+	// It returns false when the run is missing or already past that status.
+	Transition(id string, from RunStatus, mutate func(*RunState) error) (bool, error)
 }
 
 // MemoryRunStore keeps the most recent runs in memory.
@@ -92,6 +105,24 @@ func (s *MemoryRunStore) List(limit int) []*RunState {
 		}
 	}
 	return out
+}
+
+// Transition applies a status change under the store lock.
+func (s *MemoryRunStore) Transition(
+	id string, from RunStatus, mutate func(*RunState) error,
+) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.runs[id]
+	if !ok || RunStatus(state.Status) != from {
+		return false, nil
+	}
+	next := cloneRun(state)
+	if err := mutate(next); err != nil {
+		return false, err
+	}
+	s.runs[id] = next
+	return true, nil
 }
 
 func cloneRun(state *RunState) *RunState {
