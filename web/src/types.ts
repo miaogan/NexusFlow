@@ -269,9 +269,29 @@ export interface KnowledgeBase {
   tenant_id: string;
   name: string;
   description: string;
+  role?: "kb:admin" | "kb:editor" | "kb:viewer" | string;
+  status?: string;
+  created_by?: string;
+  embedding_model?: string;
   created_at?: string;
   updated_at?: string;
 }
+
+export interface KnowledgeBasePermission {
+  id: string;
+  tenant_id: string;
+  kb_id: string;
+  subject_type: "user" | "role" | string;
+  subject_id: string;
+  permission: "kb:admin" | "kb:editor" | "kb:viewer" | string;
+  created_at?: string;
+}
+
+export const KB_ROLE_LABELS: Record<string, string> = {
+  "kb:admin": "管理员",
+  "kb:editor": "编辑者",
+  "kb:viewer": "只读",
+};
 
 // ---------- Usage / quota ----------
 

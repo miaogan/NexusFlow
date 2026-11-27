@@ -20,6 +20,11 @@ service KnowledgeBaseService {
   rpc ListKnowledgeBases(ListKnowledgeBasesRequest) returns (ListKnowledgeBasesResponse);
   rpc UpdateKnowledgeBase(UpdateKnowledgeBaseRequest) returns (KnowledgeBaseResponse);
   rpc DeleteKnowledgeBase(DeleteKnowledgeBaseRequest) returns (DeleteKnowledgeBaseResponse);
+
+  // 知识库级 RBAC：显式绑定用户或角色到 kb:admin / kb:editor / kb:viewer。
+  rpc GrantKnowledgeBasePermission(GrantKnowledgeBasePermissionRequest) returns (KnowledgeBasePermissionResponse);
+  rpc RevokeKnowledgeBasePermission(RevokeKnowledgeBasePermissionRequest) returns (DeleteKnowledgeBaseResponse);
+  rpc ListKnowledgeBasePermissions(ListKnowledgeBasePermissionsRequest) returns (ListKnowledgeBasePermissionsResponse);
 }
 
 service UserService {
@@ -76,6 +81,45 @@ message KnowledgeBaseInfo {
   string description = 4;
   string created_at = 5;
   string updated_at = 6;
+  string role = 7;             // 调用者在该库的有效角色：kb:admin / kb:editor / kb:viewer
+  string status = 8;           // ACTIVE / ARCHIVED / DELETING
+  string created_by = 9;
+  string embedding_model = 10;
+}
+
+message KnowledgeBasePermissionInfo {
+  string id = 1;
+  string tenant_id = 2;
+  string kb_id = 3;
+  string subject_type = 4;  // user | role
+  string subject_id = 5;    // user_id 或 role_name
+  string permission = 6;    // kb:admin | kb:editor | kb:viewer
+  string created_at = 7;
+}
+
+message GrantKnowledgeBasePermissionRequest {
+  string kb_id = 1;
+  string subject_type = 2;
+  string subject_id = 3;
+  string permission = 4;
+}
+
+message RevokeKnowledgeBasePermissionRequest {
+  string kb_id = 1;
+  string subject_type = 2;
+  string subject_id = 3;
+}
+
+message ListKnowledgeBasePermissionsRequest {
+  string kb_id = 1;
+}
+
+message KnowledgeBasePermissionResponse {
+  KnowledgeBasePermissionInfo permission = 1;
+}
+
+message ListKnowledgeBasePermissionsResponse {
+  repeated KnowledgeBasePermissionInfo permissions = 1;
 }
 
 message CreateKnowledgeBaseRequest {

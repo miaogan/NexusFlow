@@ -33,6 +33,10 @@ type Store interface {
 	ListKnowledgeBases(ctx context.Context, tenantID string) ([]KnowledgeBase, error)
 	UpdateKnowledgeBase(ctx context.Context, kb KnowledgeBase) (KnowledgeBase, error)
 	DeleteKnowledgeBase(ctx context.Context, tenantID, id string) error
+
+	UpsertKnowledgeBasePermission(ctx context.Context, perm KnowledgeBasePermission) (KnowledgeBasePermission, error)
+	DeleteKnowledgeBasePermission(ctx context.Context, tenantID, kbID, subjectType, subjectID string) error
+	ListKnowledgeBasePermissions(ctx context.Context, tenantID, kbID string) ([]KnowledgeBasePermission, error)
 }
 
 // SeedOptions configures the startup seed of built-in roles and the first admin.
@@ -45,11 +49,12 @@ type SeedOptions struct {
 // MemoryStore keeps users and roles in process memory.
 type MemoryStore struct {
 	mu        sync.RWMutex
-	users     map[string]*User          // tenantID:id -> user
-	usernames map[string]string         // tenantID:username(lower) -> id
-	roles     map[string]*Role          // name -> role
-	kbs       map[string]*KnowledgeBase // tenantID:id -> knowledge base
-	kbNames   map[string]string         // tenantID:name(lower) -> id
+	users     map[string]*User                    // tenantID:id -> user
+	usernames map[string]string                   // tenantID:username(lower) -> id
+	roles     map[string]*Role                    // name -> role
+	kbs       map[string]*KnowledgeBase           // tenantID:id -> knowledge base
+	kbNames   map[string]string                   // tenantID (0x1f) name -> id
+	kbPerms   map[string]*KnowledgeBasePermission // tenant/kb/subject -> permission
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -59,6 +64,7 @@ func NewMemoryStore() *MemoryStore {
 		roles:     make(map[string]*Role),
 		kbs:       make(map[string]*KnowledgeBase),
 		kbNames:   make(map[string]string),
+		kbPerms:   make(map[string]*KnowledgeBasePermission),
 	}
 }
 

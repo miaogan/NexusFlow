@@ -277,11 +277,14 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	KnowledgeBaseService_CreateKnowledgeBase_FullMethodName = "/vectorization.v1.KnowledgeBaseService/CreateKnowledgeBase"
-	KnowledgeBaseService_GetKnowledgeBase_FullMethodName    = "/vectorization.v1.KnowledgeBaseService/GetKnowledgeBase"
-	KnowledgeBaseService_ListKnowledgeBases_FullMethodName  = "/vectorization.v1.KnowledgeBaseService/ListKnowledgeBases"
-	KnowledgeBaseService_UpdateKnowledgeBase_FullMethodName = "/vectorization.v1.KnowledgeBaseService/UpdateKnowledgeBase"
-	KnowledgeBaseService_DeleteKnowledgeBase_FullMethodName = "/vectorization.v1.KnowledgeBaseService/DeleteKnowledgeBase"
+	KnowledgeBaseService_CreateKnowledgeBase_FullMethodName           = "/vectorization.v1.KnowledgeBaseService/CreateKnowledgeBase"
+	KnowledgeBaseService_GetKnowledgeBase_FullMethodName              = "/vectorization.v1.KnowledgeBaseService/GetKnowledgeBase"
+	KnowledgeBaseService_ListKnowledgeBases_FullMethodName            = "/vectorization.v1.KnowledgeBaseService/ListKnowledgeBases"
+	KnowledgeBaseService_UpdateKnowledgeBase_FullMethodName           = "/vectorization.v1.KnowledgeBaseService/UpdateKnowledgeBase"
+	KnowledgeBaseService_DeleteKnowledgeBase_FullMethodName           = "/vectorization.v1.KnowledgeBaseService/DeleteKnowledgeBase"
+	KnowledgeBaseService_GrantKnowledgeBasePermission_FullMethodName  = "/vectorization.v1.KnowledgeBaseService/GrantKnowledgeBasePermission"
+	KnowledgeBaseService_RevokeKnowledgeBasePermission_FullMethodName = "/vectorization.v1.KnowledgeBaseService/RevokeKnowledgeBasePermission"
+	KnowledgeBaseService_ListKnowledgeBasePermissions_FullMethodName  = "/vectorization.v1.KnowledgeBaseService/ListKnowledgeBasePermissions"
 )
 
 // KnowledgeBaseServiceClient is the client API for KnowledgeBaseService service.
@@ -295,6 +298,10 @@ type KnowledgeBaseServiceClient interface {
 	ListKnowledgeBases(ctx context.Context, in *ListKnowledgeBasesRequest, opts ...grpc.CallOption) (*ListKnowledgeBasesResponse, error)
 	UpdateKnowledgeBase(ctx context.Context, in *UpdateKnowledgeBaseRequest, opts ...grpc.CallOption) (*KnowledgeBaseResponse, error)
 	DeleteKnowledgeBase(ctx context.Context, in *DeleteKnowledgeBaseRequest, opts ...grpc.CallOption) (*DeleteKnowledgeBaseResponse, error)
+	// 知识库级 RBAC：显式绑定用户或角色到 kb:admin / kb:editor / kb:viewer。
+	GrantKnowledgeBasePermission(ctx context.Context, in *GrantKnowledgeBasePermissionRequest, opts ...grpc.CallOption) (*KnowledgeBasePermissionResponse, error)
+	RevokeKnowledgeBasePermission(ctx context.Context, in *RevokeKnowledgeBasePermissionRequest, opts ...grpc.CallOption) (*DeleteKnowledgeBaseResponse, error)
+	ListKnowledgeBasePermissions(ctx context.Context, in *ListKnowledgeBasePermissionsRequest, opts ...grpc.CallOption) (*ListKnowledgeBasePermissionsResponse, error)
 }
 
 type knowledgeBaseServiceClient struct {
@@ -355,6 +362,36 @@ func (c *knowledgeBaseServiceClient) DeleteKnowledgeBase(ctx context.Context, in
 	return out, nil
 }
 
+func (c *knowledgeBaseServiceClient) GrantKnowledgeBasePermission(ctx context.Context, in *GrantKnowledgeBasePermissionRequest, opts ...grpc.CallOption) (*KnowledgeBasePermissionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KnowledgeBasePermissionResponse)
+	err := c.cc.Invoke(ctx, KnowledgeBaseService_GrantKnowledgeBasePermission_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *knowledgeBaseServiceClient) RevokeKnowledgeBasePermission(ctx context.Context, in *RevokeKnowledgeBasePermissionRequest, opts ...grpc.CallOption) (*DeleteKnowledgeBaseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteKnowledgeBaseResponse)
+	err := c.cc.Invoke(ctx, KnowledgeBaseService_RevokeKnowledgeBasePermission_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *knowledgeBaseServiceClient) ListKnowledgeBasePermissions(ctx context.Context, in *ListKnowledgeBasePermissionsRequest, opts ...grpc.CallOption) (*ListKnowledgeBasePermissionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListKnowledgeBasePermissionsResponse)
+	err := c.cc.Invoke(ctx, KnowledgeBaseService_ListKnowledgeBasePermissions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // KnowledgeBaseServiceServer is the server API for KnowledgeBaseService service.
 // All implementations must embed UnimplementedKnowledgeBaseServiceServer
 // for forward compatibility.
@@ -366,6 +403,10 @@ type KnowledgeBaseServiceServer interface {
 	ListKnowledgeBases(context.Context, *ListKnowledgeBasesRequest) (*ListKnowledgeBasesResponse, error)
 	UpdateKnowledgeBase(context.Context, *UpdateKnowledgeBaseRequest) (*KnowledgeBaseResponse, error)
 	DeleteKnowledgeBase(context.Context, *DeleteKnowledgeBaseRequest) (*DeleteKnowledgeBaseResponse, error)
+	// 知识库级 RBAC：显式绑定用户或角色到 kb:admin / kb:editor / kb:viewer。
+	GrantKnowledgeBasePermission(context.Context, *GrantKnowledgeBasePermissionRequest) (*KnowledgeBasePermissionResponse, error)
+	RevokeKnowledgeBasePermission(context.Context, *RevokeKnowledgeBasePermissionRequest) (*DeleteKnowledgeBaseResponse, error)
+	ListKnowledgeBasePermissions(context.Context, *ListKnowledgeBasePermissionsRequest) (*ListKnowledgeBasePermissionsResponse, error)
 	mustEmbedUnimplementedKnowledgeBaseServiceServer()
 }
 
@@ -390,6 +431,15 @@ func (UnimplementedKnowledgeBaseServiceServer) UpdateKnowledgeBase(context.Conte
 }
 func (UnimplementedKnowledgeBaseServiceServer) DeleteKnowledgeBase(context.Context, *DeleteKnowledgeBaseRequest) (*DeleteKnowledgeBaseResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteKnowledgeBase not implemented")
+}
+func (UnimplementedKnowledgeBaseServiceServer) GrantKnowledgeBasePermission(context.Context, *GrantKnowledgeBasePermissionRequest) (*KnowledgeBasePermissionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GrantKnowledgeBasePermission not implemented")
+}
+func (UnimplementedKnowledgeBaseServiceServer) RevokeKnowledgeBasePermission(context.Context, *RevokeKnowledgeBasePermissionRequest) (*DeleteKnowledgeBaseResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RevokeKnowledgeBasePermission not implemented")
+}
+func (UnimplementedKnowledgeBaseServiceServer) ListKnowledgeBasePermissions(context.Context, *ListKnowledgeBasePermissionsRequest) (*ListKnowledgeBasePermissionsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListKnowledgeBasePermissions not implemented")
 }
 func (UnimplementedKnowledgeBaseServiceServer) mustEmbedUnimplementedKnowledgeBaseServiceServer() {}
 func (UnimplementedKnowledgeBaseServiceServer) testEmbeddedByValue()                              {}
@@ -502,6 +552,60 @@ func _KnowledgeBaseService_DeleteKnowledgeBase_Handler(srv interface{}, ctx cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _KnowledgeBaseService_GrantKnowledgeBasePermission_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GrantKnowledgeBasePermissionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KnowledgeBaseServiceServer).GrantKnowledgeBasePermission(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KnowledgeBaseService_GrantKnowledgeBasePermission_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KnowledgeBaseServiceServer).GrantKnowledgeBasePermission(ctx, req.(*GrantKnowledgeBasePermissionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KnowledgeBaseService_RevokeKnowledgeBasePermission_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeKnowledgeBasePermissionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KnowledgeBaseServiceServer).RevokeKnowledgeBasePermission(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KnowledgeBaseService_RevokeKnowledgeBasePermission_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KnowledgeBaseServiceServer).RevokeKnowledgeBasePermission(ctx, req.(*RevokeKnowledgeBasePermissionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KnowledgeBaseService_ListKnowledgeBasePermissions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListKnowledgeBasePermissionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KnowledgeBaseServiceServer).ListKnowledgeBasePermissions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KnowledgeBaseService_ListKnowledgeBasePermissions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KnowledgeBaseServiceServer).ListKnowledgeBasePermissions(ctx, req.(*ListKnowledgeBasePermissionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // KnowledgeBaseService_ServiceDesc is the grpc.ServiceDesc for KnowledgeBaseService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -528,6 +632,18 @@ var KnowledgeBaseService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteKnowledgeBase",
 			Handler:    _KnowledgeBaseService_DeleteKnowledgeBase_Handler,
+		},
+		{
+			MethodName: "GrantKnowledgeBasePermission",
+			Handler:    _KnowledgeBaseService_GrantKnowledgeBasePermission_Handler,
+		},
+		{
+			MethodName: "RevokeKnowledgeBasePermission",
+			Handler:    _KnowledgeBaseService_RevokeKnowledgeBasePermission_Handler,
+		},
+		{
+			MethodName: "ListKnowledgeBasePermissions",
+			Handler:    _KnowledgeBaseService_ListKnowledgeBasePermissions_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

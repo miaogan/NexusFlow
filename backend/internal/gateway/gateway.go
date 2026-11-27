@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/nexusflow/nexusflow/backend/internal/feedback"
+	"github.com/nexusflow/nexusflow/backend/internal/identity"
 	"github.com/nexusflow/nexusflow/backend/internal/metering"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/metrics"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/tracing"
@@ -204,8 +205,14 @@ func (g *Gateway) Router() *gin.Engine {
 	// Knowledge-base management and namespace discovery.
 	v1.GET("/knowledge-bases", RequirePermission("kb:read"), g.listKnowledgeBases)
 	v1.POST("/knowledge-bases", RequirePermission("kb:write"), g.createKnowledgeBase)
-	v1.PATCH("/knowledge-bases/:id", RequirePermission("kb:write"), g.updateKnowledgeBase)
-	v1.DELETE("/knowledge-bases/:id", RequirePermission("kb:write"), g.deleteKnowledgeBase)
+	// Namespace management is authorized per KB inside the service (kb:admin),
+	// so a kb-level admin works even without the tenant-wide kb:write permission.
+	v1.PATCH("/knowledge-bases/:id", RequirePermission("kb:read"), g.updateKnowledgeBase)
+	v1.DELETE("/knowledge-bases/:id", RequirePermission("kb:read"), g.deleteKnowledgeBase)
+	// kb-scoped RBAC bindings (the service enforces kb:admin on the target KB).
+	v1.GET("/knowledge-bases/:id/permissions", RequirePermission("kb:read"), g.listKnowledgeBasePermissions)
+	v1.POST("/knowledge-bases/:id/permissions", RequirePermission("kb:read"), g.grantKnowledgeBasePermission)
+	v1.DELETE("/knowledge-bases/:id/permissions", RequirePermission("kb:read"), g.revokeKnowledgeBasePermission)
 
 	// User & RBAC management.
 	v1.GET("/users", RequirePermission("user:read"), g.listUsers)
@@ -276,8 +283,11 @@ func (g *Gateway) uploadJSON(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "presigned_url host not allowed"})
 		return
 	}
-	kbID, ok := g.resolveKnowledgeBase(c, body.KBID)
+	kbID, role, ok := g.resolveKnowledgeBase(c, body.KBID)
 	if !ok {
+		return
+	}
+	if !requireKBRole(c, role, identity.KBRoleEditor) {
 		return
 	}
 	if !g.allowUpload(c, body.FileSize) {
@@ -358,8 +368,11 @@ func (g *Gateway) uploadMultipart(c *gin.Context) {
 		return
 	}
 
-	kbID, ok := g.resolveKnowledgeBase(c, c.Request.PostForm.Get("kb_id"))
+	kbID, role, ok := g.resolveKnowledgeBase(c, c.Request.PostForm.Get("kb_id"))
 	if !ok {
+		return
+	}
+	if !requireKBRole(c, role, identity.KBRoleEditor) {
 		return
 	}
 	if !g.allowUpload(c, header.Size) {
@@ -455,8 +468,11 @@ func (g *Gateway) listTasks(c *gin.Context) {
 	if offset < 0 {
 		offset = 0
 	}
-	kbID, ok := g.resolveKnowledgeBase(c, c.Query("kb_id"))
+	kbID, role, ok := g.resolveKnowledgeBase(c, c.Query("kb_id"))
 	if !ok {
+		return
+	}
+	if !requireKBRole(c, role, identity.KBRoleViewer) {
 		return
 	}
 	ctx, _ := g.callerContext(c)
@@ -490,8 +506,11 @@ func (g *Gateway) listTasks(c *gin.Context) {
 }
 
 func (g *Gateway) getTask(c *gin.Context) {
-	kbID, ok := g.resolveKnowledgeBase(c, c.Query("kb_id"))
+	kbID, role, ok := g.resolveKnowledgeBase(c, c.Query("kb_id"))
 	if !ok {
+		return
+	}
+	if !requireKBRole(c, role, identity.KBRoleViewer) {
 		return
 	}
 	ctx, _ := g.callerContext(c)
@@ -518,8 +537,11 @@ func (g *Gateway) getTask(c *gin.Context) {
 }
 
 func (g *Gateway) deleteTask(c *gin.Context) {
-	kbID, ok := g.resolveKnowledgeBase(c, c.Query("kb_id"))
+	kbID, role, ok := g.resolveKnowledgeBase(c, c.Query("kb_id"))
 	if !ok {
+		return
+	}
+	if !requireKBRole(c, role, identity.KBRoleEditor) {
 		return
 	}
 	ctx, _ := g.callerContext(c)
@@ -553,8 +575,11 @@ func (g *Gateway) deleteFile(c *gin.Context) {
 }
 
 func (g *Gateway) retryTask(c *gin.Context) {
-	kbID, ok := g.resolveKnowledgeBase(c, c.Query("kb_id"))
+	kbID, role, ok := g.resolveKnowledgeBase(c, c.Query("kb_id"))
 	if !ok {
+		return
+	}
+	if !requireKBRole(c, role, identity.KBRoleEditor) {
 		return
 	}
 	ctx, _ := g.callerContext(c)
@@ -617,8 +642,11 @@ func (g *Gateway) search(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	kbID, ok := g.resolveKnowledgeBase(c, body.KBID)
+	kbID, role, ok := g.resolveKnowledgeBase(c, body.KBID)
 	if !ok {
+		return
+	}
+	if !requireKBRole(c, role, identity.KBRoleViewer) {
 		return
 	}
 	if !g.allowQuery(c) {

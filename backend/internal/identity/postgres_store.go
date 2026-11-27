@@ -63,6 +63,40 @@ var identitySchema = []string{
 	)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS identity_knowledge_bases_tenant_name_idx
 		ON identity_knowledge_bases (tenant_id, lower(name))`,
+	// Enterprise schema (docs/schema_enterprise_v1_1_to_1_5.sql). The legacy
+	// identity_knowledge_bases table above is kept read-compatible and migrated
+	// once; new code only reads and writes knowledge_bases.
+	`CREATE TABLE IF NOT EXISTS knowledge_bases (
+		id VARCHAR(64) PRIMARY KEY,
+		tenant_id VARCHAR(64) NOT NULL,
+		name VARCHAR(128) NOT NULL,
+		description TEXT DEFAULT '',
+		embedding_model VARCHAR(128) DEFAULT 'default',
+		chunk_strategy JSONB DEFAULT '{"type": "semantic", "chunk_size": 512, "overlap": 64}'::jsonb,
+		status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+		created_by VARCHAR(64) NOT NULL,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		UNIQUE (tenant_id, name)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_kb_tenant_status
+		ON knowledge_bases (tenant_id, status)`,
+	`CREATE TABLE IF NOT EXISTS kb_permissions (
+		id VARCHAR(64) PRIMARY KEY,
+		tenant_id VARCHAR(64) NOT NULL,
+		kb_id VARCHAR(64) NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+		subject_type VARCHAR(16) NOT NULL,
+		subject_id VARCHAR(64) NOT NULL,
+		permission VARCHAR(32) NOT NULL,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		UNIQUE (kb_id, subject_type, subject_id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_kb_perm_lookup
+		ON kb_permissions (tenant_id, subject_type, subject_id)`,
+	`INSERT INTO knowledge_bases (id, tenant_id, name, description, created_by, created_at, updated_at)
+		SELECT id, tenant_id, name, description, 'system', created_at, updated_at
+		FROM identity_knowledge_bases
+		ON CONFLICT DO NOTHING`,
 }
 
 // NewPostgresStore opens the database, verifies connectivity and ensures the

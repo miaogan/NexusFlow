@@ -38,7 +38,8 @@ const STAGES: { label: string; min: number }[] = [
 ];
 
 export default function Tasks() {
-  const { kbID } = useOutletContext<LayoutContext>();
+  const { kbID, kbRole } = useOutletContext<LayoutContext>();
+  const canWrite = kbRole === "kb:admin" || kbRole === "kb:editor";
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
   const [loading, setLoading] = useState(false);
@@ -171,18 +172,20 @@ export default function Tasks() {
                     </div>
                     <div className="flex items-center gap-2">
                       <StatePill state={t.status} />
-                      <button
-                        type="button"
-                        title="删除任务"
-                        disabled={busy}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleDelete(t.task_id);
-                        }}
-                        className="rounded p-1 text-slate-500 transition hover:bg-rose-500/10 hover:text-rose-300 disabled:opacity-40"
-                      >
-                        <IconTrash />
-                      </button>
+                      {canWrite && (
+                        <button
+                          type="button"
+                          title="删除任务"
+                          disabled={busy}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleDelete(t.task_id);
+                          }}
+                          className="rounded p-1 text-slate-500 transition hover:bg-rose-500/10 hover:text-rose-300 disabled:opacity-40"
+                        >
+                          <IconTrash />
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div className="mt-2 flex items-center gap-2">
@@ -198,18 +201,20 @@ export default function Tasks() {
         <Card title="任务详情">
           {selected ? (
             <div className="space-y-3 text-xs">
-              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center justify-between gap-2">
                 <StatePill state={selected.status} />
-                <div className="flex items-center gap-1.5">
-                  {selected.status === "FAILED" && (
-                    <Button variant="ghost" disabled={busy} onClick={() => void handleRetry(selected.task_id)}>
-                      <IconRefresh /> 重试
+                {canWrite && (
+                  <div className="flex items-center gap-1.5">
+                    {selected.status === "FAILED" && (
+                      <Button variant="ghost" disabled={busy} onClick={() => void handleRetry(selected.task_id)}>
+                        <IconRefresh /> 重试
+                      </Button>
+                    )}
+                    <Button variant="danger" disabled={busy} onClick={() => void handleDelete(selected.task_id)}>
+                      <IconTrash /> 删除
                     </Button>
-                  )}
-                  <Button variant="danger" disabled={busy} onClick={() => void handleDelete(selected.task_id)}>
-                    <IconTrash /> 删除
-                  </Button>
-                </div>
+                  </div>
+                )}
               </div>
               <div>
                 <div className="mb-1 flex justify-between text-slate-500">

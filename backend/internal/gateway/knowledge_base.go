@@ -14,6 +14,12 @@ type knowledgeBaseReq struct {
 	Description string `json:"description"`
 }
 
+type knowledgeBasePermissionReq struct {
+	SubjectType string `json:"subject_type" binding:"required"`
+	SubjectID   string `json:"subject_id" binding:"required"`
+	Permission  string `json:"permission" binding:"required"`
+}
+
 func (g *Gateway) listKnowledgeBases(c *gin.Context) {
 	if g.knowledgeBases == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "knowledge base service not configured"})
@@ -84,21 +90,89 @@ func (g *Gateway) deleteKnowledgeBase(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": res.GetSuccess()})
 }
 
-// resolveKnowledgeBase validates that the requested namespace belongs to the
-// authenticated tenant. Empty IDs consistently mean the tenant's default KB.
-func (g *Gateway) resolveKnowledgeBase(c *gin.Context, rawID string) (string, bool) {
+// ---------- kb-scoped permissions ----------
+
+func (g *Gateway) grantKnowledgeBasePermission(c *gin.Context) {
 	if g.knowledgeBases == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "knowledge base service not configured"})
-		return "", false
+		return
+	}
+	var body knowledgeBasePermissionReq
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx, _ := g.callerContext(c)
+	res, err := g.knowledgeBases.GrantKnowledgeBasePermission(ctx, &pb.GrantKnowledgeBasePermissionRequest{
+		KbId: c.Param("id"), SubjectType: body.SubjectType,
+		SubjectId: body.SubjectID, Permission: body.Permission,
+	})
+	if err != nil {
+		writeIdentityError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"permission": res.GetPermission()})
+}
+
+func (g *Gateway) revokeKnowledgeBasePermission(c *gin.Context) {
+	if g.knowledgeBases == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "knowledge base service not configured"})
+		return
+	}
+	ctx, _ := g.callerContext(c)
+	res, err := g.knowledgeBases.RevokeKnowledgeBasePermission(ctx, &pb.RevokeKnowledgeBasePermissionRequest{
+		KbId: c.Param("id"), SubjectType: c.Query("subject_type"), SubjectId: c.Query("subject_id"),
+	})
+	if err != nil {
+		writeIdentityError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": res.GetSuccess()})
+}
+
+func (g *Gateway) listKnowledgeBasePermissions(c *gin.Context) {
+	if g.knowledgeBases == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "knowledge base service not configured"})
+		return
+	}
+	ctx, _ := g.callerContext(c)
+	res, err := g.knowledgeBases.ListKnowledgeBasePermissions(ctx, &pb.ListKnowledgeBasePermissionsRequest{
+		KbId: c.Param("id"),
+	})
+	if err != nil {
+		writeIdentityError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"permissions": res.GetPermissions()})
+}
+
+// resolveKnowledgeBase validates that the requested namespace exists and is
+// visible to the caller, returning the caller's effective kb role.
+func (g *Gateway) resolveKnowledgeBase(c *gin.Context, rawID string) (string, string, bool) {
+	if g.knowledgeBases == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "knowledge base service not configured"})
+		return "", "", false
 	}
 	id := strings.TrimSpace(rawID)
 	if id == "" {
 		id = identity.DefaultKnowledgeBaseID
 	}
 	ctx, _ := g.callerContext(c)
-	if _, err := g.knowledgeBases.GetKnowledgeBase(ctx, &pb.GetKnowledgeBaseRequest{Id: id}); err != nil {
+	res, err := g.knowledgeBases.GetKnowledgeBase(ctx, &pb.GetKnowledgeBaseRequest{Id: id})
+	if err != nil {
 		writeIdentityError(c, err)
-		return "", false
+		return "", "", false
 	}
-	return id, true
+	return id, res.GetKnowledgeBase().GetRole(), true
+}
+
+// requireKBRole rejects callers below the minimum kb role with 403.
+func requireKBRole(c *gin.Context, role, minimum string) bool {
+	if !identity.RoleAtLeast(role, minimum) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "forbidden: requires " + minimum, "role": role,
+		})
+		return false
+	}
+	return true
 }

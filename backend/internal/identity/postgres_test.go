@@ -133,10 +133,14 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Error("user still present after delete")
 	}
 
-	// Knowledge bases share the same Postgres store across service instances.
+	// Knowledge bases use the enterprise schema (knowledge_bases) and share the
+	// same Postgres store across service instances.
 	kb, err := st.CreateKnowledgeBase(ctx, KnowledgeBase{TenantID: tenant, Name: "Postgres KB"})
 	if err != nil {
 		t.Fatalf("create knowledge base: %v", err)
+	}
+	if kb.CreatedBy != "system" || kb.Status != KBStatusActive {
+		t.Fatalf("knowledge base defaults = %+v", kb)
 	}
 	if got, ok, err := stores[1].GetKnowledgeBase(ctx, tenant, kb.ID); err != nil || !ok || got.Name != "Postgres KB" {
 		t.Fatalf("shared knowledge base: kb=%+v ok=%v err=%v", got, ok, err)
@@ -144,8 +148,58 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if _, err := st.UpdateKnowledgeBase(ctx, KnowledgeBase{TenantID: tenant, ID: kb.ID, Name: "Postgres KB renamed"}); err != nil {
 		t.Fatalf("update knowledge base: %v", err)
 	}
+
+	// kb_permissions: upsert overwrites, list returns both subjects, deletion
+	// of the knowledge base cascades the bindings away.
+	if _, err := st.UpsertKnowledgeBasePermission(ctx, KnowledgeBasePermission{
+		TenantID: tenant, KBID: kb.ID, SubjectType: KBPermissionSubjectUser,
+		SubjectID: admin.ID, Permission: KBRoleViewer,
+	}); err != nil {
+		t.Fatalf("grant user: %v", err)
+	}
+	permUpdated, err := st.UpsertKnowledgeBasePermission(ctx, KnowledgeBasePermission{
+		TenantID: tenant, KBID: kb.ID, SubjectType: KBPermissionSubjectUser,
+		SubjectID: admin.ID, Permission: KBRoleAdmin,
+	})
+	if err != nil || permUpdated.Permission != KBRoleAdmin {
+		t.Fatalf("upsert overwrite: perm=%+v err=%v", permUpdated, err)
+	}
+	if _, err := st.UpsertKnowledgeBasePermission(ctx, KnowledgeBasePermission{
+		TenantID: tenant, KBID: kb.ID, SubjectType: KBPermissionSubjectRole,
+		SubjectID: RoleEditor, Permission: KBRoleEditor,
+	}); err != nil {
+		t.Fatalf("grant role: %v", err)
+	}
+	perms, err := stores[1].ListKnowledgeBasePermissions(ctx, tenant, kb.ID)
+	if err != nil || len(perms) != 2 {
+		t.Fatalf("list permissions = %+v err=%v, want 2", perms, err)
+	}
 	if err := st.DeleteKnowledgeBase(ctx, tenant, kb.ID); err != nil {
 		t.Fatalf("delete knowledge base: %v", err)
+	}
+	if perms, err := st.ListKnowledgeBasePermissions(ctx, tenant, kb.ID); err != nil || len(perms) != 0 {
+		t.Fatalf("permissions after cascade = %+v err=%v", perms, err)
+	}
+
+	// Legacy identity_knowledge_bases rows are migrated into knowledge_bases on
+	// the next startup (idempotent INSERT ... ON CONFLICT DO NOTHING).
+	legacyID := "legacy-kb-" + tenant
+	if _, err := st.db.ExecContext(ctx,
+		`INSERT INTO identity_knowledge_bases (id, tenant_id, name, description)
+		 VALUES ($1, $2, 'Legacy KB', 'legacy row') ON CONFLICT DO NOTHING`,
+		legacyID, tenant,
+	); err != nil {
+		t.Fatalf("seed legacy row: %v", err)
+	}
+	migrated, err := NewPostgresStore(ctx, dsn)
+	if err != nil {
+		t.Fatalf("reopen store for migration: %v", err)
+	}
+	if got, ok, err := migrated.GetKnowledgeBase(ctx, tenant, legacyID); err != nil || !ok || got.CreatedBy != "system" {
+		t.Fatalf("legacy migration: kb=%+v ok=%v err=%v", got, ok, err)
+	}
+	if err := migrated.DeleteKnowledgeBase(ctx, tenant, legacyID); err != nil {
+		t.Fatalf("cleanup legacy kb: %v", err)
 	}
 
 	// Keep the database clean for repeated runs.

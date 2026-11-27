@@ -8,6 +8,7 @@ import type {
   IntentInfo,
   JwtClaims,
   KnowledgeBase,
+  KnowledgeBasePermission,
   LoginResponse,
   MeInfo,
   PermissionInfo,
@@ -622,6 +623,42 @@ export async function updateKnowledgeBase(
 export async function deleteKnowledgeBase(id: string): Promise<{ success: boolean }> {
   return request<{ success: boolean }>(
     `${GATEWAY_BASE}/v1/knowledge-bases/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
+// ---------- Knowledge base permissions (kb-scoped RBAC) ----------
+
+export async function listKnowledgeBasePermissions(
+  id: string,
+): Promise<{ permissions: KnowledgeBasePermission[] }> {
+  return request<{ permissions: KnowledgeBasePermission[] }>(
+    `${GATEWAY_BASE}/v1/knowledge-bases/${encodeURIComponent(id)}/permissions`,
+  );
+}
+
+export async function grantKnowledgeBasePermission(
+  id: string,
+  input: { subject_type: string; subject_id: string; permission: string },
+): Promise<{ permission: KnowledgeBasePermission }> {
+  return request<{ permission: KnowledgeBasePermission }>(
+    `${GATEWAY_BASE}/v1/knowledge-bases/${encodeURIComponent(id)}/permissions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function revokeKnowledgeBasePermission(
+  id: string,
+  subjectType: string,
+  subjectID: string,
+): Promise<{ success: boolean }> {
+  const params = new URLSearchParams({ subject_type: subjectType, subject_id: subjectID });
+  return request<{ success: boolean }>(
+    `${GATEWAY_BASE}/v1/knowledge-bases/${encodeURIComponent(id)}/permissions?${params.toString()}`,
     { method: "DELETE" },
   );
 }

@@ -1,0 +1,235 @@
+-- ============================================================================
+-- NexusFlow 企业级演进增量数据库 Schema (v1.1.0 - v1.5.0)
+-- 目标数据库: PostgreSQL 16+ (已启用 pgvector 扩展)
+--
+-- 设计约定:
+--   1. 所有业务表强制包含 tenant_id 字段实现多租户逻辑隔离
+--   2. 严格遵循幂等性 (IF NOT EXISTS)，支持服务启动时自动迁移执行
+--   3. 敏感凭据字段 (_encrypted / _hash) 严禁明文存储
+--
+-- 与当前实现的衔接（落地前必须确认，避免双表/双写）:
+--   * 现有 identity 包使用的是 identity_knowledge_bases(tenant_id, id) 主键表；
+--     本草案的 knowledge_bases 为企业版目标模型，落地时应二选一，并提供数据迁移脚本。
+--   * 租户配额目前由 Redis 计量（internal/metering），tenant_quotas 是持久化配额的
+--     草案表；落地时需明确 Postgres 与 Redis 的主从关系，避免计数漂移。
+--   * 所有状态/枚举字段以字符串存储，应用层常量必须与本文件的取值保持一致。
+--   * audit_logs 在生产环境建议按月分区（本文件只保留基表定义）。
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- Milestone 1: 知识库生命周期管理与精细化权限 (v1.1.0)
+-- ----------------------------------------------------------------------------
+
+-- 1. 知识库实体表
+CREATE TABLE IF NOT EXISTS knowledge_bases (
+    id            VARCHAR(64) PRIMARY KEY,
+    tenant_id     VARCHAR(64) NOT NULL,
+    name          VARCHAR(128) NOT NULL,
+    description   TEXT DEFAULT '',
+    embedding_model VARCHAR(128) DEFAULT 'default',
+    chunk_strategy JSONB DEFAULT '{"type": "semantic", "chunk_size": 512, "overlap": 64}'::jsonb,
+    status        VARCHAR(32) NOT NULL DEFAULT 'ACTIVE', -- ACTIVE, ARCHIVED, DELETING
+    created_by    VARCHAR(64) NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_kb_tenant_status
+    ON knowledge_bases (tenant_id, status);
+
+-- 2. 知识库细粒度权限绑定表 (支持对用户或角色授权)
+CREATE TABLE IF NOT EXISTS kb_permissions (
+    id            VARCHAR(64) PRIMARY KEY,
+    tenant_id     VARCHAR(64) NOT NULL,
+    kb_id         VARCHAR(64) NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+    subject_type  VARCHAR(16) NOT NULL, -- 'user' 或 'role'
+    subject_id    VARCHAR(64) NOT NULL, -- user_id 或 role_name
+    permission    VARCHAR(32) NOT NULL, -- 'kb:admin', 'kb:editor', 'kb:viewer'
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (kb_id, subject_type, subject_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_kb_perm_lookup
+    ON kb_permissions (tenant_id, subject_type, subject_id);
+
+-- ----------------------------------------------------------------------------
+-- Milestone 2: 多模态与外部数据源连接器 (v1.2.0)
+-- ----------------------------------------------------------------------------
+
+-- 3. 外部数据源连接器配置表
+CREATE TABLE IF NOT EXISTS data_connectors (
+    id               VARCHAR(64) PRIMARY KEY,
+    tenant_id        VARCHAR(64) NOT NULL,
+    kb_id            VARCHAR(64) NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+    name             VARCHAR(128) NOT NULL,
+    connector_type   VARCHAR(32) NOT NULL, -- 'web_crawler', 's3_bucket', 'db_query'
+    config_encrypted TEXT NOT NULL,        -- AES-GCM 加密后的连接配置 JSON (含 URL/凭证/SQL)
+    schedule_cron    VARCHAR(64) DEFAULT '',
+    sync_cursor      JSONB DEFAULT '{}'::jsonb, -- 增量同步水位线 (如 last_modified / max_id)
+    status           VARCHAR(32) NOT NULL DEFAULT 'IDLE', -- IDLE, SYNCING, ERROR, DISABLED
+    last_sync_at     TIMESTAMPTZ,
+    last_error       TEXT DEFAULT '',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_connectors_tenant_kb
+    ON data_connectors (tenant_id, kb_id);
+
+-- 4. 文档多模态媒体资产映射表 (存储 MinerU 提取的图表/截图元数据)
+CREATE TABLE IF NOT EXISTS document_media_assets (
+    id          VARCHAR(64) PRIMARY KEY,
+    tenant_id   VARCHAR(64) NOT NULL,
+    kb_id       VARCHAR(64) NOT NULL,
+    doc_id      VARCHAR(64) NOT NULL,
+    chunk_id    VARCHAR(64) NOT NULL,
+    media_type  VARCHAR(16) NOT NULL, -- 'image', 'table_snapshot'
+    object_key  VARCHAR(256) NOT NULL, -- MinIO 对象路径
+    caption     TEXT DEFAULT '',       -- 图表标题或 VLM 生成的描述
+    page_number INT DEFAULT 0,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_assets_chunk
+    ON document_media_assets (tenant_id, chunk_id);
+
+CREATE INDEX IF NOT EXISTS idx_media_assets_doc
+    ON document_media_assets (tenant_id, doc_id);
+
+-- ----------------------------------------------------------------------------
+-- Milestone 3: 高级工作流控制流与人工介入 (v1.3.0)
+-- ----------------------------------------------------------------------------
+
+-- 5. 工作流执行实例快照表 (支持人工审批挂起与恢复)
+CREATE TABLE IF NOT EXISTS workflow_executions (
+    execution_id     VARCHAR(64) PRIMARY KEY,
+    tenant_id        VARCHAR(64) NOT NULL,
+    workflow_id      VARCHAR(64) NOT NULL,
+    status           VARCHAR(32) NOT NULL, -- RUNNING, WAITING_APPROVAL, COMPLETED, FAILED, REJECTED
+    current_node_id  VARCHAR(64) DEFAULT '',
+    context_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb, -- 节点输出与变量状态快照
+    triggered_by     VARCHAR(64) NOT NULL,
+    started_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at      TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_wf_exec_tenant_status
+    ON workflow_executions (tenant_id, status);
+
+-- 6. 人工审批任务单表 (Human-in-the-Loop)
+CREATE TABLE IF NOT EXISTS workflow_approvals (
+    id              VARCHAR(64) PRIMARY KEY,
+    tenant_id       VARCHAR(64) NOT NULL,
+    execution_id    VARCHAR(64) NOT NULL REFERENCES workflow_executions(execution_id) ON DELETE CASCADE,
+    node_id         VARCHAR(64) NOT NULL,
+    assignee_role   VARCHAR(64) DEFAULT '', -- 指定审批角色 (如 admin / editor)
+    prompt_message  TEXT DEFAULT '',        -- 展示给审批人的提示与上下文摘要
+    payload_preview JSONB DEFAULT '{}'::jsonb,
+    decision        VARCHAR(32) NOT NULL DEFAULT 'PENDING', -- PENDING, APPROVED, REJECTED
+    reviewer_id     VARCHAR(64) DEFAULT '',
+    review_comment  TEXT DEFAULT '',
+    expires_at      TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolved_at     TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_wf_approvals_pending
+    ON workflow_approvals (tenant_id, decision, created_at DESC);
+
+-- ----------------------------------------------------------------------------
+-- Milestone 4: 企业级安全合规与大模型网关治理 (v1.4.0)
+-- ----------------------------------------------------------------------------
+
+-- 7. 企业级合规审计日志表 (建议生产环境按月做分区)
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id               VARCHAR(64) PRIMARY KEY,
+    tenant_id        VARCHAR(64) NOT NULL,
+    user_id          VARCHAR(64) NOT NULL,
+    action           VARCHAR(64) NOT NULL, -- 如 'file.delete', 'kb.permission.update', 'chat.query'
+    resource_type    VARCHAR(32) NOT NULL, -- 'knowledge_base', 'document', 'user', 'api_key'
+    resource_id      VARCHAR(64) DEFAULT '',
+    client_ip        VARCHAR(64) DEFAULT '',
+    trace_id         VARCHAR(64) DEFAULT '',
+    pii_masked_count INT DEFAULT 0,        -- 本次请求触发的 PII 脱敏命中次数
+    status_code      INT NOT NULL,
+    metadata         JSONB DEFAULT '{}'::jsonb,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_time
+    ON audit_logs (tenant_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action
+    ON audit_logs (tenant_id, action);
+
+-- 8. 租户级资源配额与用量统计表
+CREATE TABLE IF NOT EXISTS tenant_quotas (
+    tenant_id           VARCHAR(64) PRIMARY KEY,
+    max_storage_bytes   BIGINT NOT NULL DEFAULT 10737418240, -- 默认 10 GiB
+    used_storage_bytes  BIGINT NOT NULL DEFAULT 0,
+    daily_token_limit   BIGINT NOT NULL DEFAULT 1000000,    -- 默认每日 100 万 Token
+    daily_tokens_used   BIGINT NOT NULL DEFAULT 0,
+    quota_reset_at      TIMESTAMPTZ NOT NULL DEFAULT (DATE_TRUNC('day', NOW()) + INTERVAL '1 day'),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ----------------------------------------------------------------------------
+-- Milestone 5: 生态集成与对外服务能力 (v1.5.0)
+-- ----------------------------------------------------------------------------
+
+-- 9. 对外开放平台 API Key 表 (绑定特定租户与允许访问的知识库白名单)
+CREATE TABLE IF NOT EXISTS api_keys (
+    id             VARCHAR(64) PRIMARY KEY,
+    tenant_id      VARCHAR(64) NOT NULL,
+    name           VARCHAR(128) NOT NULL,
+    key_prefix     VARCHAR(16) NOT NULL,  -- 用于前端展示前缀，如 'nf-sk-8a9b...'
+    key_hash       VARCHAR(128) NOT NULL UNIQUE, -- SHA-256 哈希值
+    allowed_kb_ids JSONB DEFAULT '[]'::jsonb,    -- 允许检索的 kb_id 列表，空数组代表租户内全量
+    scopes         JSONB DEFAULT '["chat:completions", "search:use"]'::jsonb,
+    rate_limit_rpm INT NOT NULL DEFAULT 60,
+    status         VARCHAR(16) NOT NULL DEFAULT 'ACTIVE', -- ACTIVE, REVOKED
+    expires_at     TIMESTAMPTZ,
+    last_used_at   TIMESTAMPTZ,
+    created_by     VARCHAR(64) NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_tenant
+    ON api_keys (tenant_id, status);
+
+-- 10. 租户级事件 Webhook 订阅表
+CREATE TABLE IF NOT EXISTS webhooks (
+    id               VARCHAR(64) PRIMARY KEY,
+    tenant_id        VARCHAR(64) NOT NULL,
+    name             VARCHAR(128) NOT NULL,
+    target_url       TEXT NOT NULL,
+    secret_encrypted TEXT NOT NULL, -- 用于计算 X-NexusFlow-Signature (HMAC-SHA256)
+    events           JSONB NOT NULL DEFAULT '["task.completed", "task.failed"]'::jsonb,
+    is_active        BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_webhooks_tenant_active
+    ON webhooks (tenant_id, is_active);
+
+-- 11. Webhook 投递死信与重试日志表
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+    id            VARCHAR(64) PRIMARY KEY,
+    tenant_id     VARCHAR(64) NOT NULL,
+    webhook_id    VARCHAR(64) NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+    event_type    VARCHAR(64) NOT NULL,
+    payload       JSONB NOT NULL,
+    attempt_count INT NOT NULL DEFAULT 1,
+    http_status   INT DEFAULT 0,
+    response_body TEXT DEFAULT '',
+    status        VARCHAR(16) NOT NULL DEFAULT 'PENDING', -- PENDING, SUCCESS, FAILED
+    next_retry_at TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_retry
+    ON webhook_deliveries (status, next_retry_at)
+    WHERE status = 'PENDING';

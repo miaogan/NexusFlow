@@ -17,7 +17,8 @@ import {
 } from "../components/ui";
 
 export default function Files() {
-  const { kbID } = useOutletContext<LayoutContext>();
+  const { kbID, kbRole } = useOutletContext<LayoutContext>();
+  const canWrite = kbRole === "kb:admin" || kbRole === "kb:editor";
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +44,7 @@ export default function Files() {
   }, [refresh]);
 
   const handleFiles = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
+    if (!canWrite || !files || files.length === 0) return;
     setUploading(true);
     setError(null);
     setUploadResult(null);
@@ -89,10 +90,14 @@ export default function Files() {
         <div
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
-          onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
-          onClick={() => inputRef.current?.click()}
-          className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed py-10 transition ${
-            dragOver ? "border-accent/50 bg-accent/5" : "border-white/10 hover:border-white/20"
+          onDrop={(e) => { e.preventDefault(); setDragOver(false); canWrite && handleFiles(e.dataTransfer.files); }}
+          onClick={() => canWrite && inputRef.current?.click()}
+          className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed py-10 transition ${
+            !canWrite
+              ? "cursor-not-allowed border-white/5 opacity-60"
+              : dragOver
+                ? "cursor-pointer border-accent/50 bg-accent/5"
+                : "cursor-pointer border-white/10 hover:border-white/20"
           }`}
         >
           <input
@@ -104,6 +109,11 @@ export default function Files() {
           />
           {uploading ? (
             <><Spinner className="mb-2" /><p className="text-xs text-slate-400">上传中…</p></>
+          ) : !canWrite ? (
+            <>
+              <p className="text-sm text-slate-300">当前知识库为只读角色</p>
+              <p className="mt-1 text-[10px] text-slate-500">需要编辑者或管理员权限才能上传文件</p>
+            </>
           ) : (
             <>
               <p className="text-sm text-slate-200">点击或拖拽文件到此处</p>
@@ -157,15 +167,17 @@ export default function Files() {
                       <td className="px-3 py-2.5"><StatePill state={t.status} /></td>
                       <td className="px-3 py-2.5 text-slate-500">{t.created_at?.replace("T", " ").slice(0, 16)}</td>
                       <td className="px-3 py-2.5 text-right">
-                        <button
-                          type="button"
-                          title="删除文件"
-                          disabled={busy}
-                          onClick={() => void handleDelete(t.task_id)}
-                          className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] text-rose-300 transition hover:bg-rose-500/10 disabled:opacity-40"
-                        >
-                          <IconTrash /> 删除
-                        </button>
+                        {canWrite && (
+                          <button
+                            type="button"
+                            title="删除文件"
+                            disabled={busy}
+                            onClick={() => void handleDelete(t.task_id)}
+                            className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] text-rose-300 transition hover:bg-rose-500/10 disabled:opacity-40"
+                          >
+                            <IconTrash /> 删除
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}

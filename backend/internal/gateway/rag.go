@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nexusflow/nexusflow/backend/internal/identity"
 	"github.com/nexusflow/nexusflow/backend/internal/tenant"
 )
 
@@ -182,8 +183,11 @@ func (g *Gateway) readChatBody(c *gin.Context) ([]byte, bool) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "message is required"})
 		return nil, false
 	}
-	kbID, ok := g.resolveKnowledgeBase(c, req.KBID)
+	kbID, role, ok := g.resolveKnowledgeBase(c, req.KBID)
 	if !ok {
+		return nil, false
+	}
+	if !requireKBRole(c, role, identity.KBRoleViewer) {
 		return nil, false
 	}
 	req.KBID = kbID

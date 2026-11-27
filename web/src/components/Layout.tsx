@@ -8,13 +8,17 @@ import {
   getCurrentUser,
   getMe,
   getToken,
+  grantKnowledgeBasePermission,
   hasPermission,
   isAnonymous,
+  listKnowledgeBasePermissions,
   listKnowledgeBases,
+  revokeKnowledgeBasePermission,
   setActiveKB,
   updateKnowledgeBase,
 } from "../api/client";
-import type { KnowledgeBase, MeInfo } from "../types";
+import type { KnowledgeBase, KnowledgeBasePermission, MeInfo } from "../types";
+import { KB_ROLE_LABELS } from "../types";
 import { Button, Spinner } from "./ui";
 
 type NavItem = { to: string; label: string; end?: boolean };
@@ -29,7 +33,7 @@ const NAV: NavItem[] = [
   { to: "/sandbox", label: "沙箱 Playground" },
 ];
 
-export type LayoutContext = { kbID: string };
+export type LayoutContext = { kbID: string; kbRole: string };
 
 export default function Layout() {
   const navigate = useNavigate();
@@ -46,6 +50,10 @@ export default function Layout() {
   const [editID, setEditID] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDesc, setEditDesc] = useState("");
+  const [perms, setPerms] = useState<KnowledgeBasePermission[]>([]);
+  const [permSubjectType, setPermSubjectType] = useState("user");
+  const [permSubjectID, setPermSubjectID] = useState("");
+  const [permRole, setPermRole] = useState("kb:viewer");
 
   const user = getCurrentUser();
   const anon = isAnonymous();
@@ -72,6 +80,26 @@ export default function Layout() {
       setKbLoading(false);
     }
   }, [canReadKB]);
+
+  const loadPermissions = useCallback(async (id: string) => {
+    try {
+      const res = await listKnowledgeBasePermissions(id);
+      setPerms(res.permissions);
+    } catch {
+      setPerms([]);
+    }
+  }, []);
+
+  const currentKB = kbs.find((kb) => kb.id === kbID);
+  const currentRole = currentKB?.role ?? "";
+
+  useEffect(() => {
+    if (currentRole !== "kb:admin") {
+      setPerms([]);
+      return;
+    }
+    void loadPermissions(kbID);
+  }, [kbID, currentRole, loadPermissions]);
 
   useEffect(() => {
     if (!getToken() && !isAnonymous()) {
@@ -147,7 +175,40 @@ export default function Layout() {
     }
   };
 
-  const activeKB = kbs.find((kb) => kb.id === kbID);
+  const handleGrant = async () => {
+    if (!currentKB || !permSubjectID.trim() || busy) return;
+    setBusy(true);
+    setKbError(null);
+    try {
+      await grantKnowledgeBasePermission(currentKB.id, {
+        subject_type: permSubjectType,
+        subject_id: permSubjectID.trim(),
+        permission: permRole,
+      });
+      setPermSubjectID("");
+      await loadPermissions(currentKB.id);
+    } catch (e) {
+      setKbError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRevoke = async (perm: KnowledgeBasePermission) => {
+    if (!currentKB || busy) return;
+    setBusy(true);
+    setKbError(null);
+    try {
+      await revokeKnowledgeBasePermission(currentKB.id, perm.subject_type, perm.subject_id);
+      await loadPermissions(currentKB.id);
+    } catch (e) {
+      setKbError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const activeKB = currentKB;
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -208,7 +269,12 @@ export default function Layout() {
                     </option>
                   ))}
                 </select>
-                {canWriteKB && (
+                {activeKB?.role && (
+                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] text-slate-400">
+                    {KB_ROLE_LABELS[activeKB.role] ?? activeKB.role}
+                  </span>
+                )}
+                {(canWriteKB || activeKB?.role === "kb:admin") && (
                   <Button
                     variant="ghost"
                     className="px-2 py-1 text-[10px]"
@@ -247,7 +313,7 @@ export default function Layout() {
         </header>
 
         <main className="flex-1 overflow-auto p-6">
-          <Outlet context={{ kbID } satisfies LayoutContext} />
+          <Outlet context={{ kbID, kbRole: currentRole } satisfies LayoutContext} />
         </main>
       </div>
 
@@ -332,27 +398,36 @@ export default function Layout() {
                         </p>
                       </div>
                       <div className="flex shrink-0 items-center gap-1.5">
-                        <Button
-                          variant="ghost"
-                          className="px-2 py-1 text-[10px]"
-                          disabled={busy}
-                          onClick={() => {
-                            setEditID(kb.id);
-                            setEditName(kb.name);
-                            setEditDesc(kb.description);
-                          }}
-                        >
-                          重命名
-                        </Button>
-                        {kb.id !== "default" && (
-                          <Button
-                            variant="danger"
-                            className="px-2 py-1 text-[10px]"
-                            disabled={busy}
-                            onClick={() => void handleDelete(kb)}
-                          >
-                            删除
-                          </Button>
+                        {kb.role && (
+                          <span className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] text-slate-400">
+                            {KB_ROLE_LABELS[kb.role] ?? kb.role}
+                          </span>
+                        )}
+                        {kb.role === "kb:admin" && (
+                          <>
+                            <Button
+                              variant="ghost"
+                              className="px-2 py-1 text-[10px]"
+                              disabled={busy}
+                              onClick={() => {
+                                setEditID(kb.id);
+                                setEditName(kb.name);
+                                setEditDesc(kb.description);
+                              }}
+                            >
+                              重命名
+                            </Button>
+                            {kb.id !== "default" && (
+                              <Button
+                                variant="danger"
+                                className="px-2 py-1 text-[10px]"
+                                disabled={busy}
+                                onClick={() => void handleDelete(kb)}
+                              >
+                                删除
+                              </Button>
+                            )}
+                          </>
                         )}
                       </div>
                     </div>
@@ -360,6 +435,70 @@ export default function Layout() {
                 </div>
               ))}
             </div>
+
+            {currentKB?.role === "kb:admin" && (
+              <div className="mt-3 rounded-lg border border-white/5 bg-white/[0.02] p-3">
+                <p className="mb-2 text-[10px] uppercase tracking-wider text-slate-500">
+                  成员授权 · {currentKB.name}
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={permSubjectType}
+                    onChange={(e) => setPermSubjectType(e.target.value)}
+                    className="rounded-lg border border-white/10 bg-ink-950 px-2 py-1 text-[11px] text-slate-200 outline-none focus:border-accent/40"
+                  >
+                    <option value="user">用户</option>
+                    <option value="role">角色</option>
+                  </select>
+                  <input
+                    value={permSubjectID}
+                    onChange={(e) => setPermSubjectID(e.target.value)}
+                    placeholder={permSubjectType === "user" ? "用户 ID" : "角色名，如 editor"}
+                    className="min-w-0 flex-1 rounded-lg border border-white/10 bg-ink-950 px-2 py-1 text-[11px] text-slate-200 outline-none focus:border-accent/40"
+                  />
+                  <select
+                    value={permRole}
+                    onChange={(e) => setPermRole(e.target.value)}
+                    className="rounded-lg border border-white/10 bg-ink-950 px-2 py-1 text-[11px] text-slate-200 outline-none focus:border-accent/40"
+                  >
+                    <option value="kb:viewer">只读</option>
+                    <option value="kb:editor">编辑者</option>
+                    <option value="kb:admin">管理员</option>
+                  </select>
+                  <Button
+                    disabled={busy || !permSubjectID.trim()}
+                    onClick={() => void handleGrant()}
+                  >
+                    授权
+                  </Button>
+                </div>
+                {perms.length === 0 ? (
+                  <p className="mt-2 text-[10px] text-slate-500">暂无额外授权</p>
+                ) : (
+                  <ul className="mt-2 space-y-1">
+                    {perms.map((perm) => (
+                      <li
+                        key={perm.id}
+                        className="flex items-center justify-between gap-2 rounded bg-white/[0.02] px-2 py-1 text-[10px] text-slate-300"
+                      >
+                        <span className="min-w-0 truncate">
+                          {perm.subject_type === "user" ? "用户" : "角色"} · {perm.subject_id} ·{" "}
+                          {KB_ROLE_LABELS[perm.permission] ?? perm.permission}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void handleRevoke(perm)}
+                          className="shrink-0 text-rose-300 hover:underline disabled:opacity-40"
+                        >
+                          移除
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
 
             {kbError && <p className="mt-3 text-xs text-rose-300">{kbError}</p>}
           </div>
