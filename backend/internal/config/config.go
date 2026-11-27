@@ -105,6 +105,12 @@ type Config struct {
 	NL2SQLLLMBaseURL string
 	NL2SQLLLMAPIKey  string
 	NL2SQLModel      string
+
+	// Metering: tenant storage/query counters and their quotas.
+	MeteringDriver          string
+	QuotaMaxStorageBytes    int64
+	QuotaMaxFiles           int64
+	QuotaMaxQueriesPerMonth int64
 }
 
 func Load() Config {
@@ -186,6 +192,11 @@ func Load() Config {
 		NL2SQLLLMBaseURL:  env("NL2SQL_LLM_BASE_URL", ""),
 		NL2SQLLLMAPIKey:   env("NL2SQL_LLM_API_KEY", ""),
 		NL2SQLModel:       env("NL2SQL_LLM_MODEL", "gpt-4o-mini"),
+
+		MeteringDriver:          env("METERING_DRIVER", "memory"),
+		QuotaMaxStorageBytes:    envInt64("QUOTA_MAX_STORAGE_BYTES", 10<<30),
+		QuotaMaxFiles:           envInt64("QUOTA_MAX_FILES", 5000),
+		QuotaMaxQueriesPerMonth: envInt64("QUOTA_MAX_QUERIES", 100000),
 	}
 }
 
@@ -234,6 +245,18 @@ func envInt(key string, def int) int {
 		return def
 	}
 	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+func envInt64(key string, def int64) int64 {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return def
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
 	if err != nil {
 		return def
 	}

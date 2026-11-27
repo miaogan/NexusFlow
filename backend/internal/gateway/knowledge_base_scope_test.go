@@ -13,16 +13,17 @@ import (
 )
 
 type recordingIngestionClient struct {
-	upload  *pb.UploadFileRequest
-	deleted *pb.DeleteTaskRequest
+	upload   *pb.UploadFileRequest
+	deleted  *pb.DeleteTaskRequest
+	fileSize int64
 }
 
 func (r *recordingIngestionClient) UploadFile(_ context.Context, req *pb.UploadFileRequest, _ ...grpc.CallOption) (*pb.UploadFileResponse, error) {
 	r.upload = req
 	return &pb.UploadFileResponse{TaskId: "task-1", Status: "PENDING", Created: true}, nil
 }
-func (*recordingIngestionClient) GetTaskStatus(context.Context, *pb.GetTaskStatusRequest, ...grpc.CallOption) (*pb.GetTaskStatusResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "unused")
+func (r *recordingIngestionClient) GetTaskStatus(_ context.Context, req *pb.GetTaskStatusRequest, _ ...grpc.CallOption) (*pb.GetTaskStatusResponse, error) {
+	return &pb.GetTaskStatusResponse{TaskId: req.GetTaskId(), FileSize: r.fileSize, KbId: req.GetKbId()}, nil
 }
 func (*recordingIngestionClient) ListTasks(context.Context, *pb.ListTasksRequest, ...grpc.CallOption) (*pb.ListTasksResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "unused")

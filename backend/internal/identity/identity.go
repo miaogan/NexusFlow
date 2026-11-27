@@ -84,6 +84,7 @@ var Permissions = []Permission{
 	{"kb:write", "创建、修改与删除知识库"},
 	{"task:read", "查看任务"},
 	{"task:write", "操作任务（重试/删除）"},
+	{"usage:read", "查看租户用量与配额"},
 	{"search:use", "使用检索"},
 	{"sandbox:execute", "执行沙箱代码"},
 	{"workflow:run", "运行工作流"},
@@ -107,7 +108,7 @@ func BuiltinRoles() []Role {
 				"file:read", "file:write", "file:delete", "kb:read", "kb:write",
 				"task:read", "task:write",
 				"search:use", "sandbox:execute", "workflow:run",
-				"trace:read", "user:read", "role:read",
+				"trace:read", "user:read", "role:read", "usage:read",
 			},
 			Builtin:     true,
 			Description: "内容编辑者，可管理文件、任务并执行检索/沙箱/工作流",
@@ -115,7 +116,7 @@ func BuiltinRoles() []Role {
 		{
 			Name: RoleViewer,
 			Permissions: []string{
-				"file:read", "kb:read", "task:read", "search:use", "trace:read",
+				"file:read", "kb:read", "task:read", "search:use", "trace:read", "usage:read",
 			},
 			Builtin:     true,
 			Description: "只读访客",

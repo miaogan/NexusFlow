@@ -11,6 +11,7 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/config"
 	"github.com/nexusflow/nexusflow/backend/internal/feedback"
 	"github.com/nexusflow/nexusflow/backend/internal/gateway"
+	"github.com/nexusflow/nexusflow/backend/internal/metering"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/httpserver"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/log"
 	"github.com/nexusflow/nexusflow/backend/internal/revocation"
@@ -39,6 +40,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer feedbackStore.Close()
+
+	meterStore, err := metering.NewStore(cfg.MeteringDriver, cfg.RedisAddr)
+	if err != nil {
+		logger.Warn("metering backend unavailable, falling back to memory", "error", err)
+		meterStore = metering.NewMemoryStore()
+	}
 
 	blacklist, err := revocation.New(cfg.TokenBlacklistDriver, cfg.RedisAddr)
 	if err != nil {
@@ -94,6 +101,11 @@ func main() {
 		gateway.WithKnowledgeBases(pb.NewKnowledgeBaseServiceClient(userConn)),
 		gateway.WithRAGAgent(cfg.RAGAgentURL),
 		gateway.WithFeedbackStore(feedbackStore),
+		gateway.WithMetering(meterStore, metering.Quota{
+			MaxStorageBytes: cfg.QuotaMaxStorageBytes,
+			MaxFiles:        cfg.QuotaMaxFiles,
+			MaxQueries:      cfg.QuotaMaxQueriesPerMonth,
+		}),
 		gateway.WithTokenBlacklist(blacklist),
 	)
 

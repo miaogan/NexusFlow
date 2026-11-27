@@ -273,6 +273,34 @@ export interface KnowledgeBase {
   updated_at?: string;
 }
 
+// ---------- Usage / quota ----------
+
+export interface KBUsage {
+  kb_id: string;
+  storage_bytes: number;
+  file_count: number;
+}
+
+export interface TenantUsage {
+  tenant_id: string;
+  storage_bytes: number;
+  file_count: number;
+  query_count: number;
+  knowledge_bases: KBUsage[];
+}
+
+export interface UsageQuota {
+  max_storage_bytes: number;
+  max_files: number;
+  max_queries: number;
+}
+
+export interface UsageResponse {
+  usage: TenantUsage;
+  quota: UsageQuota;
+  remaining: UsageQuota;
+}
+
 export interface JwtClaims {
   tenant_id?: string;
   user_id?: string;

@@ -22,7 +22,7 @@
 
 ## Milestone 2: 资源配额计量与集群化交付
 
-* **[ ] Task 2.1: 租户级资源计量与配额拦截（Quota & Metering）**
+* **[x] Task 2.1: 租户级资源计量与配额拦截（Quota & Metering）**
   * **目标**：统计租户存储与问答用量，支持基础配额展示。
   * **核心步骤**：实现计量记录器（支持 memory/redis）、暴露用量接口、前端概览页增加用量统计卡片。
   * **验证命令**：`make vet && go test ./backend/internal/platform/... ./backend/internal/gateway/... && make web-build`

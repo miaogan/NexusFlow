@@ -67,13 +67,15 @@ func (g *Gateway) requireRAG(c *gin.Context) bool {
 }
 
 // proxyRAG relays the upstream response verbatim (status, content type, body)
-// so the Python service remains the source of truth for chat payloads.
-func (g *Gateway) proxyRAG(c *gin.Context, method, path string, body []byte) {
+// so the Python service remains the source of truth for chat payloads. It
+// returns the upstream status code (0 on transport failure) so callers can
+// meter successful turns.
+func (g *Gateway) proxyRAG(c *gin.Context, method, path string, body []byte) int {
 	resp, err := g.rag.do(c, method, path, body)
 	if err != nil {
 		g.logger.Error("rag agent request failed", "path", path, "error", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "rag agent unavailable: " + err.Error()})
-		return
+		return 0
 	}
 	defer resp.Body.Close()
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
@@ -81,6 +83,7 @@ func (g *Gateway) proxyRAG(c *gin.Context, method, path string, body []byte) {
 	}
 	c.Status(resp.StatusCode)
 	_, _ = io.Copy(c.Writer, resp.Body)
+	return resp.StatusCode
 }
 
 type chatReq struct {
@@ -99,7 +102,12 @@ func (g *Gateway) chat(c *gin.Context) {
 	if !ok {
 		return
 	}
-	g.proxyRAG(c, http.MethodPost, "/v1/chat", body)
+	if !g.allowQuery(c) {
+		return
+	}
+	if status := g.proxyRAG(c, http.MethodPost, "/v1/chat", body); status >= 200 && status < 300 {
+		g.recordQuery(c)
+	}
 }
 
 // chatStream relays the RAG agent's SSE stream without buffering it, so the
@@ -110,6 +118,9 @@ func (g *Gateway) chatStream(c *gin.Context) {
 	}
 	body, ok := g.readChatBody(c)
 	if !ok {
+		return
+	}
+	if !g.allowQuery(c) {
 		return
 	}
 	resp, err := g.rag.do(c, http.MethodPost, "/v1/chat/stream", body)
@@ -135,6 +146,7 @@ func (g *Gateway) chatStream(c *gin.Context) {
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 	c.Status(http.StatusOK)
+	g.recordQuery(c)
 
 	flusher, _ := c.Writer.(http.Flusher)
 	buf := make([]byte, 4096)

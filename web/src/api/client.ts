@@ -20,6 +20,7 @@ import type {
   Trace,
   TraceListResponse,
   UploadResult,
+  UsageResponse,
   UserListResponse,
   ValidationResult,
 } from "../types";
@@ -582,8 +583,13 @@ export async function listPermissions(): Promise<{ permissions: PermissionInfo[]
   return request<{ permissions: PermissionInfo[] }>(`${GATEWAY_BASE}/v1/permissions`);
 }
 
-// ---------- Knowledge base APIs ----------
+// ---------- Usage & quota ----------
 
+export async function getUsage(): Promise<UsageResponse> {
+  return request<UsageResponse>(`${GATEWAY_BASE}/v1/usage`);
+}
+
+// ---------- Knowledge base APIs ----------
 export async function listKnowledgeBases(): Promise<{ knowledge_bases: KnowledgeBase[] }> {
   return request<{ knowledge_bases: KnowledgeBase[] }>(`${GATEWAY_BASE}/v1/knowledge-bases`);
 }

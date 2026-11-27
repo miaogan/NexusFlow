@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/nexusflow/nexusflow/backend/internal/feedback"
+	"github.com/nexusflow/nexusflow/backend/internal/metering"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/metrics"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/tracing"
 	"github.com/nexusflow/nexusflow/backend/internal/revocation"
@@ -55,6 +56,9 @@ type Gateway struct {
 	blacklist revocation.Blacklist
 	// allowedUploadHosts restricts presigned upload URLs; empty disables the check.
 	allowedUploadHosts map[string]struct{}
+	// metering records storage/query consumption and enforces the quota.
+	metering metering.Store
+	quota    metering.Quota
 }
 
 // Option configures a Gateway at construction time.
@@ -108,6 +112,16 @@ func WithFeedbackStore(s feedback.Store) Option {
 	}
 }
 
+// WithMetering attaches the tenant resource meter and its quota policy.
+func WithMetering(store metering.Store, quota metering.Quota) Option {
+	return func(g *Gateway) {
+		if store != nil {
+			g.metering = store
+		}
+		g.quota = quota
+	}
+}
+
 // WithTokenBlacklist enables access-token revocation checks on every request.
 func WithTokenBlacklist(b revocation.Blacklist) Option {
 	return func(g *Gateway) {
@@ -137,6 +151,7 @@ func New(
 		allowAnon:     allowAnon,
 		tracer:        tracing.NoopTracer{},
 		feedbackStore: feedback.NewMemoryStore(),
+		metering:      metering.NewMemoryStore(),
 	}
 	for _, o := range opts {
 		o(g)
@@ -170,6 +185,8 @@ func (g *Gateway) Router() *gin.Engine {
 	v1.DELETE("/tasks/:id", g.deleteTask)
 	v1.POST("/tasks/:id/retry", g.retryTask)
 	v1.POST("/search", RequirePermission("search:use"), g.search)
+	// Tenant usage and quota snapshot for the console overview.
+	v1.GET("/usage", RequirePermission("usage:read"), g.usage)
 	// RAG chat: multi-turn Q&A over the retrieval corpus, scoped to the caller.
 	v1.POST("/chat", RequirePermission("search:use"), g.chat)
 	v1.POST("/chat/stream", RequirePermission("search:use"), g.chatStream)
@@ -263,6 +280,9 @@ func (g *Gateway) uploadJSON(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if !g.allowUpload(c, body.FileSize) {
+		return
+	}
 	// Reserved metadata keys are server-owned: drop client-provided
 	// object_key/file_url and derive them from explicit fields only, so a
 	// caller cannot point deletes/retries at arbitrary objects.
@@ -296,6 +316,9 @@ func (g *Gateway) uploadJSON(c *gin.Context) {
 		g.logger.Error("upload failed", "tenant", p.TenantID, "error", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
+	}
+	if resp.GetCreated() {
+		g.recordUpload(c, kbID, body.FileSize)
 	}
 	c.JSON(http.StatusAccepted, gin.H{
 		"task_id": resp.GetTaskId(),
@@ -337,6 +360,9 @@ func (g *Gateway) uploadMultipart(c *gin.Context) {
 
 	kbID, ok := g.resolveKnowledgeBase(c, c.Request.PostForm.Get("kb_id"))
 	if !ok {
+		return
+	}
+	if !g.allowUpload(c, header.Size) {
 		return
 	}
 	principal, _ := tenant.From(c.Request.Context())
@@ -397,6 +423,7 @@ func (g *Gateway) uploadMultipart(c *gin.Context) {
 	}
 	if resp.GetCreated() {
 		body["object_key"] = objectKey
+		g.recordUpload(c, kbID, header.Size)
 	} else if delErr := g.objects.Delete(ctx, objectKey); delErr != nil {
 		// Content dedup matched an existing task: the object we just stored is
 		// unreferenced, so remove it rather than leave an orphan.
@@ -496,11 +523,19 @@ func (g *Gateway) deleteTask(c *gin.Context) {
 		return
 	}
 	ctx, _ := g.callerContext(c)
+	// Read the task first so the cascade delete can release its storage quota.
+	var prior *pb.GetTaskStatusResponse
+	if st, stErr := g.ingestion.GetTaskStatus(ctx, &pb.GetTaskStatusRequest{TaskId: c.Param("id"), KbId: kbID}); stErr == nil {
+		prior = st
+	}
 	resp, err := g.ingestion.DeleteTask(ctx, &pb.DeleteTaskRequest{TaskId: c.Param("id"), KbId: kbID})
 	if err != nil {
 		code, msg := grpcToHTTP(err)
 		c.JSON(code, gin.H{"error": msg})
 		return
+	}
+	if prior != nil && resp.GetObjectDeleted() {
+		g.releaseUpload(c, resp.GetKbId(), prior.GetFileSize())
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success":        resp.GetSuccess(),
@@ -586,6 +621,9 @@ func (g *Gateway) search(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if !g.allowQuery(c) {
+		return
+	}
 	routes := make([]*pb.RecallRoute, 0, len(body.Routes))
 	for _, r := range body.Routes {
 		routes = append(routes, &pb.RecallRoute{Type: r.Type, TopK: r.TopK, FilterExpr: r.Filters})
@@ -613,6 +651,7 @@ func (g *Gateway) search(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
+	g.recordQuery(c)
 
 	chunks := make([]gin.H, 0, len(resp.GetChunks()))
 	for _, ch := range resp.GetChunks() {

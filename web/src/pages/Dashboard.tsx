@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
-import { listTasks } from "../api/client";
+import { getUsage, listTasks } from "../api/client";
 import type { LayoutContext } from "../components/Layout";
-import type { TaskSummary } from "../types";
-import { Button, Card, EmptyState, PageHeader, ProgressBar, StatePill } from "../components/ui";
+import type { TaskSummary, UsageResponse } from "../types";
+import {
+  Button,
+  Card,
+  EmptyState,
+  formatBytes,
+  PageHeader,
+  ProgressBar,
+  StatePill,
+} from "../components/ui";
 
 function StatCard({ label, value, accent }: { label: string; value: number | string; accent: string }) {
   return (
@@ -14,17 +22,57 @@ function StatCard({ label, value, accent }: { label: string; value: number | str
   );
 }
 
+function QuotaCard({
+  label,
+  used,
+  quota,
+  percent,
+}: {
+  label: string;
+  used: string;
+  quota: string;
+  percent: number;
+}) {
+  return (
+    <div className="panel p-5">
+      <p className="text-[10px] uppercase tracking-wider text-slate-500">{label}</p>
+      <p className="mt-2 text-xl font-semibold text-slate-100">{used}</p>
+      <p className="mt-0.5 text-[10px] text-slate-500">配额 {quota}</p>
+      <div className="mt-2">
+        <ProgressBar value={percent} />
+      </div>
+    </div>
+  );
+}
+
+function quotaPercent(used: number, total: number): number {
+  if (total <= 0) return 0; // unlimited: nothing to fill
+  return Math.min(100, (used / total) * 100);
+}
+
+function formatQuota(total: number, formatter?: (n: number) => string): string {
+  if (total <= 0) return "不限";
+  return formatter ? formatter(total) : String(total);
+}
+
 export default function Dashboard() {
   const { kbID } = useOutletContext<LayoutContext>();
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  const [usage, setUsage] = useState<UsageResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     setLoading(true);
     setError(null);
-    listTasks(undefined, 100, 0, kbID)
-      .then((r) => setTasks(r.tasks))
+    Promise.all([
+      listTasks(undefined, 100, 0, kbID),
+      getUsage().catch(() => null),
+    ])
+      .then(([tasksRes, usageRes]) => {
+        setTasks(tasksRes.tasks);
+        setUsage(usageRes);
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, [kbID]);
@@ -63,6 +111,29 @@ export default function Dashboard() {
         <StatCard label="已完成" value={done} accent="text-emerald-300" />
         <StatCard label="失败" value={failed} accent="text-rose-300" />
       </div>
+
+      {usage && (
+        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <QuotaCard
+            label="存储用量"
+            used={formatBytes(usage.usage.storage_bytes)}
+            quota={formatQuota(usage.quota.max_storage_bytes, formatBytes)}
+            percent={quotaPercent(usage.usage.storage_bytes, usage.quota.max_storage_bytes)}
+          />
+          <QuotaCard
+            label="文件数"
+            used={String(usage.usage.file_count)}
+            quota={formatQuota(usage.quota.max_files)}
+            percent={quotaPercent(usage.usage.file_count, usage.quota.max_files)}
+          />
+          <QuotaCard
+            label="问答 / 检索次数"
+            used={String(usage.usage.query_count)}
+            quota={formatQuota(usage.quota.max_queries)}
+            percent={quotaPercent(usage.usage.query_count, usage.quota.max_queries)}
+          />
+        </div>
+      )}
 
       <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card title="最近任务" className="lg:col-span-2" action={<Link to="/tasks" className="text-[11px] text-accent hover:underline">查看全部</Link>}>

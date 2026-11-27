@@ -16,6 +16,7 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/identity"
 	"github.com/nexusflow/nexusflow/backend/internal/indexing"
 	"github.com/nexusflow/nexusflow/backend/internal/ingestion"
+	"github.com/nexusflow/nexusflow/backend/internal/metering"
 	"github.com/nexusflow/nexusflow/backend/internal/mineru"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/grpcserver"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/httpserver"
@@ -155,6 +156,11 @@ func main() {
 		logger.Warn("token blacklist backend unavailable, falling back to memory", "error", err)
 	}
 	defer blacklist.Close()
+	meterStore, err := metering.NewStore(cfg.MeteringDriver, cfg.RedisAddr)
+	if err != nil {
+		logger.Warn("metering backend unavailable, falling back to memory", "error", err)
+		meterStore = metering.NewMemoryStore()
+	}
 	authSvc := identity.NewAuthService(identityStore, identity.AuthConfig{
 		Secret:            cfg.JWTSecret,
 		AccessTTL:         cfg.AccessTokenTTL,
@@ -277,6 +283,11 @@ func main() {
 		gateway.WithKnowledgeBases(pb.NewKnowledgeBaseServiceClient(userConn)),
 		gateway.WithRAGAgent(cfg.RAGAgentURL),
 		gateway.WithFeedbackStore(feedbackStore),
+		gateway.WithMetering(meterStore, metering.Quota{
+			MaxStorageBytes: cfg.QuotaMaxStorageBytes,
+			MaxFiles:        cfg.QuotaMaxFiles,
+			MaxQueries:      cfg.QuotaMaxQueriesPerMonth,
+		}),
 		gateway.WithTokenBlacklist(blacklist),
 	)
 	srv := &http.Server{
