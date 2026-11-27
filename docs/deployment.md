@@ -99,7 +99,7 @@ kubectl -n nexusflow describe hpa processing-worker
 
 索引清理失败时接口返回 `503` 且保留任务记录，便于重试，避免「任务已删但向量残留」。未配置 `LLAMAINDEX_URL` 时跳过第 1 步。
 
-## 9. 沙箱后端（OpenSandbox）
+## 8. 沙箱后端（OpenSandbox）
 
 `sandbox-execution` 支持两种后端：
 
@@ -107,6 +107,30 @@ kubectl -n nexusflow describe hpa processing-worker
 | --- | --- |
 | `local` | 进程内临时目录执行，仅用于开发，**不是安全边界** |
 | `remote` | 通过官方 OpenSandbox Go SDK 调用 server，生产必须使用 |
+
+### 8.1 运行形态与 Runtime 后端
+
+OpenSandbox 不是一个容器，而是三层：
+
+| 层 | 职责 |
+| --- | --- |
+| Lifecycle Server | `/v1` 控制面：鉴权、持久化、调度与销毁 |
+| Runtime 后端 | `docker` 或 `kubernetes`，决定沙箱在哪里运行 |
+| 沙箱内 execd | server 启动沙箱时注入的守护进程，负责命令执行（SSE）、文件读写与指标 |
+
+**Docker 模式（DOOD）**：runtime 为 `docker` 时，server 必须能访问 Docker daemon。server 以容器运行时只能挂载宿主 socket：
+
+```bash
+-v /var/run/docker.sock:/var/run/docker.sock
+```
+
+此时沙箱由宿主 daemon 创建，是与 server 平级的 sibling 容器；server 容器内并没有再启动 dockerd，因此属于 **DOOD（Docker-outside-of-Docker）而非 DinD**。server 不需要 `privileged`，但它因此持有宿主 Docker 的控制权，安全权重等同于该 daemon。
+
+**Kubernetes 模式**：server 通过 ServiceAccount 访问 apiserver，创建 `BatchSandbox` 等 CRD，由 controller 拉起沙箱 Pod；execd 通过 init container 注入，数据面流量经 ingress gateway，全程不需要 `docker.sock`。生产环境推荐该模式。
+
+无论哪种模式，`sandbox-execution` 本身都只是 SDK 客户端，不挂 socket、不需要特权；需要 Docker 权限的只有 server。
+
+### 8.2 客户端接入
 
 remote 后端完全基于官方 SDK（`github.com/alibaba/OpenSandbox/sdks/sandbox/go`）实现：创建并等待沙箱就绪 → 通过 execd 上传代码/输入 → SSE 执行命令 → 下载输出 → 强制删除。鉴权使用 `OPEN-SANDBOX-API-KEY` 请求头（由 SDK 从 `OPENSANDBOX_TOKEN` 注入）。
 
@@ -126,7 +150,29 @@ OPENSANDBOX_NODE_IMAGE=node:18
 - 每次执行都会创建并销毁独立沙箱，TTL 由请求超时强制约束。
 - 可选的 `OPENSANDBOX_PYTHON_IMAGE` / `OPENSANDBOX_NODE_IMAGE` 用于指向内网镜像仓库。
 
-本地可用 Docker 模式启动 server 做端到端验证（需要挂载 docker.sock，并使用已设置 `api_key` 的配置）：
+### 8.3 数据面网络
+
+execd 端口通常以容器 IP 或宿主随机端口的形式返回，跨主机或其他容器不一定可达。按环境选择访问方式：
+
+| 场景 | 方式 |
+| --- | --- |
+| 本机 Docker / 跨网络调试 | SDK 开启 `UseServerProxy`，execd 请求经 server 反代，客户端只连 server |
+| 生产 Kubernetes | ingress gateway 暴露沙箱端口，SDK 直连 gateway |
+| 直连 endpoint | 依赖 `publish_host` 与端口范围可达，需保证客户端与 daemon 同网段 |
+
+Docker 模式每沙箱需 2–3 个宿主端口（含 egress sidecar 时为 3 个），`port_range_min` / `port_range_max` 要按并发规模预留。
+
+### 8.4 安全边界
+
+- 必须为 server 设置 `api_key` 并与 `OPENSANDBOX_TOKEN` 一致；验证时错误 key 返回 `401`。
+- 挂载 `docker.sock` 的 server 不要暴露到公网，优先部署在专用节点或改用 Kubernetes 模式。
+- 通过私有仓库或节点级镜像白名单限制可拉取的运行时镜像，避免任意镜像进入沙箱。
+- 出网默认拒绝、按需放行；每次执行强制 TTL 并无条件删除，集成测试会校验沙箱无残留。
+- `local` 后端与宿主共享命名空间，只允许在开发环境启用。
+
+### 8.5 本地端到端验证
+
+用 Docker 模式启动 server（需要挂载 docker.sock，并使用已设置 `api_key` 的配置）：
 
 ```bash
 mkdir -p /tmp/opensandbox
@@ -144,7 +190,7 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 
 集成测试会走完整链路：创建沙箱 → 上传代码与输入 → execd 执行 → 回读 `/tmp/output.json` → 删除，并校验沙箱没有残留。
 
-## 10. 回滚与升级
+## 9. 回滚与升级
 
 - 滚动升级：逐个更新 `image` 标签后 `kubectl apply`，Deployment 默认使用 RollingUpdate。
 - 数据库/模式：身份表在服务启动时以 advisory lock 自动迁移；多副本并发启动是安全的。

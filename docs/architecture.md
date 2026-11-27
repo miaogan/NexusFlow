@@ -213,6 +213,8 @@ OpenSandbox 作为控制平面，承担沙箱的创建、调度、隔离与回�
 
 安全护栏：每次执行强制设置沙箱 TTL（如 5 分钟）防死循环；无论成功失败均在 defer 中确保销毁；输入数据经 SDK Filesystem API 写入沙箱内约定路径（如 /tmp/input.json），输出以约定 JSON 结构经 Stdout 或指定文件回收。
 
+运行形态：OpenSandbox 分为三层 —— Lifecycle Server（`/v1` 控制面，负责鉴权、调度与回收）、Runtime 后端（`docker` 或 `kubernetes`）以及沙箱内 execd（命令执行、文件与指标）。Docker 模式下 server 需要访问 Docker daemon，容器化部署时挂载 `/var/run/docker.sock`，由宿主 daemon 创建与 server 平级的沙箱容器（DOOD，非 DinD）；server 不启用 privileged，但持有该 daemon 的控制权。Kubernetes 模式下 server 以 ServiceAccount 创建 `BatchSandbox` 等 CRD，controller 拉起沙箱 Pod，execd 经 init container 注入、数据面流量走 ingress gateway，无需 Docker socket。Sandbox Execution Service 自身仅作为 SDK 客户端，不持有 Docker 权限。部署细节、数据面网络与安全边界见 [deployment.md](deployment.md) 第 8 节。
+
 ## 10. 接口定义（Protocol Buffers）
 
 以下为系统核心服务的 Protobuf 契约，含 V2.0 新增的 LlamaIndexService（数据加工服务）、SandboxExecutionService（自定义代码节点），以及 V4.0 的 AuthService / UserService（认证与 RBAC，完整定义见 `proto/vectorization/v1/identity.proto`）。跨服务、跨语言调用以此为准。
