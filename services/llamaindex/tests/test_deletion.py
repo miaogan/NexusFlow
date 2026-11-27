@@ -72,6 +72,7 @@ def test_delete_targets_task_filter_in_kb_collection(monkeypatch: pytest.MonkeyP
     condition = selector.must[0]
     assert condition.key == "task_id" and condition.match.value == "task-1"
     assert client.deleted[0]["wait"] is True
+    assert client.deleted[1]["collection_name"] == "nexusflow_kb-a__sparse"
     assert cleared == ["nexusflow_kb-a"]
 
 

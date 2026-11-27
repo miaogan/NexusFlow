@@ -1,9 +1,17 @@
 import json
+import logging
 from functools import lru_cache
 
 from app.core.config import settings
 from app.retrieval.fusion import Chunk
 from app.retrieval.graph import build_graph, cached_graph, query_graph
+from app.services.sparse import (
+    SPARSE_VECTOR_NAME,
+    encode_sparse,
+    sparse_collection_name,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class RecallUnavailable(RuntimeError):
@@ -33,9 +41,38 @@ def _metadata_filters(filters: dict[str, str]):
     conditions = [
         MetadataFilter(key=key, value=value, operator=FilterOperator.EQ)
         for key, value in filters.items()
-        if key != "kb_id"
+        if key != "kb_id" and value
     ]
     return MetadataFilters(filters=conditions) if conditions else None
+
+
+def _payload_filter(filters: dict[str, str]):
+    """Qdrant filter for the sparse companion collection (metadata is string)."""
+    from qdrant_client import models as qmodels
+
+    conditions = [
+        qmodels.FieldCondition(key=key, match=qmodels.MatchValue(value=value))
+        for key, value in filters.items()
+        if key != "kb_id" and value
+    ]
+    return qmodels.Filter(must=conditions) if conditions else None
+
+
+def _chunk_from_point(point, source: str) -> Chunk | None:
+    payload = point.payload or {}
+    content = payload.get("text", "")
+    meta: dict[str, str] = {}
+    raw = payload.get("_node_content")
+    if raw:
+        try:
+            node = json.loads(raw)
+            content = node.get("text", content)
+            meta = {k: str(v) for k, v in node.get("metadata", {}).items()}
+        except json.JSONDecodeError:
+            pass
+    if not content:
+        return None
+    return Chunk(chunk_id=str(point.id), content=content, meta=meta, source=source)
 
 
 def _vector_recall(query: str, top_k: int, filters: dict[str, str]) -> list[Chunk]:
@@ -80,20 +117,72 @@ def _scroll_documents(filters: dict[str, str]) -> list[Chunk]:
     )
     docs: list[Chunk] = []
     for point in points:
-        payload = point.payload or {}
-        meta: dict[str, str] = {}
-        content = payload.get("text", "")
-        raw = payload.get("_node_content")
-        if raw:
-            try:
-                node = json.loads(raw)
-                content = node.get("text", content)
-                meta = {k: str(v) for k, v in node.get("metadata", {}).items()}
-            except json.JSONDecodeError:
-                pass
-        if content:
-            docs.append(Chunk(chunk_id=str(point.id), content=content, meta=meta, source="bm25"))
+        chunk = _chunk_from_point(point, "bm25")
+        if chunk is not None:
+            docs.append(chunk)
     return docs
+
+
+def _sparse_recall(query: str, top_k: int, filters: dict[str, str]) -> list[Chunk]:
+    """Qdrant sparse recall over the companion collection.
+
+    Returns an empty list when sparse indexing is disabled, the companion
+    collection does not exist yet, or the query has no tokens, so the caller
+    can fall back to the legacy scroll + BM25 implementation.
+    """
+    if not settings.sparse_enabled:
+        return []
+
+    from qdrant_client import models as qmodels
+
+    collection = _collection(filters)
+    sparse_collection = sparse_collection_name(collection)
+    indices, values = encode_sparse(query)
+    if not indices:
+        return []
+
+    client = _qdrant_client(collection)
+    try:
+        if not client.collection_exists(sparse_collection):
+            return []
+        result = client.query_points(
+            collection_name=sparse_collection,
+            query=qmodels.SparseVector(indices=indices, values=values),
+            using=SPARSE_VECTOR_NAME,
+            query_filter=_payload_filter(filters),
+            limit=top_k,
+            with_payload=False,
+        )
+        points = getattr(result, "points", result) or []
+    except Exception as exc:  # noqa: BLE001 - fall back to scroll BM25
+        logger.warning("sparse recall failed for %s: %s", sparse_collection, exc)
+        return []
+    if not points:
+        return []
+
+    ids = [str(point.id) for point in points]
+    try:
+        records = client.retrieve(
+            collection_name=collection, ids=ids, with_payload=True
+        )
+    except Exception as exc:  # noqa: BLE001 - fall back to scroll BM25
+        logger.warning("sparse content lookup failed for %s: %s", collection, exc)
+        return []
+
+    chunks = {}
+    for record in records:
+        chunk = _chunk_from_point(record, "bm25")
+        if chunk is not None:
+            chunks[chunk.chunk_id] = chunk
+
+    out: list[Chunk] = []
+    for point in points:
+        chunk = chunks.get(str(point.id))
+        if chunk is None:
+            continue
+        chunk.score = float(point.score or 0.0)
+        out.append(chunk)
+    return out
 
 
 def _bm25_recall(query: str, top_k: int, filters: dict[str, str]) -> list[Chunk]:
@@ -125,7 +214,17 @@ def retrieve(route, query: str, filters: dict[str, str]) -> list[Chunk]:
     """Dispatch one recall route. Heavy imports stay inside the branches so
     the API can boot without optional integrations installed."""
     if route.type == "bm25":
-        return _bm25_recall(query, route.top_k, filters)
+        sparse = _sparse_recall(query, route.top_k, filters)
+        if len(sparse) >= route.top_k:
+            return sparse
+        # Documents indexed before the sparse companion collection existed have
+        # no sparse vector yet; merge legacy results until they are reindexed.
+        legacy = _bm25_recall(query, route.top_k, filters)
+        if not sparse:
+            return legacy
+        seen = {chunk.chunk_id for chunk in sparse}
+        merged = sparse + [chunk for chunk in legacy if chunk.chunk_id not in seen]
+        return merged[: route.top_k]
     if route.type == "graph":
         return _graph_recall(query, route.top_k, filters)
     return _vector_recall(query, route.top_k, filters)

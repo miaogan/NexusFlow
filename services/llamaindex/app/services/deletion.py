@@ -10,6 +10,7 @@ from __future__ import annotations
 from app.core.config import settings
 from app.retrieval.graph import clear_graph_cache
 from app.schemas import DeleteRequest, DeleteResponse
+from app.services.sparse import sparse_collection_name
 
 
 def collection_for(kb_id: str | None) -> str:
@@ -38,17 +39,29 @@ def delete_document(request: DeleteRequest, client=None) -> DeleteResponse:
 
     # Qdrant deletes are idempotent: a missing collection simply means the
     # document was never indexed (or was already deleted).
-    if not client.collection_exists(collection):
-        clear_graph_cache(collection)
-        return DeleteResponse(success=True, deleted=0, collection=collection)
-
-    flt = _task_filter(request.task_id)
     deleted = 0
-    try:
-        deleted = int(client.count(collection_name=collection, count_filter=flt, exact=True).count)
-    except Exception:  # noqa: BLE001 - counting is advisory, deletion still proceeds
-        deleted = 0
+    if client.collection_exists(collection):
+        flt = _task_filter(request.task_id)
+        try:
+            deleted = int(
+                client.count(
+                    collection_name=collection, count_filter=flt, exact=True
+                ).count
+            )
+        except Exception:  # noqa: BLE001 - counting is advisory, deletion still proceeds
+            deleted = 0
 
-    client.delete(collection_name=collection, points_selector=flt, wait=True)
+        client.delete(collection_name=collection, points_selector=flt, wait=True)
+
+    # The sparse companion collection is optional; remove its points too so a
+    # deleted document cannot surface through the bm25 route.
+    sparse_collection = sparse_collection_name(collection)
+    if client.collection_exists(sparse_collection):
+        client.delete(
+            collection_name=sparse_collection,
+            points_selector=_task_filter(request.task_id),
+            wait=True,
+        )
+
     clear_graph_cache(collection)
     return DeleteResponse(success=True, deleted=deleted, collection=collection)

@@ -61,36 +61,39 @@ V2.0 技术选型的核心考量如下：
 +----------------------------------------------------------------------------------+
 | 接入层                                                                           |
 |  客户端/画布 --HTTP/gRPC--> API Gateway（JWT 校验 · 限流 · 权限路由 · trace 透传）   |
-|  API Gateway --> Auth/User 服务（JWT 签发 · 用户/角色 · 知识库 kb RBAC）            |
-|  API Gateway --> Metering（租户用量与配额）                                        |
+|    ├─ Auth/User（JWT 签发 · 用户/角色 · kb RBAC） --> Redis / PostgreSQL            |
+|    └─ Metering（租户用量与配额）                    --> Redis                       |
 +----------------------------------------------------------------------------------+
-        | 上传/删除/Reindex          | DAG 调度             | 检索/问答
-        v                            v                      v
+        | 上传 / 删除 / Reindex      | DAG 调度                | 检索 / 问答
+        v                            v                         v
 +----------------------------------------------------------------------------------+
 | 编排调度层                                                                       |
-|  Ingestion 服务（元数据 · 任务 · 级联删除 · Reindex）    Workflow Engine（DAG）     |
+|  Ingestion（元数据 · 任务 · 级联删除 · Reindex）        Workflow Engine（DAG 调度）   |
 +----------------------------------------------------------------------------------+
-        | 任务投递                     | 节点执行
-        v                              v
+        | 任务事件 / 解析产物         | 节点执行
+        v                             v
 +----------------------------------------------------------------------------------+
 | 执行加工层                                                                       |
-|  Processing Worker --> MinerU（解析）--> LlamaIndex（切块 · Embedding · 索引）      |
-|  Processing Worker --持久化 parsed/<task>.md--> 对象存储（供 Reindex 复用）         |
+|  Processing Worker --解析--> MinerU --> LlamaIndex（切块 · Embedding · 索引）       |
+|    │--parsed/<task>.md--> MinIO/S3                  │--dense+sparse--> Qdrant      |
 |  Sandbox Execution --> OpenSandbox（自定义代码节点）                               |
 +----------------------------------------------------------------------------------+
-        | 写入索引                     | 写入结果
-        v                              v
+        | 索引可检索                  | 问答 / 记忆
+        v                             v
 +----------------------------------------------------------------------------------+
 | 检索问答层                                                                       |
-|  Query Service（多路召回 · RRF · Cross-Encoder 重排 · 负反馈降权）                 |
-|  RAG Agent + intent/summary/memory（多轮问答 · 上下文压缩 · 长期记忆）             |
+|  Query Service（多路召回 · RRF · Cross-Encoder · 负反馈降权） --> Qdrant            |
+|  RAG Agent + intent/summary/memory --/v1/search--> Gateway / Query Service        |
+|    ├─ 记忆正文 --> PostgreSQL      └─ 记忆向量 --> Qdrant                          |
 +----------------------------------------------------------------------------------+
         |
         v
 +----------------------------------------------------------------------------------+
-| 存储层                                                                           |
-|  RabbitMQ/Kafka（任务与事件 · DLQ）   MinIO/S3（原文件 · 解析产物 parsed/）         |
-|  Qdrant（向量/关键词）   PostgreSQL + pgvector（身份 · 反馈 · 会话 · 记忆）   Redis |
+| 存储层（职责固定）                                                                |
+|  PostgreSQL：身份 · RBAC · 反馈 · 会话 · 记忆正文（事实源，不存向量）                 |
+|  Qdrant：文档 dense/sparse · 记忆 dense（派生索引）                                 |
+|  MinIO/S3：原文件 · parsed/<task>.md（事实源）    Redis：任务状态 · 吊销 · 计量        |
+|  RabbitMQ/Kafka：任务与事件 · DLQ                                                   |
 +----------------------------------------------------------------------------------+
 ```
 
@@ -125,7 +128,7 @@ V4.0 在接入层进一步拆出 Auth Service 与 User Service：JWT 的签发�
 LlamaIndex Service 由 FastAPI 封装为一组 RESTful / gRPC 接口，接收 Go 侧 Processing Worker 通过消息队列或同步调用下发的解析结果，负责以下能力：
 
 - 高级切块：使用 SemanticSplitterNodeParser（语义切块）或 MarkdownNodeParser（按标题层级切块），基于 MinerU 输出的结构化 Markdown 进行智能切分，取代 Go 侧简单的滑动窗口切块。
-- 多索引构建：针对 MinerU 输出的版面信息，同时构建向量索引与关键词（BM25）索引，为后续 Hybrid Search 混合检索打基础；表格、公式、图片作为独立节点携带元数据。
+- 多索引构建：针对 MinerU 输出的版面信息，同时构建稠密向量与稀疏（Qdrant sparse，IDF）索引，为 Hybrid Search 混合检索打基础；表格、公式、图片作为独立节点携带元数据。
 - Embedding 编排：内部通过 LlamaIndex 的 Embedding Client 调用外部 Embedding API（如 OpenAI），完成向量化后批量写入 Milvus / Qdrant，Go 侧不再直接处理向量化。
 
 ### 4.2 与 Go 侧的协同关系
@@ -444,12 +447,12 @@ func mapRuntime(r pb.Runtime) string {
 
 ### 13.1 多路召回策略
 
-单一向量召回对专有名词、精确编号、长尾关键词召回不足，因此查询侧采用多路并行召回再融合的策略，各路独立产出候选集后统一进入融合与重排阶段。
+单一向量召回对专有名词、精确编号、长尾关键词召回不足，因此查询侧采用多路并行召回再融合的策略，各路独立产出候选集后统一进入融合与重排阶段。关键词路优先使用 Qdrant 原生 sparse（每 KB 伴生集合 `<collection>__sparse`，`modifier=idf`），写入时与稠密向量共享稳定 ID；sparse 未覆盖或不可用时回退到 scroll + BM25。
 
 | 召回路 | 检索引擎 | 擅长场景 | 关键参数 |
 | --- | --- | --- | --- |
 | 向量语义召回 | Milvus / Qdrant ANN | 语义相近、同义改写 | top_k、nprobe、ef |
-| 关键词召回 | BM25 / 倒排索引 | 专有名词、精确短语、编号 | top_k、字段权重 |
+| 关键词召回 | Qdrant sparse（IDF）/ BM25 兜底 | 专有名词、精确短语、编号 | top_k、字段权重 |
 | 标量过滤召回 | 向量库 metadata 过滤 | 按来源、时间、权限裁剪 | filter 表达式 |
 | 图谱/层级召回 | 父文档回溯 | 表格、章节级长上下文 | parent_expand |
 
@@ -476,7 +479,7 @@ func mapRuntime(r pb.Runtime) string {
    |
    +---------------------+---------------------+
    v (并行)              v                     v
-[向量召回]            [BM25 召回]           [标量过滤]
+[向量召回]         [Sparse/BM25 召回]       [标量过滤]
    |                     |                     |
    +----------+----------+----------+----------+
               v                                   
@@ -696,7 +699,7 @@ LightRAG 支持两种检索模式：Local 模式聚焦实体邻域的局部细�
 
 ## 18. 多租户长期记忆层
 
-为提升个性化与连续性，系统提供跨会话的长期记忆，采用 PostgreSQL + pgvector 存储，双层隔离并与租户 ACL 对齐。
+为提升个性化与连续性，系统提供跨会话的长期记忆。职责划分固定为：**PostgreSQL 保存记忆正文与元数据（事实源），Qdrant 保存记忆向量（派生索引）**，双层隔离并与租户 ACL 对齐；向量召回按 `tenant_id + user_id` 取 top-k 后回 Postgres 取正文，Qdrant 不可用时退化为词面召回。写入与合并先落 Postgres，成功后再按 `memory_id` 覆盖 Qdrant；删除同样以 Postgres 为准，索引清理失败可重试。
 
 ### 18.1 双层记忆模型
 
@@ -705,6 +708,17 @@ LightRAG 支持两种检索模式：Local 模式聚焦实体邻域的局部细�
 ### 18.2 异步读写闭环
 
 推理前并行召回相关记忆注入 Prompt；交互后经异步队列由 LLM 抽取新事实/偏好，去重与冲突消解后更新记忆库，避免同步写放大主链路延迟。记忆命中情况作为 Span 记入 Tracing（第 19 章），纳入反馈闭环评估。
+
+### 18.3 存储职责
+
+| 数据 | 存储 | 角色 |
+| --- | --- | --- |
+| 记忆正文、`normalized`、`kind`、时间戳 | PostgreSQL `rag_memories` | 事实源，去重与合并在此完成 |
+| 记忆向量与 `tenant_id/user_id/memory_id` | Qdrant `nexusflow_memories` | 派生索引，按 owner 过滤召回 |
+| 文档 chunk dense/sparse | Qdrant 每 KB collection 及 `__sparse` 伴生集合 | 派生索引 |
+| 原始文件、`parsed/<task>.md` | MinIO/S3 | 事实源，支持重建索引 |
+
+`MEMORY_DRIVER=qdrant` 时先写 Postgres 再同步 Qdrant；Qdrant 写失败不影响正文落库，召回退化为词面匹配。历史 pgvector 向量通过 `python -m app.backfill` 回填；`MEMORY_DRIVER=postgres` 仅作为回滚路径保留。
 
 ## 19. Langfuse 可观测性与治理
 
@@ -737,7 +751,7 @@ LightRAG 支持两种检索模式：Local 模式聚焦实体邻域的局部细�
 | 文档解析 | MinerU 4.x（V1 Tasks API） | 复杂版面/图表还原为结构化 Markdown |
 | 检索增强 | Milvus/Qdrant + LightRAG + BGE-Reranker | 向量+稀疏+图谱三路召回、RRF+重排 |
 | 执行沙箱 | OpenSandbox（主）/ RestrictedPython（轻量可选） | 强隔离执行用户代码；纯字符串转换类可退化为受限解释器 |
-| 存储 | MinIO + PostgreSQL(+pgvector) | 文件对象 / 业务库 / 图谱 / 长期记忆 |
+| 存储 | MinIO + Qdrant + PostgreSQL | 文件对象 / 文档与记忆向量 / 业务库与记忆正文 |
 | 观测治理 | Langfuse（自建） | Prompt 版本、Tracing、LLM-as-a-Judge 评审 |
 
 关键取舍说明：

@@ -22,6 +22,9 @@ class Settings(BaseSettings):
 
     qdrant_url: str = "http://127.0.0.1:6333"
     collection_prefix: str = "nexusflow"
+    # Qdrant sparse recall. Disable to fall back to the legacy scroll + BM25
+    # implementation (useful when the companion sparse collection is absent).
+    sparse_enabled: bool = True
 
     rerank_url: str = ""
     rerank_model: str = "bge-reranker-v2-m3"

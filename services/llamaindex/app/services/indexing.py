@@ -16,6 +16,11 @@ from app.retrieval.graph import clear_graph_cache
 from app.schemas import IndexRequest, IndexResponse
 from app.services.chunking import build_nodes
 from app.services.embedding import build_embedding
+from app.services.sparse import (
+    SPARSE_VECTOR_NAME,
+    encode_sparse,
+    sparse_collection_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +62,99 @@ def _task_point_ids(client, collection: str, task_id: str) -> set[str]:
     return ids
 
 
+def _sparse_payload(task_id: str, node) -> dict[str, str]:
+    payload: dict[str, str] = {}
+    for key, value in node.metadata.items():
+        if value is not None:
+            payload[str(key)] = str(value)
+    # The task id is the cascade-delete and reindex key, so never let metadata
+    # shadow it.
+    payload["task_id"] = task_id
+    return payload
+
+
+def _sparse_points(task_id: str, nodes) -> list:
+    from qdrant_client import models as qmodels
+
+    points = []
+    for node in nodes:
+        indices, values = encode_sparse(node.get_content())
+        if not indices:
+            continue
+        points.append(
+            qmodels.PointStruct(
+                id=node.node_id,
+                vector={
+                    SPARSE_VECTOR_NAME: qmodels.SparseVector(
+                        indices=indices, values=values
+                    )
+                },
+                payload=_sparse_payload(task_id, node),
+            )
+        )
+    return points
+
+
+def _ensure_sparse_collection(client, collection: str) -> str:
+    from qdrant_client import models as qmodels
+
+    sparse_collection = sparse_collection_name(collection)
+    if not client.collection_exists(sparse_collection):
+        try:
+            client.create_collection(
+                collection_name=sparse_collection,
+                vectors_config={},
+                sparse_vectors_config={
+                    SPARSE_VECTOR_NAME: qmodels.SparseVectorParams(
+                        modifier=qmodels.Modifier.IDF
+                    )
+                },
+            )
+            logger.info("created sparse collection %s", sparse_collection)
+        except Exception:
+            # Another replica may have created it between the check and create.
+            if not client.collection_exists(sparse_collection):
+                raise
+    return sparse_collection
+
+
+def _write_sparse(client, collection: str, task_id: str, nodes) -> bool:
+    """Best-effort sparse companion write; dense retrieval stays usable on failure."""
+    try:
+        sparse_collection = _ensure_sparse_collection(client, collection)
+        points = _sparse_points(task_id, nodes)
+        for start in range(0, len(points), 256):
+            client.upsert(
+                collection_name=sparse_collection,
+                points=points[start : start + 256],
+                wait=True,
+            )
+        return True
+    except Exception as exc:  # noqa: BLE001 - bm25 route can fall back to scroll
+        logger.warning("sparse indexing failed for %s: %s", collection, exc)
+        return False
+
+
+def _delete_sparse_points(client, collection: str, ids: list[str]) -> None:
+    if not ids:
+        return
+    sparse_collection = sparse_collection_name(collection)
+    try:
+        if not client.collection_exists(sparse_collection):
+            return
+        from qdrant_client import models as qmodels
+
+        client.delete(
+            collection_name=sparse_collection,
+            points_selector=qmodels.PointIdsList(points=ids),
+            wait=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - stale sparse points retry next run
+        logger.warning(
+            "delete stale sparse points failed for %s: %s", sparse_collection, exc
+        )
+
+
 def index_markdown(request: IndexRequest) -> IndexResponse:
     """Chunk, embed and persist a parsed document into the vector store."""
     collection = collection_for(request.metadata.get("kb_id"))
@@ -89,6 +187,10 @@ def index_markdown(request: IndexRequest) -> IndexResponse:
         embed_model=build_embedding(request.embedding_model),
     )
 
+    sparse_written = False
+    if settings.sparse_enabled and qdrant is not None:
+        sparse_written = _write_sparse(qdrant, collection, request.task_id, nodes)
+
     deleted = 0
     if qdrant is not None:
         stale = stale_ids(old_ids, {str(node.node_id) for node in nodes})
@@ -104,6 +206,8 @@ def index_markdown(request: IndexRequest) -> IndexResponse:
                 deleted = len(stale)
             except Exception as exc:  # noqa: BLE001 - stale points retry next run
                 logger.warning("delete stale points failed for %s: %s", collection, exc)
+            if sparse_written:
+                _delete_sparse_points(qdrant, collection, stale)
 
     # New chunks must appear in the graph route immediately, not after the TTL.
     clear_graph_cache(collection)

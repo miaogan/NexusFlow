@@ -21,6 +21,8 @@
    - `IDENTITY_DRIVER=redis`、`METERING_DRIVER=redis`：身份与计量在副本间共享，必须使用同一 Redis。
    - 若改用 `IDENTITY_DRIVER=postgres`（`IDENTITY_DATABASE_URL`），服务启动时会在 advisory lock 下自动创建 `identity_users` / `identity_roles` / `knowledge_bases` / `kb_permissions`，并把旧 `identity_knowledge_bases` 幂等迁入；多副本并发启动安全。表结构与 `docs/schema_enterprise_v1_1_to_1_5.sql` 对齐。
    - `LLAMAINDEX_URL`：开启切块/索引与删除级联清理；未配置时删除只清理对象与任务记录。
+   - `LLAMAINDEX_SPARSE_ENABLED=true`：`bm25` 路由使用 Qdrant 原生 sparse（每 KB 伴生集合 `<collection>__sparse`，IDF 权重）；关闭、集合缺失或调用失败时回退到 scroll + BM25。
+   - 若独立部署 `memory-agent`：`MEMORY_DRIVER=qdrant`、`MEMORY_DATABASE_URL`、`MEMORY_QDRANT_URL`、`MEMORY_QDRANT_COLLECTION`；正文写 Postgres，向量写 Qdrant，历史 pgvector 数据用 `python -m app.backfill` 回填。
    - `QUOTA_MAX_STORAGE_BYTES` / `QUOTA_MAX_FILES` / `QUOTA_MAX_QUERIES`：租户配额，`0` 表示不限。
 2. 修改 Secret `app-secret`：`JWT_SECRET`、`OPENSANDBOX_TOKEN`、`LLAMAINDEX_EMBEDDING_API_KEY`、`RAG_LLM_BASE_URL`、`RAG_LLM_API_KEY`。生产环境建议改用 SealedSecret / ExternalSecret 管理。
 
@@ -114,6 +116,8 @@ kubectl -n nexusflow describe hpa processing-worker
 4. 成功后回到 `COMPLETED`。
 
 失败时状态回滚为 `COMPLETED`，旧索引保持可用，可直接重试，无需重新上传。级联删除会同时清理 `parsed/` 下的解析产物，请勿单独清理该目录，否则重建将不可用。
+
+重建会同时刷新稠密索引与 sparse 伴生集合。启用 `LLAMAINDEX_SPARSE_ENABLED` 后，建议对升级前的历史文档执行一次 Reindex 补齐 sparse 向量；未补齐时 `bm25` 在 sparse 命中不足 `top_k` 时会混合旧 BM25 兜底，但旧文档的纯词法召回会弱于已补齐文档。
 
 ## 8. 沙箱后端（OpenSandbox）
 
@@ -211,4 +215,5 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 - 滚动升级：逐个更新 `image` 标签后 `kubectl apply`，Deployment 默认使用 RollingUpdate。
 - 数据库/模式：身份表（含 `knowledge_bases` / `kb_permissions` 与旧表迁移）在服务启动时以 advisory lock 自动迁移；多副本并发启动是安全的。
 - 从 v1.1.0 之前升级：历史任务没有 `markdown_key`，重建索引会返回 `400`，需重新上传文件；既有向量与检索不受影响。
+- 长期记忆存储迁移：先设置 `MEMORY_DRIVER=qdrant` + `MEMORY_QDRANT_URL` 并运行 `python -m app.backfill` 回填旧 pgvector 向量，再切换流量；回滚 `MEMORY_DRIVER=postgres` 后，qdrant 模式期间新增的记忆需要重新抽取才能恢复语义召回。
 - 回滚：`kubectl -n nexusflow rollout undo deploy/<name>`。PVC 中的数据不会随回滚删除。

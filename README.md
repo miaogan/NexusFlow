@@ -32,15 +32,15 @@ flowchart TB
 
     subgraph D[检索问答层]
         QS[Query Service<br/>多路召回 · RRF · Rerank]
-        RAG[RAG Agent<br/>intent / summary / memory]
+        RAG[RAG Agent + intent / summary / memory<br/>问答 · 压缩 · 长期记忆]
     end
 
     subgraph E[存储层]
-        MQ[(RabbitMQ / Kafka)]
-        OBJ[(MinIO / S3)]
-        VS[(Qdrant)]
-        PG[(PostgreSQL + pgvector)]
-        RD[(Redis)]
+        MQ[(RabbitMQ / Kafka<br/>任务与事件 · DLQ)]
+        OBJ[(MinIO / S3<br/>原文件 · parsed/)]
+        VS[(Qdrant<br/>KB: dense+sparse<br/>memory: dense)]
+        PG[(PostgreSQL<br/>身份 · 反馈 · 会话 · 记忆正文)]
+        RD[(Redis<br/>任务状态 · 吊销 · 计量)]
     end
 
     UI[可视化画布 / 客户端] -->|HTTP / gRPC| GW
@@ -67,6 +67,7 @@ flowchart TB
     QS --> PG
     RAG -. 复用 /v1/search .-> GW
     RAG --> PG
+    RAG -. 记忆向量 .-> VS
 ```
 
 分层职责：
@@ -75,7 +76,7 @@ flowchart TB
 - **编排调度层**：Workflow Engine 解析 DAG、按依赖并发调度；Ingestion 接收上传、级联删除并投递任务，Reindex 复用已持久化的解析产物。
 - **执行加工层**：Processing Worker 调用 MinerU 解析并把 Markdown 持久化为 `tenant/kb/parsed/<task>.md`；LlamaIndex Service 负责语义/层级切块、索引与 Embedding；Sandbox Execution 经 OpenSandbox 执行自定义代码。
 - **检索问答层**：Query Service 并行多路召回，RRF 融合，Cross-Encoder 重排，任一非核心路失败 Fail-open；RAG Agent 编排 intent / summary / memory，经 Gateway 复用统一检索链路。
-- **存储层**：RabbitMQ/Kafka 消息与 DLQ、MinIO 原文件与解析产物、Qdrant 向量与关键词索引、PostgreSQL(+pgvector) 身份/反馈/会话/记忆、Redis 任务状态、计量与令牌吊销。
+- **存储层**：RabbitMQ/Kafka 消息与 DLQ、MinIO 原文件与解析产物、Qdrant 文档向量（dense/sparse）与记忆向量（dense）、PostgreSQL 身份/反馈/会话/记忆正文、Redis 任务状态、计量与令牌吊销。
 
 ## 服务与目录
 
@@ -93,7 +94,7 @@ flowchart TB
 | RAG Agent | Python | `services/rag-agent` | 8001 | LangGraph 多轮问答、意图路由、引用、会话持久化 |
 | Intent Agent | Python | `services/intent-agent` | 8002 | 独立意图识别服务（Supervisor 第一步），LLM + 规则降级 |
 | Summary Agent | Python | `services/summary-agent` | 8003 | 上下文总结 / 自动压缩（滚动摘要 + 预算裁剪），LLM + 抽取式降级 |
-| Memory Agent | Python | `services/memory-agent` | 8004 | 长期记忆抽取、去重合并、召回；规则 + LLM、词面 + embedding 降级 |
+| Memory Agent | Python | `services/memory-agent` | 8004 | 长期记忆抽取、去重合并、召回；Postgres 正文 + Qdrant 向量，规则/词面降级 |
 | Web Console | React | `web` | 5173 / 8088 | 控制台：知识库切换与授权 / 文件 / 任务 / 检索 / 问答 / 沙箱 / DAG |
 
 ```text
@@ -285,6 +286,8 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 
 **检索链路**（`backend/internal/query`）：多路召回并行执行（`vector` / `bm25` / `graph`，生产均由 LlamaIndex 检索真实 Qdrant 索引）→ RRF 融合（k=60）→ 去重 → Cross-Encoder 重排 → 负反馈降权（`FeedbackPenalty`：同一租户内某 chunk 累计 ≥3 条负反馈时得分 ×0.5，再排序）→ 取 top-N；单路失败、重排超时或反馈存储不可用时均自动降级（Fail-open）。`LlamaIndexRetriever` 统一封装三路请求并从 gRPC 元数据注入 `tenant_id` 过滤；配置 `LLAMAINDEX_URL` 时 query-service 使用真实索引，未配置时回退到内存演示语料（dev-all 始终使用内存实现）。`graph` 路由为 LightRAG 风格实体图，无 LLM 时退化为共现词图。
 
+**稠密 + 稀疏混合召回**：`bm25` 路由优先使用 Qdrant 原生 sparse（每 KB 伴生集合 `<collection>__sparse`，`modifier=idf`），写入时与稠密向量同 ID；sparse 未覆盖、集合缺失或调用失败时自动回退到原来的 scroll + BM25。`LLAMAINDEX_SPARSE_ENABLED=false` 可强制使用旧实现。升级前已索引的文档没有 sparse 向量，建议通过 `POST /v1/files/{id}/reindex` 补齐；命中不足 `top_k` 时会混合旧 BM25 结果兜底，但旧文档的纯词法召回会弱于已补齐的文档。
+
 **Rerank / Embedding 协议**：`RERANK_PROTOCOL=generic|dashscope`。`generic` 为 bge/Cohere 风格 `{model,query,documents,top_n}`；`dashscope` 使用阿里云原生 `{model,input:{query,documents},parameters:{top_n}}` 并以 `RERANK_API_KEY` 作 Bearer 认证，`RERANK_POOL` 限制送排候选数、`RERANK_TIMEOUT` 控制超时；LlamaIndex 侧对应 `LLAMAINDEX_RERANK_*`。Embedding 批次由 `LLAMAINDEX_EMBEDDING_BATCH_SIZE` 控制，`MEMORY_EMBEDDING_DIM` 必须与模型输出维度一致（如 DashScope 1024）。
 
 **沙箱护栏**（`backend/internal/sandbox`）：强制 TTL、`defer` 无条件销毁、输入/输出走约定文件、出口白名单与凭据不落盘。`local` 后端仅用于本机调试；生产必须使用 `remote`——已接入官方 OpenSandbox Go SDK（创建/等待就绪、execd 执行与文件传输、强制删除），配置方式见 `docs/deployment.md` 第 8 节。
@@ -414,15 +417,15 @@ MEMORY_EMBEDDING_MODEL=text-embedding-3-small
 | --- | --- | --- | --- |
 | P1 | `intent-agent` :8002 | 意图识别与路由（`knowledge_qa / chitchat / clarify`），LLM + 规则降级 | 已完成 |
 | P2 | `summary-agent` :8003 | 上下文总结、自动压缩（滚动摘要 + 最近 N 轮），按字符预算裁剪 | 已完成 |
-| P3 | `memory-agent` :8004 | 长期记忆抽取、去重合并、召回注入；Postgres + pgvector | 已完成 |
+| P3 | `memory-agent` :8004 | 长期记忆抽取、去重合并、召回注入；Postgres 正文 + Qdrant 向量 | 已完成 |
 
 P2/P3 约定：
 
 - 各 agent 独立部署、通过 HTTP 通信；rag-agent 保留 Supervisor 编排职责，新增 `RAG_SUMMARY_URL` / `RAG_MEMORY_URL` 接入。
 - 摘要写入 `rag_conversations.summary`（`summary_count` 记录已折叠消息数），prompt 使用「摘要 + 最近 N 条原文」；引用与全文不因压缩丢失。
-- 记忆表 `rag_memories` 使用 pgvector（compose 镜像为 `pgvector/pgvector:pg16`，配置 `MEMORY_EMBEDDING_*` 时启用 `CREATE EXTENSION vector` 与向量召回；未配置时退化为词面召回），按 `tenant_id + user_id` 隔离；对话开始召回 top-k 注入，轮次结束异步抽取。
+- 记忆正文存 `rag_memories`（Postgres，事实源），向量存 Qdrant `nexusflow_memories`；召回先按 `tenant_id + user_id` 过滤取 top-k ID，再回 Postgres 取正文，Qdrant 不可用或未命中时自动退回词面召回。`MEMORY_DRIVER=memory|postgres|qdrant`，为空时自动选择（DB + Qdrant → qdrant，仅 DB → postgres，否则 memory）。
 - 记忆抽取在有 `MEMORY_LLM_*` 时用 LLM，否则走规则（偏好/画像/明确要求记住的事实）；去重按归一化文本 + 词面相似度合并，更新而非新增。
-- **pgvector 索引调优**：`MEMORY_VECTOR_INDEX=hnsw|ivfflat|none`。HNSW 用 `MEMORY_HNSW_M`（默认 16）与 `MEMORY_HNSW_EF_CONSTRUCTION`（64）建索引，查询期 `MEMORY_HNSW_EF_SEARCH`（40）在召回与延迟间权衡；IVFFlat 用 `MEMORY_IVFFLAT_LISTS`（≈行数/1000）建索引、`MEMORY_IVFFLAT_PROBES` 查询期探测；数据量小时可设 `none` 走精确扫描。修改参数需 `MEMORY_VECTOR_INDEX_RECREATE=true` 重建索引（`CREATE INDEX IF NOT EXISTS` 不会覆盖旧定义）。召回延迟见 `memory_agent_recall_seconds` 直方图，`/healthz` 暴露当前索引类型；召回按 `tenant_id + user_id` 过滤，强过滤下近似索引可能退化，建议结合 `EXPLAIN ANALYZE` 观察。
+- 历史 pgvector 向量可用 `cd services/memory-agent && python -m app.backfill` 一次性回填到 Qdrant；`MEMORY_DRIVER=postgres` 保留旧 pgvector 实现作为回滚路径，`MEMORY_VECTOR_INDEX` / `MEMORY_HNSW_*` / `MEMORY_IVFFLAT_*` 仅对旧驱动生效。注意回滚到 postgres 后，qdrant 模式期间新增的记忆没有 pgvector 向量，需要重新抽取才能恢复语义召回。
 - 所有 agent 统一使用 OpenAI 兼容配置（`RAG_LLM_*` / `INTENT_LLM_*`），DeepSeek 可直接接入。
 
 ## 反馈与评审
@@ -564,6 +567,6 @@ make up / down     # 容器编排启停
 - 单进程 dev-all 模式下，上传文件经解析、切块后写入共享内存索引（DocStore），检索可命中真实上传内容，任务状态推进至 COMPLETED。独立部署时 `processing-worker` 调 LlamaIndex `/v1/index` 写入 Qdrant，`query-service` 的 vector/bm25/graph 三路召回均走 LlamaIndex（`LLAMAINDEX_URL`）；`dev-all` 仍保留内存实现以便零依赖演示。
 - LlamaIndex Service 的切块、索引与检索依赖 Qdrant 与 Embedding API Key；未配置时相关接口返回 503。
 - K8s HPA 使用自定义指标 `nexusflow_queue_length`，需部署 prometheus-adapter 将指标转换为 Custom Metrics API。
-- 设计文档中的 NL2SQL 章节已落地为 `nl2sql` 工作流节点（只读 SQL 护栏 + 可选 LLM 生成）；LightRAG 图谱检索已落地为 `graph` 召回路由：LlamaIndex 提供 `/v1/graph/extract` 抽取接口与 `/v1/search` 的 graph 子路由（配置 `LLAMAINDEX_LLM_*` 时用 LLM 抽取实体/关系，否则或调用失败时自动退化为共现词图），Go 侧 `LlamaIndexRetriever` 将三路结果统一接入 RRF。长期记忆已由 `memory-agent` 落地（抽取/去重/召回/注入）。（可观测性 / Langfuse 导出与 dev trace viewer 已实现，见上节。）
+- 设计文档中的 NL2SQL 章节已落地为 `nl2sql` 工作流节点（只读 SQL 护栏 + 可选 LLM 生成）；LightRAG 图谱检索已落地为 `graph` 召回路由：LlamaIndex 提供 `/v1/graph/extract` 抽取接口与 `/v1/search` 的 graph 子路由（配置 `LLAMAINDEX_LLM_*` 时用 LLM 抽取实体/关系，否则或调用失败时自动退化为共现词图），Go 侧 `LlamaIndexRetriever` 将三路结果统一接入 RRF。长期记忆已由 `memory-agent` 落地（抽取/去重/召回/注入）：正文在 Postgres，向量在 Qdrant，两者职责分离。（可观测性 / Langfuse 导出与 dev trace viewer 已实现，见上节。）
 - 用户与角色支持三种存储：`memory`（dev-all 单进程默认）、`redis`（`IDENTITY_DRIVER=redis`）与 `postgres`（`IDENTITY_DRIVER=postgres` + `IDENTITY_DATABASE_URL`），后两者供独立部署的 Auth / User 服务跨进程共享；postgres 启动时自动建表并复用内置角色种子。Compose 真机冒烟已验证自动建表、种子管理员登录及 Gateway 身份读取。
 - 登出通过令牌吊销名单即时生效：JWT 携带 `jti`，登出时将该 id 写入 `TOKEN_BLACKLIST_DRIVER`（`memory` 单进程 / `redis` 供 gateway 与 auth-service 共享）并设置剩余有效期 TTL；网关在每次鉴权时拦截已吊销的 access token，auth-service 在 validate/refresh 时拒绝已吊销的 refresh token。Redis 不可用时自动降级为内存名单并告警。

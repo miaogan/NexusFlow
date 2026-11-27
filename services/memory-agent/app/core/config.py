@@ -36,11 +36,17 @@ class Settings(BaseSettings):
     embedding_dim: int = 1536
     embedding_timeout_seconds: float = 15.0
 
-    # Empty -> in-memory memories (dev). Set to a Postgres DSN to persist with
-    # pgvector when ``embedding_*`` is configured.
+    # Memory content always lives in Postgres when a DSN is configured.
+    # Vectors live in Qdrant; the legacy ``postgres`` driver keeps pgvector as
+    # a rollback path.
     database_url: str = ""
+    # memory | postgres | qdrant. Empty -> auto: DB + Qdrant -> qdrant,
+    # DB only -> postgres, otherwise memory.
+    driver: str = ""
+    qdrant_url: str = ""
+    qdrant_collection: str = "nexusflow_memories"
 
-    # pgvector index tuning (effective when embeddings are enabled).
+    # pgvector index tuning for the legacy postgres driver (ignored by qdrant).
     # hnsw: better recall at higher build cost; ivfflat: cheaper, needs data
     # first; none: exact scan, fine for small per-user datasets.
     vector_index: str = "hnsw"
@@ -70,6 +76,15 @@ class Settings(BaseSettings):
         return bool(
             self.embedding_base_url.strip() and self.embedding_api_key.strip()
         )
+
+    @property
+    def store_kind(self) -> str:
+        driver = self.driver.strip().lower()
+        if driver in {"memory", "postgres", "qdrant"}:
+            return driver
+        if self.database_url.strip():
+            return "qdrant" if self.qdrant_url.strip() else "postgres"
+        return "memory"
 
 
 @lru_cache

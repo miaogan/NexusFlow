@@ -46,7 +46,8 @@ services:
       retries: 5
 
   postgres:
-    # pgvector image so memory-agent can store embeddings (CREATE EXTENSION vector).
+    # pgvector image is kept for the legacy MEMORY_DRIVER=postgres rollback path;
+    # the default qdrant driver stores memory vectors in Qdrant.
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: nexusflow
@@ -277,6 +278,7 @@ services:
     environment:
       LLAMAINDEX_APP_ENV: prod
       LLAMAINDEX_QDRANT_URL: http://qdrant:6333
+      LLAMAINDEX_SPARSE_ENABLED: ${LLAMAINDEX_SPARSE_ENABLED:-true}
       LLAMAINDEX_EMBEDDING_API_KEY: ${LLAMAINDEX_EMBEDDING_API_KEY:-}
       LLAMAINDEX_EMBEDDING_API_BASE: ${LLAMAINDEX_EMBEDDING_API_BASE:-https://api.openai.com/v1}
       LLAMAINDEX_EMBEDDING_MODEL: ${LLAMAINDEX_EMBEDDING_MODEL:-text-embedding-3-large}
@@ -331,7 +333,11 @@ services:
       context: ../services/memory-agent
     environment:
       MEMORY_APP_ENV: prod
+      # Postgres holds memory content; Qdrant holds memory vectors.
+      MEMORY_DRIVER: ${MEMORY_DRIVER:-qdrant}
       MEMORY_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
+      MEMORY_QDRANT_URL: ${MEMORY_QDRANT_URL:-http://qdrant:6333}
+      MEMORY_QDRANT_COLLECTION: ${MEMORY_QDRANT_COLLECTION:-nexusflow_memories}
       # Empty LLM key -> rule-based extraction; empty embedding key -> lexical recall.
       MEMORY_LLM_BASE_URL: ${MEMORY_LLM_BASE_URL:-}
       MEMORY_LLM_API_KEY: ${MEMORY_LLM_API_KEY:-}
@@ -354,6 +360,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      qdrant:
+        condition: service_started
     ports: ["8004:8004"]
 
   rag-agent:

@@ -662,6 +662,8 @@ spec:
           env:
             - name: LLAMAINDEX_QDRANT_URL
               value: "http://qdrant.nexusflow.svc:6333"
+            - name: LLAMAINDEX_SPARSE_ENABLED
+              value: "true"
             - name: LLAMAINDEX_EMBEDDING_API_KEY
               valueFrom:
                 secretKeyRef:

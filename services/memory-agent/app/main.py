@@ -17,16 +17,19 @@ app.include_router(router)
 
 @app.get("/healthz", response_model=HealthResponse)
 def healthz() -> HealthResponse:
+    kind = settings.store_kind
+    if kind == "qdrant":
+        vector_index = "qdrant" if settings.embedding_enabled else "none"
+    elif kind == "postgres" and settings.embedding_enabled:
+        vector_index = normalize_index_type(settings.vector_index)
+    else:
+        vector_index = "none"
     return HealthResponse(
         status="ok",
         llm_enabled=settings.llm_enabled,
         embedding_enabled=settings.embedding_enabled,
-        store="postgres" if settings.database_url else "memory",
-        vector_index=(
-            normalize_index_type(settings.vector_index)
-            if settings.embedding_enabled
-            else "none"
-        ),
+        store=kind,
+        vector_index=vector_index,
     )
 
 
