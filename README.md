@@ -177,6 +177,8 @@ make up
 
 容器编排使用 `STATE_DRIVER=redis`、`QUEUE_DRIVER=rabbitmq`，服务间通过 gRPC 与消息队列解耦。每个业务容器均提供 `/healthz`（Go 服务在 `METRICS_ADDR=:9100` 上同时暴露 `/metrics`，gateway/workflow/web 用各自 HTTP 端口），`docker compose` 依据健康检查状态控制启动顺序（如 gateway 等待 auth/user/ingestion/query/sandbox/rag-agent 健康后再启动）。
 
+生产集群部署（PVC、HPA 自定义指标与配额）见 [docs/deployment.md](docs/deployment.md)。
+
 ### 4. 真实 MinerU 4.x 与真机冒烟
 
 真实解析使用 **MinerU 4.x 官方 V1 Tasks API**。按[官方 Docker 部署文档](https://opendatalab.github.io/MinerU/zh/quick_start/docker_deployment/)构建镜像时，建议固定 `mineru[torch]==4.2.3`，不要依赖可变的 `>=4.0,<5` 安装区间。当前 `vLLM 0.21.0` 基础镜像还需将 `transformers` 固定为 `>=5.10.1,<5.23.0`；本次验证版本为 `5.22.2`。镜像内应预下载 standard 的 Torch 小模型与 vLLM 权重。

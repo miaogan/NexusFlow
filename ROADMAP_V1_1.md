@@ -27,7 +27,7 @@
   * **核心步骤**：实现计量记录器（支持 memory/redis）、暴露用量接口、前端概览页增加用量统计卡片。
   * **验证命令**：`make vet && go test ./backend/internal/platform/... ./backend/internal/gateway/... && make web-build`
 
-* **[ ] Task 2.2: 完善 K8s 生产部署模板与 HPA 自定义指标配置**
+* **[x] Task 2.2: 完善 K8s 生产部署模板与 HPA 自定义指标配置**
   * **目标**：补齐生产级配置，落地集群弹性伸缩。
   * **核心步骤**：补充自定义指标映射配置、完善 PVC 配置及更新相关部署文档。
   * **验证命令**：`kubectl apply --dry-run=client -f deploy/k8s/nexusflow.yaml 2>/dev/null || echo "YAML syntax check skipped (no kubectl)" && make test`

@@ -24,11 +24,24 @@ data:
   OBJECT_STORE_DIR: "/data/objects"
   OBJECT_STORE_BASE: "http://minio.nexusflow.svc:9000/nexusflow"
   SANDBOX_BACKEND: "remote"
+  SANDBOX_WORK_DIR: "/data/sandboxes"
   OPENSANDBOX_URL: "http://opensandbox.nexusflow.svc:8080"
   METRICS_ADDR: ":9100"
   INGESTION_TARGET: "ingestion:9095"
   QUERY_TARGET: "query-service:9094"
   SANDBOX_TARGET: "sandbox-execution:9093"
+  AUTH_TARGET: "auth-service:9096"
+  USER_TARGET: "user-service:9097"
+  # Identity and metering must be shared across replicas; both reuse Redis.
+  IDENTITY_DRIVER: "redis"
+  METERING_DRIVER: "redis"
+  LLAMAINDEX_URL: "http://llamaindex:8000"
+  RAG_AGENT_URL: "http://rag-agent:8001"
+  RAG_GATEWAY_URL: "http://gateway:8080"
+  # Tenant quotas. 0 means unlimited; sizes are in bytes.
+  QUOTA_MAX_STORAGE_BYTES: "10737418240"
+  QUOTA_MAX_FILES: "5000"
+  QUOTA_MAX_QUERIES: "100000"
 ---
 apiVersion: v1
 kind: Secret
@@ -40,6 +53,37 @@ stringData:
   JWT_SECRET: "change-me-in-production"
   OPENSANDBOX_TOKEN: ""
   LLAMAINDEX_EMBEDDING_API_KEY: ""
+  RAG_LLM_BASE_URL: ""
+  RAG_LLM_API_KEY: ""
+---
+# Shared object storage. Gateway writes uploads, ingestion deletes them and the
+# processing worker streams them back for parsing, so all three pods need the
+# same ReadWriteMany volume. Replace storageClassName with the RWX class that
+# your cluster provides (nfs-client, cephfs, efs-sc, ...).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: object-store
+  namespace: nexusflow
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: nfs-client
+  resources:
+    requests:
+      storage: 100Gi
+---
+# Sandbox scratch space shared by every sandbox-execution replica.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sandbox-work
+  namespace: nexusflow
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: nfs-client
+  resources:
+    requests:
+      storage: 20Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -69,6 +113,9 @@ spec:
                 name: app-config
             - secretRef:
                 name: app-secret
+          volumeMounts:
+            - name: object-store
+              mountPath: /data/objects
           readinessProbe:
             httpGet:
               path: /healthz
@@ -82,6 +129,10 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
+      volumes:
+        - name: object-store
+          persistentVolumeClaim:
+            claimName: object-store
 ---
 apiVersion: v1
 kind: Service
@@ -95,6 +146,120 @@ spec:
   ports:
     - port: 8080
       targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: nexusflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+    spec:
+      containers:
+        - name: auth-service
+          image: ghcr.io/nexusflow/auth-service:4.0.0
+          ports:
+            - containerPort: 9096
+            - containerPort: 9100
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secret
+          env:
+            - name: AUTH_GRPC_ADDR
+              value: ":9096"
+          readinessProbe:
+            tcpSocket:
+              port: 9096
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 300m
+              memory: 192Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  namespace: nexusflow
+spec:
+  selector:
+    app: auth-service
+  ports:
+    - port: 9096
+      targetPort: 9096
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: nexusflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+    spec:
+      containers:
+        - name: user-service
+          image: ghcr.io/nexusflow/user-service:4.0.0
+          ports:
+            - containerPort: 9097
+            - containerPort: 9100
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secret
+          env:
+            - name: USER_GRPC_ADDR
+              value: ":9097"
+          readinessProbe:
+            tcpSocket:
+              port: 9097
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 300m
+              memory: 192Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service
+  namespace: nexusflow
+spec:
+  selector:
+    app: user-service
+  ports:
+    - port: 9097
+      targetPort: 9097
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -125,6 +290,9 @@ spec:
                 name: app-config
             - secretRef:
                 name: app-secret
+          volumeMounts:
+            - name: object-store
+              mountPath: /data/objects
           readinessProbe:
             tcpSocket:
               port: 9095
@@ -137,6 +305,10 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
+      volumes:
+        - name: object-store
+          persistentVolumeClaim:
+            claimName: object-store
 ---
 apiVersion: v1
 kind: Service
@@ -184,6 +356,9 @@ spec:
               value: ":9092"
             - name: MINERU_TARGET
               value: "http://mineru.nexusflow.svc:8080"
+          volumeMounts:
+            - name: object-store
+              mountPath: /data/objects
           readinessProbe:
             tcpSocket:
               port: 9092
@@ -196,6 +371,10 @@ spec:
             limits:
               cpu: "1"
               memory: 512Mi
+      volumes:
+        - name: object-store
+          persistentVolumeClaim:
+            claimName: object-store
 ---
 apiVersion: v1
 kind: Service
@@ -264,6 +443,9 @@ spec:
                 name: app-config
             - secretRef:
                 name: app-secret
+          volumeMounts:
+            - name: sandbox-work
+              mountPath: /data/sandboxes
           readinessProbe:
             tcpSocket:
               port: 9093
@@ -276,6 +458,10 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
+      volumes:
+        - name: sandbox-work
+          persistentVolumeClaim:
+            claimName: sandbox-work
 ---
 apiVersion: v1
 kind: Service
@@ -342,6 +528,54 @@ spec:
   ports:
     - port: 9094
       targetPort: 9094
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gateway
+  namespace: nexusflow
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: gateway
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 300
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: query-service
+  namespace: nexusflow
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: query-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 65
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -455,6 +689,60 @@ spec:
   ports:
     - port: 8000
       targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-agent
+  namespace: nexusflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: rag-agent
+  template:
+    metadata:
+      labels:
+        app: rag-agent
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8001"
+    spec:
+      containers:
+        - name: rag-agent
+          image: ghcr.io/nexusflow/rag-agent:4.0.0
+          ports:
+            - containerPort: 8001
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secret
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rag-agent
+  namespace: nexusflow
+spec:
+  selector:
+    app: rag-agent
+  ports:
+    - port: 8001
+      targetPort: 8001
 ---
 apiVersion: apps/v1
 kind: Deployment
