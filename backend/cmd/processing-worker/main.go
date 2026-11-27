@@ -55,7 +55,12 @@ func main() {
 		logger.Warn("MINERU_TARGET is empty, using mock parser")
 		client = &mineru.MockClient{Markdown: mockMarkdown}
 	} else {
-		client = mineru.NewHTTPClient(cfg.MinerUTarget, cfg.ParsePollInterval, 60)
+		httpClient := mineru.NewHTTPClient(cfg.MinerUTarget, cfg.ParsePollInterval, 60)
+		httpClient.APIKey = cfg.MinerUAPIKey
+		httpClient.Tier = cfg.MinerUTier
+		httpClient.ObjectDir = cfg.ObjectStoreDir
+		httpClient.ObjectBase = cfg.ObjectStoreBase
+		client = httpClient
 	}
 
 	worker := processing.NewWorker(

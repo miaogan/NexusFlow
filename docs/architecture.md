@@ -147,7 +147,9 @@ PENDING -> FETCHED -> PARSING -> PARSED
 
 ### 6.1 MinerU 异步解析
 
-MinerU 解析通常采用“提交任务 — 轮询结果”的异步模式。Processing Worker 需实现带最大重试次数与合理超时的轮询逻辑，防止 Goroutine 泄漏；并根据文件后缀直接路由（如 .docx 由 MinerU 原生解析，无需转 PDF）。解析产出的 Markdown 作为 LlamaIndex 切块的输入。
+当前实现对接 MinerU 4.x 官方 V1 Tasks 协议：`POST /v1/tasks` 创建单文件任务，按响应中的 `files[].upload` 流式 PUT 原始字节，轮询 `GET /v1/tasks/{task_id}`，完成后从 `files[].result_url` 下载 ZIP 并提取 Markdown。Processing Worker 实现有界轮询与最大重试次数，防止 Goroutine 泄漏；父任务失败时优先透传逐文件错误详情。
+
+上传事件中的对象 URL 仅允许映射到 `OBJECT_STORE_BASE` 下的 key，再从共享 `OBJECT_STORE_DIR` 读取，包含来源与目录穿越校验，因此解析服务不依赖 MinIO 可达性。PDF/DOCX/HTML 由 MinerU 原生解析；MinerU 4.x 不接收的 TXT/Markdown 直接保留原文，避免真实解析模式下破坏既有文本上传能力。最终 Markdown 统一作为 LlamaIndex 切块的输入。
 
 ### 6.2 切块与索引（下沉至 LlamaIndex）
 
@@ -706,7 +708,7 @@ LightRAG 支持两种检索模式：Local 模式聚焦实体邻域的局部细�
 | 网关与调度 | Go + Gin + RabbitMQ/Asynq + Kafka | 高并发网关、多租户鉴权、生产者/消费者削峰 |
 | 认证与权限 | Go + JWT(HS256) + bcrypt + RBAC | 独立 Auth / User 服务，权限随令牌下发，路由级判定 |
 | AI 计算与加工 | Python + FastAPI + LlamaIndex | 切块、多路索引、检索与 Rerank、NL2SQL、记忆读写 |
-| 文档解析 | MinerU（magic-pdf） | 复杂版面/图表还原为结构化 Markdown |
+| 文档解析 | MinerU 4.x（V1 Tasks API） | 复杂版面/图表还原为结构化 Markdown |
 | 检索增强 | Milvus/Qdrant + LightRAG + BGE-Reranker | 向量+稀疏+图谱三路召回、RRF+重排 |
 | 执行沙箱 | OpenSandbox（主）/ RestrictedPython（轻量可选） | 强隔离执行用户代码；纯字符串转换类可退化为受限解释器 |
 | 存储 | MinIO + PostgreSQL(+pgvector) | 文件对象 / 业务库 / 图谱 / 长期记忆 |

@@ -184,6 +184,8 @@ services:
       <<: *app-env
       PROCESSING_GRPC_ADDR: ":9092"
       MINERU_TARGET: ${MINERU_TARGET:-}
+      MINERU_API_KEY: ${MINERU_API_KEY:-}
+      MINERU_TIER: ${MINERU_TIER:-standard}
       PARSE_MAX_ATTEMPTS: "3"
       # Parsed Markdown is indexed into Qdrant through the LlamaIndex service.
       LLAMAINDEX_URL: "http://llamaindex:8000"

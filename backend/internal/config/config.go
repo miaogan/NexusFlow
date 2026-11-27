@@ -29,6 +29,8 @@ type Config struct {
 	AuthTarget      string
 	UserTarget      string
 	MinerUTarget    string
+	MinerUAPIKey    string
+	MinerUTier      string
 	RerankURL       string
 	RerankModel     string
 	// RerankProtocol selects the wire format: generic (bge/Cohere style) or
@@ -124,6 +126,8 @@ func Load() Config {
 		AuthTarget:      env("AUTH_TARGET", "127.0.0.1:9096"),
 		UserTarget:      env("USER_TARGET", "127.0.0.1:9097"),
 		MinerUTarget:    env("MINERU_TARGET", ""),
+		MinerUAPIKey:    env("MINERU_API_KEY", ""),
+		MinerUTier:      env("MINERU_TIER", "standard"),
 		RerankURL:       env("RERANK_URL", ""),
 		RerankModel:     env("RERANK_MODEL", "bge-reranker-v2-m3"),
 		RerankProtocol:  env("RERANK_PROTOCOL", "generic"),

@@ -16,6 +16,14 @@
   * **目标**：对齐 `.env.example` 环境变量，为 `deploy/docker-compose.yml` 所有业务容器添加 `/healthz` 健康检查与依赖关系。
   * **验证命令**：`docker compose -f deploy/docker-compose.yml config -q && echo "Compose config valid"`
 
+### 真机联调验收（2026-11-27）
+
+* **[x] Postgres 身份链路**：`identity_users` / `identity_roles` 自动建表、内置角色、种子管理员登录及 Gateway 身份读取均通过。
+* **[x] Redis 跨进程吊销**：登出写入带 TTL 的 `jti`，Gateway 拒绝已吊销 Token，新登录不受影响。
+* **[x] MinerU 4.2.3 + Qdrant 闭环**：真实 PDF 经 GPU standard 解析、Markdown 解包、LlamaIndex 切块与 Embedding、Qdrant 入库、内容标记检索及 Gateway 混合检索均通过。
+* **验收命令**：`python scripts/smoke_test.py --require-mineru`
+* **验收结果**：29 passed / 0 failed / 0 skipped；MinerU V1 协议单测、Compose 配置校验通过。
+
 ---
 
 ## Milestone 2: v1.1.0（反馈数据闭环与自动化评测）

@@ -170,11 +170,51 @@ make up
 | Gateway API | http://localhost:8080 |
 | Workflow Engine | http://localhost:8081 |
 | LlamaIndex Service | http://localhost:8000 |
+| MinerU API（独立容器） | http://localhost:18000 |
 | RAG Agent | http://localhost:8001 |
 | RabbitMQ 控制台 | http://localhost:15672 |
 | Prometheus / Grafana | http://localhost:9090 / http://localhost:3000 |
 
 容器编排使用 `STATE_DRIVER=redis`、`QUEUE_DRIVER=rabbitmq`，服务间通过 gRPC 与消息队列解耦。每个业务容器均提供 `/healthz`（Go 服务在 `METRICS_ADDR=:9100` 上同时暴露 `/metrics`，gateway/workflow/web 用各自 HTTP 端口），`docker compose` 依据健康检查状态控制启动顺序（如 gateway 等待 auth/user/ingestion/query/sandbox/rag-agent 健康后再启动）。
+
+### 4. 真实 MinerU 4.x 与真机冒烟
+
+真实解析使用 **MinerU 4.x 官方 V1 Tasks API**。按[官方 Docker 部署文档](https://opendatalab.github.io/MinerU/zh/quick_start/docker_deployment/)构建镜像时，建议固定 `mineru[torch]==4.2.3`，不要依赖可变的 `>=4.0,<5` 安装区间。当前 `vLLM 0.21.0` 基础镜像还需将 `transformers` 固定为 `>=5.10.1,<5.23.0`；本次验证版本为 `5.22.2`。镜像内应预下载 standard 的 Torch 小模型与 vLLM 权重。
+
+已有 `mineru:4.2.3` 镜像后，启动独立 API 容器（宿主端口避开 LlamaIndex 的 8000）：
+
+```bash
+docker run -d --name mineru-api \
+  --network nexusflow_default \
+  -p 18000:8000 \
+  --gpus all --ipc=host --shm-size=8g \
+  --restart unless-stopped \
+  mineru:4.2.3 \
+  mineru-kit api-server --host 0.0.0.0 --port 8000 --tier standard
+```
+
+在根目录 `.env` 配置并重建 Worker：
+
+```bash
+MINERU_TARGET=http://mineru-api:8000
+MINERU_API_KEY=
+MINERU_TIER=standard
+```
+
+```bash
+docker compose --env-file .env -f deploy/docker-compose.yml up -d --build processing-worker
+```
+
+本地 API 未启用认证时 `MINERU_API_KEY` 留空；PDF/图片档位可设为 `flash/basic/standard/advanced`，取决于服务端开放能力。Worker 从与 Gateway 共享的 `OBJECT_STORE_DIR` 流式上传文件，不要求 MinerU 能访问 `OBJECT_STORE_BASE` 中的 MinIO 地址。TXT/Markdown 直接保留原文，PDF/DOCX/HTML 交给 MinerU；V1 结果 ZIP 中的 Markdown 再进入 LlamaIndex 切块与索引。
+
+运行真机验收：
+
+```bash
+python scripts/smoke_test.py --require-mineru
+# Linux/macOS 也可使用：./scripts/smoke_test.sh --require-mineru
+```
+
+默认不加 `--require-mineru` 时允许 Mock 解析并将真实 MinerU 检查记为 SKIP；严格模式会验证真实 PDF 上传、GPU 解析、Qdrant 向量与内容标记、LlamaIndex 检索及 Gateway 混合检索，同时检查 Postgres 身份初始化和 Redis 跨进程令牌吊销。2026-11-27 本机验证结果为 **29 passed / 0 failed / 0 skipped**。
 
 ## 核心机制
 
@@ -462,10 +502,10 @@ make up / down     # 容器编排启停
 
 ## 当前实现边界
 
-- `MINERU_TARGET` 为空时使用内置 Mock 解析器；对 txt/md/csv/json 等文本类文件会回显真实内容，使"上传 → 检索"闭环可演示。接入真实 MinerU 只需配置该地址。
+- `MINERU_TARGET` 为空时使用内置 Mock 解析器；对 txt/md/csv/json 等文本类文件会回显真实内容，使"上传 → 检索"闭环可演示。配置真实 MinerU 4.x 时使用官方 V1 Tasks 协议；Worker 还需通过 `OBJECT_STORE_DIR` / `OBJECT_STORE_BASE` 读取共享对象卷，TXT/Markdown 原文直读，PDF/DOCX/HTML 由 MinerU 解析。
 - 单进程 dev-all 模式下，上传文件经解析、切块后写入共享内存索引（DocStore），检索可命中真实上传内容，任务状态推进至 COMPLETED。独立部署时 `processing-worker` 调 LlamaIndex `/v1/index` 写入 Qdrant，`query-service` 的 vector/bm25/graph 三路召回均走 LlamaIndex（`LLAMAINDEX_URL`）；`dev-all` 仍保留内存实现以便零依赖演示。
 - LlamaIndex Service 的切块、索引与检索依赖 Qdrant 与 Embedding API Key；未配置时相关接口返回 503。
 - K8s HPA 使用自定义指标 `nexusflow_queue_length`，需部署 prometheus-adapter 将指标转换为 Custom Metrics API。
 - 设计文档中的 NL2SQL 章节已落地为 `nl2sql` 工作流节点（只读 SQL 护栏 + 可选 LLM 生成）；LightRAG 图谱检索已落地为 `graph` 召回路由：LlamaIndex 提供 `/v1/graph/extract` 抽取接口与 `/v1/search` 的 graph 子路由（配置 `LLAMAINDEX_LLM_*` 时用 LLM 抽取实体/关系，否则或调用失败时自动退化为共现词图），Go 侧 `LlamaIndexRetriever` 将三路结果统一接入 RRF。长期记忆已由 `memory-agent` 落地（抽取/去重/召回/注入）。（可观测性 / Langfuse 导出与 dev trace viewer 已实现，见上节。）
-- 用户与角色支持三种存储：`memory`（dev-all 单进程默认）、`redis`（`IDENTITY_DRIVER=redis`）与 `postgres`（`IDENTITY_DRIVER=postgres` + `IDENTITY_DATABASE_URL`），后两者供独立部署的 Auth / User 服务跨进程共享；postgres 启动时自动建表并复用内置角色种子。沙箱环境无 Postgres，该路径尚未做运行时验证。
+- 用户与角色支持三种存储：`memory`（dev-all 单进程默认）、`redis`（`IDENTITY_DRIVER=redis`）与 `postgres`（`IDENTITY_DRIVER=postgres` + `IDENTITY_DATABASE_URL`），后两者供独立部署的 Auth / User 服务跨进程共享；postgres 启动时自动建表并复用内置角色种子。Compose 真机冒烟已验证自动建表、种子管理员登录及 Gateway 身份读取。
 - 登出通过令牌吊销名单即时生效：JWT 携带 `jti`，登出时将该 id 写入 `TOKEN_BLACKLIST_DRIVER`（`memory` 单进程 / `redis` 供 gateway 与 auth-service 共享）并设置剩余有效期 TTL；网关在每次鉴权时拦截已吊销的 access token，auth-service 在 validate/refresh 时拒绝已吊销的 refresh token。Redis 不可用时自动降级为内存名单并告警。
