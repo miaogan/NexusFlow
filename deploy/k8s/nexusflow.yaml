@@ -48,6 +48,9 @@ data:
   AGENT_HUB_PORT: "8001"
   AGENT_HUB_PREFER: "local"
   AGENT_HUB_DYNAMIC_REGISTRATION: "false"
+  # Tenant-scoped custom SubAgents persist in Postgres.
+  AGENT_HUB_REGISTRY_DRIVER: "postgres"
+  AGENT_HUB_REGISTRY_DATABASE_URL: "postgresql://nexusflow:change-me@postgres.nexusflow.svc:5432/nexusflow"
   # Tools / reasoning / MCP / HITL switches (roll out in order).
   AGENT_HUB_TOOLS_ENABLED: "false"
   AGENT_HUB_REASONING_ENABLED: "false"

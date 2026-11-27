@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from nexusflow_agents.agents.rag.core.config import settings as rag_settings
+from nexusflow_agents.core.agent_store import AgentStore, build_agent_store
 from nexusflow_agents.core.config import HubSettings, get_hub_settings
 from nexusflow_agents.core.executor import HttpExecutor, LocalExecutor
 from nexusflow_agents.core.hub import Hub
@@ -17,6 +19,8 @@ from nexusflow_agents.core.registry import (
     AgentSpec,
 )
 from nexusflow_agents.core.tooling import ToolRegistry, ToolService
+
+logger = logging.getLogger(__name__)
 
 INTENT_CAPABILITIES = frozenset({CAPABILITY_INTENT})
 SUMMARY_CAPABILITIES = frozenset({CAPABILITY_SUMMARY})
@@ -136,11 +140,28 @@ class Runtime:
     lifecycle: AgentLifecycle
     http_executor: HttpExecutor
     tools: ToolService
+    agent_store: AgentStore
+
+
+def _load_custom_agents(registry: AgentRegistry, store: AgentStore) -> None:
+    try:
+        specs = store.list()
+    except Exception as exc:  # noqa: BLE001 - never block hub startup
+        logger.warning("load custom agents failed: %s", exc)
+        return
+    for spec in specs:
+        registry.register(spec)
+    if specs:
+        logger.info("loaded %d custom agents from registry", len(specs))
 
 
 def build_runtime(settings: HubSettings | None = None) -> Runtime:
     settings = settings or get_hub_settings()
     registry = build_registry(settings)
+    agent_store = build_agent_store(
+        settings.registry_driver, settings.registry_database_url
+    )
+    _load_custom_agents(registry, agent_store)
     local_executor = LocalExecutor(LOCAL_HANDLERS)
     http_executor = HttpExecutor(settings.health_timeout_seconds)
     background = BackgroundPool(
@@ -166,4 +187,5 @@ def build_runtime(settings: HubSettings | None = None) -> Runtime:
         lifecycle=lifecycle,
         http_executor=http_executor,
         tools=build_tool_service(settings),
+        agent_store=agent_store,
     )

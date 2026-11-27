@@ -85,7 +85,9 @@ async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse
 
 def health_payload() -> dict[str, object]:
     agents = get_registry().snapshot()
-    degraded = not agents or any(not agent["healthy"] for agent in agents)
+    # A tenant's custom SubAgent failing must not mark the shared hub unhealthy.
+    shared = [agent for agent in agents if not agent.get("tenant_id")]
+    degraded = not shared or any(not agent["healthy"] for agent in shared)
     return {
         "status": "degraded" if degraded else "ok",
         "service": "agent-hub",

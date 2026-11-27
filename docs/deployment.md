@@ -225,6 +225,7 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 | `AGENT_HUB_HITL_ENABLED` | false | 工具审批与 `POST /v1/approvals/{id}/decide` |
 | `HITL_ENABLED` | false | DAG `human_approval` 节点与 runs 持久化 |
 
+- 自定义 SubAgent 注册表：`AGENT_HUB_REGISTRY_DRIVER=memory|postgres`；Postgres 模式需 `AGENT_HUB_REGISTRY_DATABASE_URL`，启动时幂等创建 `custom_agents` 并加载该租户的自定义 Agent。写接口仍受 `AGENT_HUB_DYNAMIC_REGISTRATION` 控制。
 - 生产必须设置 `WORKFLOW_SERVICE_TOKEN`（gateway / workflow 两侧一致），agent-hub 通过 `AGENT_HUB_WORKFLOW_SERVICE_TOKEN` 使用同一值；为空表示不做直连校验，仅限本机开发。
 - `WORKFLOW_AGENT_NODE` 依赖 `AGENT_HUB_TOOLS_ENABLED`：`/v1/call` 由后者启用；只开 DAG 节点会导致 agent 调用返回 404。
 - 工具审批：Hub 返回 `202 + approval_id`，批准后带 `approval_id` 重试；DAG 审批经网关 `POST /v1/workflows/runs/{id}/approve|resume`（需 `workflow:run`），重复审批返回 409。

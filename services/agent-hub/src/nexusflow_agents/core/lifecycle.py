@@ -84,6 +84,8 @@ class AgentLifecycle:
         self._registry.prune_expired()
         for spec in self._registry.by_kind("http"):
             if self._executor.probe(spec):
-                self._registry.mark_success(spec.name)
+                self._registry.mark_success(spec.name, spec.tenant_id)
             else:
-                self._registry.mark_failure(spec.name, self._fail_threshold)
+                self._registry.mark_failure(
+                    spec.name, self._fail_threshold, spec.tenant_id
+                )

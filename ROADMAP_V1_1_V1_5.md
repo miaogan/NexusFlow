@@ -2,6 +2,7 @@
 
 > **定位**：本文件是面向 v1.1.0 至 v1.5.0 的能力演进方案，共 5 个 Milestone、11 个结构化任务。
 > **2026-11-27 增补**：Agent Hub × Workflow × MCP × HITL 已按规划文档 `.trae/documents/agent-hub-workflow-mcp-hitl.md` 交付；Task 3.2 完成（运行状态为进程内存储，跨副本持久化拆为 Task 3.3），Task 5.2 的 MCP Server 部分提前落地，其余任务状态不变。
+> **v1.2.0 范围调整**：最新版本计划见 [ROADMAP_V1_2.md](ROADMAP_V1_2.md)；本文件 Milestone 2 保留为原规划记录。
 > **与 `ROADMAP_V1_1.md` 的关系**：`ROADMAP_V1_1.md` 是上一轮已执行完毕的交付清单（知识库实体、级联删除、配额计量、K8s HPA，对应提交 c880e64 / 44b9284 / 9bc2c01 / a244bd7）。本文件在此基础上重新规划更完整的企业级能力，Milestone 1 为增量升级。
 > **执行约定**：按 Milestone 顺序逐个执行，禁止跨任务并发；每个任务验证通过后提交独立 Commit，并将任务状态更新为 `[x]`；接口变更优先更新 proto 契约，存储扩展保留 Memory/Mock 降级路径。
 > **数据契约**：涉及数据库表结构新增或变更时，必须严格对齐 [docs/schema_enterprise_v1_1_to_1_5.sql](docs/schema_enterprise_v1_1_to_1_5.sql) 中的表名、字段名与状态枚举值，并在 Postgres 初始化逻辑中保证幂等建表。

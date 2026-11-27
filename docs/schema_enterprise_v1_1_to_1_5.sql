@@ -12,6 +12,8 @@
 --     并将旧 identity_knowledge_bases 数据一次性迁入 knowledge_bases（旧表仅保留读取兼容）。
 --   * 租户配额目前仍由 internal/metering 在 Redis / 内存中计量，tenant_quotas 是目标持久化
 --     模型，尚未落地；接入时需明确 Postgres 与 Redis 的主从关系，避免计数漂移。
+--   * custom_agents（v1.2.0）已落地：Agent Hub 在 AGENT_HUB_REGISTRY_DRIVER=postgres 时
+--     启动幂等建表，用于租户级自定义 SubAgent；内置 Agent 仅存于进程内注册表。
 --   * workflow_executions / workflow_approvals / audit_logs 已定义目标模型，当前运行时
 --     分别由 MemoryRunStore / ApprovalService / AuditLog 承担（进程内、重启丢失），尚未
 --     建表或写入；接入时需将 run_id / approval_id / tenant_id / trace_id 与代码对齐。
@@ -239,3 +241,36 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_retry
     ON webhook_deliveries (status, next_retry_at)
     WHERE status = 'PENDING';
+
+-- ----------------------------------------------------------------------------
+-- v1.2.0: 自定义 SubAgent 注册表 (Agent Hub)
+-- ----------------------------------------------------------------------------
+
+-- 12. 租户级自定义 SubAgent（HTTP spoke）
+CREATE TABLE IF NOT EXISTS custom_agents (
+    tenant_id      VARCHAR(64) NOT NULL,
+    name           VARCHAR(64) NOT NULL,
+    capabilities   JSONB NOT NULL DEFAULT '[]'::jsonb,
+    kind           VARCHAR(16) NOT NULL DEFAULT 'http',
+    endpoint       VARCHAR(512) NOT NULL DEFAULT '',
+    timeout_ms     INTEGER NOT NULL DEFAULT 5000,
+    priority       INTEGER NOT NULL DEFAULT 100,
+    ttl_seconds    INTEGER NOT NULL DEFAULT 0,
+    version        VARCHAR(32) NOT NULL DEFAULT '1.0',
+    input_schema   JSONB NOT NULL DEFAULT '{}'::jsonb,
+    output_schema  JSONB NOT NULL DEFAULT '{}'::jsonb,
+    permissions    JSONB NOT NULL DEFAULT '[]'::jsonb,
+    tenant_scope   VARCHAR(128) NOT NULL DEFAULT '',
+    tools          JSONB NOT NULL DEFAULT '[]'::jsonb,
+    model          VARCHAR(128) NOT NULL DEFAULT '',
+    max_turns      INTEGER NOT NULL DEFAULT 0,
+    token_budget   INTEGER NOT NULL DEFAULT 0,
+    risk           VARCHAR(16) NOT NULL DEFAULT 'read',
+    created_by     VARCHAR(64) NOT NULL DEFAULT '',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS custom_agents_tenant_idx
+    ON custom_agents (tenant_id, updated_at DESC);

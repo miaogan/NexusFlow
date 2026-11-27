@@ -43,6 +43,9 @@ class AgentSpec:
     max_turns: int = 0
     token_budget: int = 0
     risk: Literal["read", "write", "execute", "external"] = "read"
+    # Empty means shared/global (built-in agents); custom SubAgents set the
+    # owning tenant so a spoke is only visible to that tenant.
+    tenant_id: str = ""
 
 
 @dataclass
@@ -54,31 +57,46 @@ class AgentState:
 
 
 class AgentRegistry:
-    """In-process registry of star-topology spokes (local or remote)."""
+    """In-process registry of star-topology spokes (local or remote).
+
+    Entries are keyed by ``(tenant_id, name)``. Built-in agents use an empty
+    tenant (shared by everyone); custom SubAgents are only resolved for their
+    owning tenant.
+    """
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
-        self._agents: dict[str, AgentState] = {}
+        self._agents: dict[tuple[str, str], AgentState] = {}
 
     def register(self, spec: AgentSpec) -> None:
         expires_at = (
             time.monotonic() + spec.ttl_seconds if spec.ttl_seconds > 0 else None
         )
         with self._lock:
-            self._agents[spec.name] = AgentState(spec=spec, expires_at=expires_at)
+            self._agents[(spec.tenant_id, spec.name)] = AgentState(
+                spec=spec, expires_at=expires_at
+            )
 
-    def get(self, name: str) -> AgentSpec | None:
+    def _lookup(self, name: str, tenant_id: str) -> AgentState | None:
+        state = self._agents.get((tenant_id, name))
+        if state is None and tenant_id:
+            state = self._agents.get(("", name))
+        return state
+
+    def get(self, name: str, tenant_id: str = "") -> AgentSpec | None:
         with self._lock:
-            state = self._agents.get(name)
+            state = self._lookup(name, tenant_id)
             return state.spec if state is not None else None
 
-    def deregister(self, name: str) -> bool:
+    def deregister(self, name: str, tenant_id: str = "") -> bool:
         with self._lock:
-            return self._agents.pop(name, None) is not None
+            return self._agents.pop((tenant_id, name), None) is not None
 
-    def heartbeat(self, name: str, ttl_seconds: int | None = None) -> bool:
+    def heartbeat(
+        self, name: str, ttl_seconds: int | None = None, tenant_id: str = ""
+    ) -> bool:
         with self._lock:
-            state = self._agents.get(name)
+            state = self._lookup(name, tenant_id)
             if state is None:
                 return False
             ttl = state.spec.ttl_seconds if ttl_seconds is None else ttl_seconds
@@ -86,16 +104,16 @@ class AgentRegistry:
                 state.expires_at = time.monotonic() + ttl
             return True
 
-    def mark_success(self, name: str) -> None:
+    def mark_success(self, name: str, tenant_id: str = "") -> None:
         with self._lock:
-            state = self._agents.get(name)
+            state = self._lookup(name, tenant_id)
             if state is not None:
                 state.failures = 0
                 state.healthy = True
 
-    def mark_failure(self, name: str, threshold: int) -> None:
+    def mark_failure(self, name: str, threshold: int, tenant_id: str = "") -> None:
         with self._lock:
-            state = self._agents.get(name)
+            state = self._lookup(name, tenant_id)
             if state is None:
                 return
             state.failures += 1
@@ -106,29 +124,44 @@ class AgentRegistry:
         current = time.monotonic() if now is None else now
         removed: list[str] = []
         with self._lock:
-            for name, state in list(self._agents.items()):
+            for key, state in list(self._agents.items()):
                 if state.expires_at is not None and state.expires_at <= current:
-                    removed.append(name)
-                    del self._agents[name]
+                    removed.append(state.spec.name)
+                    del self._agents[key]
         return removed
 
-    def resolve(self, capability: str) -> list[AgentSpec]:
+    def resolve(self, capability: str, tenant_id: str = "") -> list[AgentSpec]:
         self.prune_expired()
         with self._lock:
             specs = [
                 state.spec
                 for state in self._agents.values()
-                if state.healthy and capability in state.spec.capabilities
+                if state.healthy
+                and capability in state.spec.capabilities
+                and state.spec.tenant_id in {"", tenant_id}
             ]
-        specs.sort(key=lambda spec: (spec.priority, spec.name))
+        # A tenant-specific agent wins ties against the shared built-in.
+        specs.sort(
+            key=lambda spec: (
+                spec.priority,
+                0 if spec.tenant_id == tenant_id else 1,
+                spec.name,
+            )
+        )
         return specs
 
-    def snapshot(self) -> list[dict[str, Any]]:
+    def snapshot(self, tenant_id: str | None = None) -> list[dict[str, Any]]:
         now = time.monotonic()
         with self._lock:
+            states = [
+                state
+                for state in self._agents.values()
+                if tenant_id is None or state.spec.tenant_id in {"", tenant_id}
+            ]
             return [
                 {
                     "name": state.spec.name,
+                    "tenant_id": state.spec.tenant_id,
                     "kind": state.spec.kind,
                     "capabilities": sorted(state.spec.capabilities),
                     "endpoint": state.spec.endpoint,
@@ -150,15 +183,18 @@ class AgentRegistry:
                         else None
                     ),
                 }
-                for state in self._agents.values()
+                for state in states
             ]
 
-    def by_kind(self, kind: str) -> list[AgentSpec]:
+    def by_kind(
+        self, kind: str, tenant_id: str | None = None
+    ) -> list[AgentSpec]:
         with self._lock:
             return [
                 state.spec
                 for state in self._agents.values()
                 if state.spec.kind == kind
+                and (tenant_id is None or state.spec.tenant_id in {"", tenant_id})
             ]
 
     def clear(self) -> None:

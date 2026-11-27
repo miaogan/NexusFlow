@@ -324,6 +324,9 @@ services:
       AGENT_HUB_PREFER: ${AGENT_HUB_PREFER:-local}
       AGENT_HUB_DYNAMIC_REGISTRATION: ${AGENT_HUB_DYNAMIC_REGISTRATION:-false}
       AGENT_HUB_ADMIN_TOKEN: ${AGENT_HUB_ADMIN_TOKEN:-}
+      # Tenant-scoped custom SubAgents persist in Postgres.
+      AGENT_HUB_REGISTRY_DRIVER: ${AGENT_HUB_REGISTRY_DRIVER:-postgres}
+      AGENT_HUB_REGISTRY_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
       # Tool calling, reasoning, MCP and human approval (all default off).
       AGENT_HUB_TOOLS_ENABLED: ${AGENT_HUB_TOOLS_ENABLED:-false}
       AGENT_HUB_REASONING_ENABLED: ${AGENT_HUB_REASONING_ENABLED:-false}

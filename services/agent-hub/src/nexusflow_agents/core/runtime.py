@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from nexusflow_agents.core.agent_store import AgentStore
 from nexusflow_agents.core.bootstrap import Runtime, build_runtime
 from nexusflow_agents.core.hub import Hub
 from nexusflow_agents.core.lifecycle import AgentLifecycle
@@ -28,3 +29,7 @@ def get_lifecycle() -> AgentLifecycle:
 
 def get_tools() -> ToolService:
     return get_runtime().tools
+
+
+def get_agent_store() -> AgentStore:
+    return get_runtime().agent_store

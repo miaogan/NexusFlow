@@ -30,6 +30,9 @@ class HubSettings(BaseSettings):
     max_attempts: int = 2
     dynamic_registration: bool = False
     admin_token: str = ""
+    # Custom SubAgent registry: memory for dev, postgres for durable multi-replica.
+    registry_driver: Literal["memory", "postgres"] = "memory"
+    registry_database_url: str = ""
     background_workers: int = 8
     # P0/P2–P5 capability switches. All default off for safe rollout.
     tools_enabled: bool = False

@@ -56,3 +56,62 @@ def test_heartbeat_extends_ttl_and_deregister_removes() -> None:
     assert registry.prune_expired(now=time.monotonic() + 10) == []
     assert registry.deregister("dynamic") is True
     assert registry.snapshot() == []
+
+
+def _tenant_spec(
+    name: str, tenant_id: str, capability: str, priority: int = 100
+) -> AgentSpec:
+    return AgentSpec(
+        name=name,
+        capabilities=frozenset({capability}),
+        kind="http",
+        endpoint="http://127.0.0.1:9000",
+        priority=priority,
+        tenant_id=tenant_id,
+    )
+
+
+def test_resolve_only_returns_global_and_own_tenant() -> None:
+    registry = AgentRegistry()
+    registry.register(_tenant_spec("shared", "", CAPABILITY_INTENT, priority=10))
+    registry.register(_tenant_spec("a-only", "tenant-a", CAPABILITY_INTENT))
+    registry.register(_tenant_spec("b-only", "tenant-b", CAPABILITY_INTENT))
+
+    assert [s.name for s in registry.resolve(CAPABILITY_INTENT, "tenant-a")] == [
+        "shared",
+        "a-only",
+    ]
+    assert [s.name for s in registry.resolve(CAPABILITY_INTENT, "tenant-b")] == [
+        "shared",
+        "b-only",
+    ]
+    assert [s.name for s in registry.resolve(CAPABILITY_INTENT)] == ["shared"]
+    assert [s.name for s in registry.resolve(CAPABILITY_INTENT, "tenant-c")] == [
+        "shared"
+    ]
+
+
+def test_tenant_agent_wins_priority_tie() -> None:
+    registry = AgentRegistry()
+    registry.register(_tenant_spec("shared", "", CAPABILITY_INTENT, priority=10))
+    registry.register(_tenant_spec("custom", "tenant-a", CAPABILITY_INTENT, priority=10))
+
+    specs = registry.resolve(CAPABILITY_INTENT, "tenant-a")
+
+    assert [s.name for s in specs] == ["custom", "shared"]
+
+
+def test_tenant_lookup_and_delete_are_scoped() -> None:
+    registry = AgentRegistry()
+    registry.register(_tenant_spec("shared", "", CAPABILITY_SUMMARY))
+    registry.register(_tenant_spec("custom", "tenant-a", CAPABILITY_SUMMARY))
+
+    assert registry.get("custom", "tenant-a").tenant_id == "tenant-a"
+    assert registry.get("custom", "tenant-b") is None
+    assert registry.deregister("custom", "tenant-b") is False
+    assert registry.deregister("custom", "tenant-a") is True
+    assert registry.get("shared", "tenant-a").name == "shared"
+
+    snapshot = registry.snapshot("tenant-a")
+    assert {item["name"] for item in snapshot} == {"shared"}
+    assert snapshot[0]["tenant_id"] == ""

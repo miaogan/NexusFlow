@@ -361,6 +361,7 @@ flowchart LR
 ```
 
 - **星型调度**：Hub 按 capability（`intent.classify` / `summary.compact` / `memory.recall` / `memory.extract`）从注册表选择 Agent；支持 `local` 进程内执行与 `http` 远程 worker、优先级、超时、健康摘除、故障转移和运行时注册。`AGENT_HUB_MODE=local|remote|hybrid` 控制拓扑。
+- **自定义 SubAgent**：`POST /v1/agents` 注册租户级 HTTP Agent（需 `AGENT_HUB_DYNAMIC_REGISTRATION=true`），注册表以 `(tenant_id, name)` 隔离，内置 Agent 为全局共享；`AGENT_HUB_REGISTRY_DRIVER=postgres` 时持久化到 `custom_agents` 并在启动时自动加载，`GET /v1/agents` / `GET|DELETE /v1/agents/{name}` 均按 `x-tenant-id` 限定。
 - **身份联动**：网关校验 JWT 后将 `x-tenant-id` / `x-user-id` / `Authorization` 透传给 agent-hub；会话与消息按「租户 + 用户」隔离，匿名调用者落在 `default/anonymous`。
 - **意图路由**：Hub 调用 `intent.classify` 做 `knowledge_qa | chitchat | clarify` 分类；`chitchat` / `clarify` 跳过检索直接回答，Agent 不可用时降级为知识问答。
 - **上下文压缩**：会话超出 `RAG_MAX_HISTORY` 时，Hub 调用 `summary.compact` 生成滚动摘要并写入 `rag_conversations.summary`；失败时改回原文窗口，仅损失上下文、不影响正确性。
@@ -393,6 +394,7 @@ flowchart LR
 | `GET /v1/audit` | `trace:read` | 工具与审批审计查询 |
 | `POST /v1/call`、`GET /v1/tools` | `AGENT_HUB_TOOLS_ENABLED` 或 `AGENT_HUB_WORKFLOW_ENABLED` | Hub 内部通用调用 / 工具列表（供 DAG `agent` 节点使用） |
 | `POST /mcp` | `AGENT_HUB_MCP_ENABLED` | MCP Server：initialize / tools/list / tools/call（直连 Agent Hub） |
+| `GET/POST /v1/agents`、`GET/DELETE /v1/agents/{name}` | Hub 内部；写操作需 `AGENT_HUB_DYNAMIC_REGISTRATION` | 租户级自定义 SubAgent CRUD |
 
 > `agent` 节点依赖 `AGENT_HUB_TOOLS_ENABLED` 启用 `/v1/call`；`/mcp` 与 `/v1/call` 为 Hub 内部入口，不对 Gateway 公网暴露。
 

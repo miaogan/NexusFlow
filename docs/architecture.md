@@ -150,6 +150,7 @@ Agent Hub 是 intent / summary / memory 的中心节点，Hub 与 Agent 构成�
 - **双执行器**：`local` 直接调用进程内实现；`http` 调用拆分 worker 的 `/v1/intent`、`/v1/summarize`、`/v1/memories/*`。
 - **动态调度**：按优先级尝试，失败/超时切换到下一个；可选能力全部失败时返回降级结果（知识问答 / 不压缩 / 空记忆），不阻断主链路。
 - **健康与注册**：后台任务探活 HTTP Agent，连续失败摘除、恢复后回归；动态注册默认关闭，开启时需 Admin Token 与 TTL 心跳。
+- **自定义 SubAgent**：`AgentSpec.tenant_id` 为空表示全局内置 Agent，自定义 Agent 以 `(tenant_id, name)` 注册且仅所属租户可解析；`/v1/agents` 提供租户内 CRUD，`AGENT_HUB_REGISTRY_DRIVER=postgres` 时启动幂等建表并从 `custom_agents` 加载。
 - **部署形态**：默认 `ROLE=all`、`MODE=local` 单容器；`ROLE=intent|summary|memory` + `MODE=remote|hybrid` 支持拆分与回滚。
 
 ### 3.2 工具、推理、双向联动与人机协同

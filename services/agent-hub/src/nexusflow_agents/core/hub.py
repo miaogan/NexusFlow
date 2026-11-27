@@ -64,7 +64,8 @@ class Hub:
         required: bool = False,
     ) -> AgentResult:
         context = ctx or {}
-        specs = self._registry.resolve(capability)[: self._max_attempts]
+        tenant_id = str(context.get("tenant_id") or "")
+        specs = self._registry.resolve(capability, tenant_id)[: self._max_attempts]
         if not specs:
             HUB_DEGRADED.labels(capability=capability).inc()
             if required:
@@ -95,7 +96,9 @@ class Hub:
                 HUB_LATENCY.labels(capability=capability, agent=spec.name).observe(
                     elapsed / 1000
                 )
-                self._registry.mark_failure(spec.name, self._fail_threshold)
+                self._registry.mark_failure(
+                    spec.name, self._fail_threshold, spec.tenant_id
+                )
                 logger.warning(
                     "agent %s failed for %s: %s", spec.name, capability, last_error
                 )
@@ -108,7 +111,7 @@ class Hub:
             HUB_LATENCY.labels(capability=capability, agent=spec.name).observe(
                 elapsed / 1000
             )
-            self._registry.mark_success(spec.name)
+            self._registry.mark_success(spec.name, spec.tenant_id)
             return AgentResult(
                 ok=True,
                 data=data,
@@ -138,7 +141,8 @@ class Hub:
     ) -> AgentResult:
         """Invokes one named spoke instead of resolving by capability."""
         context = ctx or {}
-        spec = self._registry.get(name)
+        tenant_id = str(context.get("tenant_id") or "")
+        spec = self._registry.get(name, tenant_id)
         if spec is None:
             message = f"unknown agent: {name}"
             if required:
@@ -166,7 +170,9 @@ class Hub:
             message = str(exc) or exc.__class__.__name__
             HUB_CALLS.labels(capability=target, agent=spec.name, status="error").inc()
             HUB_LATENCY.labels(capability=target, agent=spec.name).observe(elapsed / 1000)
-            self._registry.mark_failure(spec.name, self._fail_threshold)
+            self._registry.mark_failure(
+                spec.name, self._fail_threshold, spec.tenant_id
+            )
             if required:
                 raise AgentUnavailable(message) from exc
             return AgentResult(
@@ -181,7 +187,7 @@ class Hub:
         elapsed = (time.perf_counter() - started) * 1000
         HUB_CALLS.labels(capability=target, agent=spec.name, status="ok").inc()
         HUB_LATENCY.labels(capability=target, agent=spec.name).observe(elapsed / 1000)
-        self._registry.mark_success(spec.name)
+        self._registry.mark_success(spec.name, spec.tenant_id)
         return AgentResult(
             ok=True,
             data=data,
