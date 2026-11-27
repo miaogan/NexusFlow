@@ -323,5 +323,92 @@ func TestUploadAndTaskAccessAreKnowledgeBaseScoped(t *testing.T) {
 	}
 }
 
+type fakeCleaner struct {
+	mu      sync.Mutex
+	calls   []cleanerCall
+	deleted int
+	err     error
+}
+
+type cleanerCall struct{ docID, kbID string }
+
+func (f *fakeCleaner) DeleteDocument(_ context.Context, docID, kbID string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, cleanerCall{docID: docID, kbID: kbID})
+	return f.deleted, f.err
+}
+
+func (f *fakeCleaner) lastCall() cleanerCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.calls) == 0 {
+		return cleanerCall{}
+	}
+	return f.calls[len(f.calls)-1]
+}
+
+// DeleteTask must cascade through the retrieval index, the object store and the
+// task record, and report what was removed.
+func TestDeleteTaskCascadesIndexCleanup(t *testing.T) {
+	m := state.NewMachine()
+	objects := newFakeObjectStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cleaner := &fakeCleaner{deleted: 4}
+	svc := NewService(objects, m, &fakePublisher{}, logger, "http://objects", "file.uploaded",
+		WithIndexCleaner(cleaner))
+
+	meta := map[string]string{
+		"file_name": "a.md", "object_key": "default/kb1/upload/x/a.md",
+		"content_hash": "h1", "kb_id": "kb1",
+	}
+	seedTask(t, m, "t1", "default", meta)
+	if err := objects.Put(context.Background(), meta["object_key"], bytes.NewReader([]byte("hi")), 2, "text/markdown"); err != nil {
+		t.Fatalf("seed object: %v", err)
+	}
+
+	resp, err := svc.DeleteTask(context.Background(), &pb.DeleteTaskRequest{TaskId: "t1", KbId: "kb1"})
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if !resp.GetSuccess() || resp.GetKbId() != "kb1" || resp.GetIndexDeleted() != 4 || !resp.GetObjectDeleted() {
+		t.Fatalf("delete response = %+v", resp)
+	}
+	if call := cleaner.lastCall(); call.docID != "t1" || call.kbID != "kb1" {
+		t.Fatalf("cleaner call = %+v, want t1/kb1", call)
+	}
+	if _, ok, _ := m.Get(context.Background(), "t1"); ok {
+		t.Fatal("task should be gone after cascade delete")
+	}
+	if keys := objects.deletedKeys(); len(keys) != 1 || keys[0] != meta["object_key"] {
+		t.Fatalf("object deletion = %v", keys)
+	}
+}
+
+// A failed index cleanup must abort the delete so vectors never outlive their
+// task record; the caller can retry once the index service recovers.
+func TestDeleteTaskKeepsTaskWhenIndexCleanupFails(t *testing.T) {
+	m := state.NewMachine()
+	objects := newFakeObjectStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cleaner := &fakeCleaner{err: errors.New("qdrant down")}
+	svc := NewService(objects, m, &fakePublisher{}, logger, "http://objects", "file.uploaded",
+		WithIndexCleaner(cleaner))
+
+	meta := map[string]string{"file_name": "b.md", "object_key": "default/upload/x/b.md", "kb_id": "kb1"}
+	seedTask(t, m, "t1", "default", meta)
+
+	_, err := svc.DeleteTask(context.Background(), &pb.DeleteTaskRequest{TaskId: "t1", KbId: "kb1"})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", status.Code(err))
+	}
+	if _, ok, _ := m.Get(context.Background(), "t1"); !ok {
+		t.Fatal("task must survive a failed index cleanup")
+	}
+	if keys := objects.deletedKeys(); len(keys) != 0 {
+		t.Fatalf("object must not be deleted before vectors are cleaned: %v", keys)
+	}
+}
+
 // Ensure the fake object store satisfies the interface at compile time.
 var _ store.ObjectStore = (*fakeObjectStore)(nil)

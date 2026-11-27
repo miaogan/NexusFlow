@@ -132,7 +132,11 @@ func main() {
 	idxr := indexing.New(engine, st, logger)
 	bus.Subscribe(cfg.QueueTopicParsed, idxr.Handle)
 
-	ingestSvc := ingestion.NewService(objects, st, bus, logger, cfg.ObjectStoreBase, cfg.QueueTopicUploaded)
+	ingestOpts := []ingestion.Option{}
+	if cfg.LlamaIndexURL != "" {
+		ingestOpts = append(ingestOpts, ingestion.WithIndexCleaner(indexing.NewLlamaIndexIndexer(cfg.LlamaIndexURL, 0)))
+	}
+	ingestSvc := ingestion.NewService(objects, st, bus, logger, cfg.ObjectStoreBase, cfg.QueueTopicUploaded, ingestOpts...)
 	parseSvc := processing.NewParseService(client, st, logger)
 	sandboxSvc := sandbox.NewGRPCService(sandbox.NewService(sandbox.NewLocalBackend(cfg.SandboxWorkDir), logger))
 	querySvc := query.NewGRPCService(engine)

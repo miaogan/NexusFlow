@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
-import { deleteTask, listTasks, uploadFile } from "../api/client";
+import { deleteFile, listTasks, uploadFile } from "../api/client";
 import type { LayoutContext } from "../components/Layout";
 import type { TaskSummary, UploadResult } from "../types";
 import {
@@ -62,11 +62,11 @@ export default function Files() {
 
   const handleDelete = useCallback(
     async (id: string) => {
-      if (!window.confirm("确定删除该文件及其任务记录吗？此操作不可撤销。")) return;
+      if (!window.confirm("确定删除该文件吗？将同时清理对象存储、向量与图谱索引，此操作不可撤销。")) return;
       setBusy(true);
       setError(null);
       try {
-        await deleteTask(id, kbID);
+        await deleteFile(id, kbID);
         await refresh();
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));

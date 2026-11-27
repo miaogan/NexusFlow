@@ -20,6 +20,20 @@ class IndexResponse(BaseModel):
     error_msg: str = ""
 
 
+class DeleteRequest(BaseModel):
+    """Removes every chunk of one document from its knowledge-base collection."""
+
+    task_id: str
+    kb_id: str = "default"
+
+
+class DeleteResponse(BaseModel):
+    success: bool
+    deleted: int = 0
+    collection: str = ""
+    error_msg: str = ""
+
+
 class RecallRoute(BaseModel):
     type: Literal["vector", "bm25", "filter", "parent", "graph"] = "vector"
     top_k: int = 20

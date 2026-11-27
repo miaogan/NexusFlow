@@ -45,6 +45,56 @@ type llamaIndexIndexResponse struct {
 	ErrorMsg     string `json:"error_msg"`
 }
 
+type llamaIndexDeleteRequest struct {
+	TaskID string `json:"task_id"`
+	KBID   string `json:"kb_id"`
+}
+
+type llamaIndexDeleteResponse struct {
+	Success    bool   `json:"success"`
+	Deleted    int    `json:"deleted"`
+	Collection string `json:"collection"`
+	ErrorMsg   string `json:"error_msg"`
+}
+
+// DeleteDocument asks the LlamaIndex service to drop every chunk of docID from
+// the knowledge-base collection, which also invalidates the graph route cache.
+// It returns the number of removed chunks (0 when the document was never
+// indexed) and is idempotent, so retries are safe.
+func (l *LlamaIndexIndexer) DeleteDocument(ctx context.Context, docID, kbID string) (int, error) {
+	if l.baseURL == "" {
+		return 0, fmt.Errorf("llamaindex delete: url is empty")
+	}
+	payload, err := json.Marshal(llamaIndexDeleteRequest{TaskID: docID, KBID: kbID})
+	if err != nil {
+		return 0, fmt.Errorf("llamaindex delete: encode request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, l.baseURL+"/v1/delete", bytes.NewReader(payload))
+	if err != nil {
+		return 0, fmt.Errorf("llamaindex delete: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := l.client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("llamaindex delete: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return 0, fmt.Errorf("llamaindex delete: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var out llamaIndexDeleteResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
+		return 0, fmt.Errorf("llamaindex delete: decode response: %w", err)
+	}
+	if !out.Success || out.ErrorMsg != "" {
+		return 0, fmt.Errorf("llamaindex delete: %s", out.ErrorMsg)
+	}
+	return out.Deleted, nil
+}
+
 func (l *LlamaIndexIndexer) IndexMarkdown(ctx context.Context, docID, markdown string, meta map[string]string) (int, error) {
 	if l.baseURL == "" {
 		return 0, fmt.Errorf("llamaindex index: url is empty")

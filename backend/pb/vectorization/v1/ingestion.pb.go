@@ -674,6 +674,9 @@ func (x *DeleteTaskRequest) GetKbId() string {
 type DeleteTaskResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	KbId          string                 `protobuf:"bytes,2,opt,name=kb_id,json=kbId,proto3" json:"kb_id,omitempty"`
+	ObjectDeleted bool                   `protobuf:"varint,3,opt,name=object_deleted,json=objectDeleted,proto3" json:"object_deleted,omitempty"` // 对象存储文件是否已清理
+	IndexDeleted  int32                  `protobuf:"varint,4,opt,name=index_deleted,json=indexDeleted,proto3" json:"index_deleted,omitempty"`    // 已清理的向量/图谱片段数（0 表示无索引或未配置索引服务）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -713,6 +716,27 @@ func (x *DeleteTaskResponse) GetSuccess() bool {
 		return x.Success
 	}
 	return false
+}
+
+func (x *DeleteTaskResponse) GetKbId() string {
+	if x != nil {
+		return x.KbId
+	}
+	return ""
+}
+
+func (x *DeleteTaskResponse) GetObjectDeleted() bool {
+	if x != nil {
+		return x.ObjectDeleted
+	}
+	return false
+}
+
+func (x *DeleteTaskResponse) GetIndexDeleted() int32 {
+	if x != nil {
+		return x.IndexDeleted
+	}
+	return 0
 }
 
 type RetryTaskRequest struct {
@@ -897,9 +921,12 @@ const file_vectorization_v1_ingestion_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"A\n" +
 	"\x11DeleteTaskRequest\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x13\n" +
-	"\x05kb_id\x18\x02 \x01(\tR\x04kbId\".\n" +
+	"\x05kb_id\x18\x02 \x01(\tR\x04kbId\"\x8f\x01\n" +
 	"\x12DeleteTaskResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\"@\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x13\n" +
+	"\x05kb_id\x18\x02 \x01(\tR\x04kbId\x12%\n" +
+	"\x0eobject_deleted\x18\x03 \x01(\bR\robjectDeleted\x12#\n" +
+	"\rindex_deleted\x18\x04 \x01(\x05R\findexDeleted\"@\n" +
 	"\x10RetryTaskRequest\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x13\n" +
 	"\x05kb_id\x18\x02 \x01(\tR\x04kbId\"^\n" +

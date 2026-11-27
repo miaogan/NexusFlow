@@ -242,6 +242,16 @@ export async function deleteTask(
   );
 }
 
+/** Cascade file delete: object storage, vectors/graph nodes and task record. */
+export async function deleteFile(
+  id: string,
+  kbID = getActiveKB(),
+): Promise<{ success: boolean; object_deleted?: boolean; index_deleted?: number }> {
+  return request(`${GATEWAY_BASE}/v1/files/${encodeURIComponent(id)}${kbQuery(kbID)}`, {
+    method: "DELETE",
+  });
+}
+
 export async function retryTask(
   id: string,
   kbID = getActiveKB(),

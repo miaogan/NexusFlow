@@ -13,7 +13,7 @@
   * **核心步骤**：更新 proto 契约、实现 CRUD 接口（支持 memory/postgres）、改造文件与检索入口强制校验 `kb_id` 权限、前端增加切换与管理弹窗。
   * **验证命令**：`make vet && go test ./backend/internal/identity/... ./backend/internal/gateway/... && make web-build`
 
-* **[ ] Task 1.2: 文档全生命周期级联删除（Cascade Delete）**
+* **[x] Task 1.2: 文档全生命周期级联删除（Cascade Delete）**
   * **目标**：补齐文件删除时的多端数据一致性清理，避免脏数据残留。
   * **核心步骤**：新增文件删除接口，编排删除对象存储文件、调用后端服务清理向量与图谱节点，并补充测试。
   * **验证命令**：`make vet && go test ./backend/internal/ingestion/... && cd services/llamaindex && pytest`

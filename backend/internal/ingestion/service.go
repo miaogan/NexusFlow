@@ -21,6 +21,21 @@ import (
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 )
 
+// IndexCleaner removes a document's chunks and graph nodes from the retrieval
+// index. *indexing.LlamaIndexIndexer implements it in production deployments.
+type IndexCleaner interface {
+	DeleteDocument(ctx context.Context, docID, kbID string) (int, error)
+}
+
+// Option configures a Service at construction time.
+type Option func(*Service)
+
+// WithIndexCleaner enables cascade deletion of a document's vectors and graph
+// nodes when the file/task is removed.
+func WithIndexCleaner(cleaner IndexCleaner) Option {
+	return func(s *Service) { s.cleaner = cleaner }
+}
+
 // Service implements the ingestion contract: register uploads, persist
 // metadata and hand the task to the queue.
 type Service struct {
@@ -31,10 +46,11 @@ type Service struct {
 	logger        *slog.Logger
 	presignBase   string
 	topicUploaded string
+	cleaner       IndexCleaner
 }
 
-func NewService(objects store.ObjectStore, machine state.Store, pub queue.Publisher, logger *slog.Logger, presignBase, topicUploaded string) *Service {
-	return &Service{
+func NewService(objects store.ObjectStore, machine state.Store, pub queue.Publisher, logger *slog.Logger, presignBase, topicUploaded string, opts ...Option) *Service {
+	s := &Service{
 		objects:       objects,
 		machine:       machine,
 		pub:           pub,
@@ -42,6 +58,10 @@ func NewService(objects store.ObjectStore, machine state.Store, pub queue.Publis
 		presignBase:   strings.TrimRight(presignBase, "/"),
 		topicUploaded: topicUploaded,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 type uploadedEvent struct {
@@ -210,27 +230,51 @@ func toTaskStatus(t state.Task) *pb.GetTaskStatusResponse {
 	}
 }
 
-// DeleteTask removes the task record and, best-effort, the underlying object.
-// Index entries are left in place (see known limitation); deleting a task does
-// not guarantee its chunks disappear from search results immediately.
+// DeleteTask performs the full lifecycle cleanup for a document: it removes the
+// retrieval-side vectors and graph nodes, deletes the stored object and finally
+// drops the task record. Index cleanup runs first and is idempotent; if it
+// fails the task is kept so the operator can retry instead of leaving orphan
+// vectors behind.
 func (s *Service) DeleteTask(ctx context.Context, req *pb.DeleteTaskRequest) (*pb.DeleteTaskResponse, error) {
 	task, err := s.loadOwnedTask(ctx, req.GetTaskId(), req.GetKbId())
 	if err != nil {
 		return nil, err
 	}
+	kbID := taskKnowledgeBaseID(task)
+
+	indexDeleted := 0
+	if s.cleaner != nil {
+		n, cleanupErr := s.cleaner.DeleteDocument(ctx, task.ID, kbID)
+		if cleanupErr != nil {
+			s.logger.Error("delete index failed", "task_id", task.ID, "kb_id", kbID, "error", cleanupErr)
+			return nil, status.Error(codes.Unavailable, "delete index: "+cleanupErr.Error())
+		}
+		indexDeleted = n
+	}
+
 	if err := s.machine.Delete(ctx, task.ID); err != nil {
 		if errors.Is(err, state.ErrTaskNotFound) {
 			return nil, status.Error(codes.NotFound, "task not found")
 		}
 		return nil, status.Error(codes.Internal, err.Error())
 	}
+
+	objectDeleted := false
 	if objectKey := task.Metadata["object_key"]; objectKey != "" {
 		if err := s.objects.Delete(ctx, objectKey); err != nil {
 			s.logger.Warn("delete object failed", "task_id", task.ID, "object_key", objectKey, "error", err)
+		} else {
+			objectDeleted = true
 		}
 	}
-	s.logger.Info("task deleted", "task_id", task.ID, "tenant", task.TenantID)
-	return &pb.DeleteTaskResponse{Success: true}, nil
+	s.logger.Info("task deleted", "task_id", task.ID, "tenant", task.TenantID,
+		"kb_id", kbID, "index_deleted", indexDeleted, "object_deleted", objectDeleted)
+	return &pb.DeleteTaskResponse{
+		Success:       true,
+		KbId:          kbID,
+		ObjectDeleted: objectDeleted,
+		IndexDeleted:  int32(indexDeleted),
+	}, nil
 }
 
 // RetryTask re-enqueues a FAILED task by rolling it back to PENDING and

@@ -86,6 +86,9 @@ message DeleteTaskRequest {
 
 message DeleteTaskResponse {
   bool success = 1;
+  string kb_id = 2;
+  bool object_deleted = 3;  // 对象存储文件是否已清理
+  int32 index_deleted = 4;  // 已清理的向量/图谱片段数（0 表示无索引或未配置索引服务）
 }
 
 message RetryTaskRequest {

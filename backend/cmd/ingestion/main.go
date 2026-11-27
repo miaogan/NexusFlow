@@ -7,6 +7,7 @@ import (
 	"syscall"
 
 	"github.com/nexusflow/nexusflow/backend/internal/config"
+	"github.com/nexusflow/nexusflow/backend/internal/indexing"
 	"github.com/nexusflow/nexusflow/backend/internal/ingestion"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/broker"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/grpcserver"
@@ -44,7 +45,14 @@ func main() {
 	}
 	defer b.Close()
 
-	svc := ingestion.NewService(objects, st, b, logger, cfg.ObjectStoreBase, cfg.QueueTopicUploaded)
+	// Cascade deletion needs the retrieval index; without LLAMAINDEX_URL the
+	// cleanup step is skipped and only the object + task record are removed.
+	var opts []ingestion.Option
+	if cfg.LlamaIndexURL != "" {
+		opts = append(opts, ingestion.WithIndexCleaner(indexing.NewLlamaIndexIndexer(cfg.LlamaIndexURL, 0)))
+		logger.Info("cascade index cleanup enabled", "url", cfg.LlamaIndexURL)
+	}
+	svc := ingestion.NewService(objects, st, b, logger, cfg.ObjectStoreBase, cfg.QueueTopicUploaded, opts...)
 
 	go func() {
 		if err := metrics.Serve(ctx, cfg.MetricsAddr, logger); err != nil {

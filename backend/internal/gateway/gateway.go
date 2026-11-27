@@ -163,6 +163,8 @@ func (g *Gateway) Router() *gin.Engine {
 	v1 := r.Group("/v1", Auth(g.secret, g.allowAnon, g.blacklist), RateLimit(50, 100))
 	v1.POST("/auth/logout", g.logout)
 	v1.POST("/files", RequirePermission("file:write"), g.uploadFile)
+	// Cascade delete: object storage + retrieval index + task record.
+	v1.DELETE("/files/:id", RequirePermission("file:delete"), g.deleteFile)
 	v1.GET("/tasks", g.listTasks)
 	v1.GET("/tasks/:id", g.getTask)
 	v1.DELETE("/tasks/:id", g.deleteTask)
@@ -500,7 +502,19 @@ func (g *Gateway) deleteTask(c *gin.Context) {
 		c.JSON(code, gin.H{"error": msg})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": resp.GetSuccess()})
+	c.JSON(http.StatusOK, gin.H{
+		"success":        resp.GetSuccess(),
+		"task_id":        c.Param("id"),
+		"kb_id":          resp.GetKbId(),
+		"object_deleted": resp.GetObjectDeleted(),
+		"index_deleted":  resp.GetIndexDeleted(),
+	})
+}
+
+// deleteFile exposes the same cascade cleanup on the file-oriented URL, which
+// is what the console uses when removing an uploaded document.
+func (g *Gateway) deleteFile(c *gin.Context) {
+	g.deleteTask(c)
 }
 
 func (g *Gateway) retryTask(c *gin.Context) {

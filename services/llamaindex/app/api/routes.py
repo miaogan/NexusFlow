@@ -7,6 +7,8 @@ from app.retrieval.graph import extract_markdown_graph
 from app.retrieval.pipeline import search
 from app.retrieval.recall import RecallUnavailable
 from app.schemas import (
+    DeleteRequest,
+    DeleteResponse,
     FeedbackEvent,
     GraphEntity,
     GraphExtractRequest,
@@ -17,6 +19,7 @@ from app.schemas import (
     SearchRequest,
     SearchResponse,
 )
+from app.services.deletion import delete_document
 from app.services.indexing import index_markdown
 
 router = APIRouter(prefix="/v1", tags=["llamaindex"])
@@ -28,6 +31,15 @@ async def process_and_index(request: IndexRequest) -> IndexResponse:
     try:
         return await run_in_threadpool(index_markdown, request)
     except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/delete", response_model=DeleteResponse)
+async def delete_document_endpoint(request: DeleteRequest) -> DeleteResponse:
+    """Cascade cleanup: drop a document's vectors and its cached graph nodes."""
+    try:
+        return await run_in_threadpool(delete_document, request)
+    except Exception as exc:  # noqa: BLE001 - surface vector store failures as 503
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 

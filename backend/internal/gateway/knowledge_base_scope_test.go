@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
@@ -11,7 +12,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type recordingIngestionClient struct{ upload *pb.UploadFileRequest }
+type recordingIngestionClient struct {
+	upload  *pb.UploadFileRequest
+	deleted *pb.DeleteTaskRequest
+}
 
 func (r *recordingIngestionClient) UploadFile(_ context.Context, req *pb.UploadFileRequest, _ ...grpc.CallOption) (*pb.UploadFileResponse, error) {
 	r.upload = req
@@ -23,8 +27,9 @@ func (*recordingIngestionClient) GetTaskStatus(context.Context, *pb.GetTaskStatu
 func (*recordingIngestionClient) ListTasks(context.Context, *pb.ListTasksRequest, ...grpc.CallOption) (*pb.ListTasksResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "unused")
 }
-func (*recordingIngestionClient) DeleteTask(context.Context, *pb.DeleteTaskRequest, ...grpc.CallOption) (*pb.DeleteTaskResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "unused")
+func (r *recordingIngestionClient) DeleteTask(_ context.Context, req *pb.DeleteTaskRequest, _ ...grpc.CallOption) (*pb.DeleteTaskResponse, error) {
+	r.deleted = req
+	return &pb.DeleteTaskResponse{Success: true, KbId: req.GetKbId(), ObjectDeleted: true, IndexDeleted: 7}, nil
 }
 func (*recordingIngestionClient) RetryTask(context.Context, *pb.RetryTaskRequest, ...grpc.CallOption) (*pb.RetryTaskResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "unused")
@@ -38,6 +43,30 @@ func (r *recordingQueryClient) Search(_ context.Context, req *pb.SearchRequest, 
 }
 func (*recordingQueryClient) Answer(context.Context, *pb.AnswerRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[pb.AnswerChunk], error) {
 	return nil, status.Error(codes.Unimplemented, "unused")
+}
+
+func TestGatewayDeleteFileCascadesWithKnowledgeBaseScope(t *testing.T) {
+	g := newIdentityGateway(t)
+	ingestion := &recordingIngestionClient{}
+	g.ingestion = ingestion
+	h := g.Router()
+	admin := loginToken(t, h, "admin", "admin123")
+
+	w := call(t, h, http.MethodDelete, "/v1/files/task-1?kb_id=default", admin, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete file: %d %s", w.Code, w.Body.String())
+	}
+	if ingestion.deleted.GetTaskId() != "task-1" || ingestion.deleted.GetKbId() != "default" {
+		t.Fatalf("delete request = %+v", ingestion.deleted)
+	}
+	for _, field := range []string{`"index_deleted":7`, `"object_deleted":true`, `"kb_id":"default"`} {
+		if !strings.Contains(w.Body.String(), field) {
+			t.Errorf("response %s missing %s", w.Body.String(), field)
+		}
+	}
+	if w := call(t, h, http.MethodDelete, "/v1/files/task-1", "", nil); w.Code != http.StatusForbidden {
+		t.Errorf("anonymous delete = %d, want 403", w.Code)
+	}
 }
 
 func TestGatewayNormalizesAndOwnsKnowledgeBaseScope(t *testing.T) {
