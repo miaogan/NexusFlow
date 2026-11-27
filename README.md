@@ -51,22 +51,22 @@ flowchart TB
     GW --> QS
     GW --> RAG
     AUTH --> RD
-    AUTH --> PG
+    AUTH -->|身份/角色| PG
     MET --> RD
-    WF --> PRC
-    WF --> SBX
-    ING --> MQ
-    ING --> OBJ
-    ING --> RD
-    MQ --> PRC
-    PRC --> MINERU
+    WF -->|解析节点| PRC
+    WF -->|代码节点| SBX
+    ING -->|任务事件| MQ
+    ING -->|原文件| OBJ
+    ING -->|任务状态| RD
+    MQ -->|消费| PRC
+    PRC -->|解析| MINERU
     PRC -->|parsed/*.md| OBJ
-    PRC --> LIDX
-    LIDX --> VS
-    QS --> LIDX
-    QS --> PG
+    PRC -->|索引| LIDX
+    LIDX -->|dense+sparse| VS
+    QS -->|多路召回| LIDX
+    QS -->|负反馈计数| PG
     RAG -. 复用 /v1/search .-> GW
-    RAG --> PG
+    RAG -->|会话/记忆正文| PG
     RAG -. 记忆向量 .-> VS
 ```
 

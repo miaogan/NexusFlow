@@ -82,7 +82,8 @@ V2.0 技术选型的核心考量如下：
         v                             v
 +----------------------------------------------------------------------------------+
 | 检索问答层                                                                       |
-|  Query Service（多路召回 · RRF · Cross-Encoder · 负反馈降权） --> Qdrant            |
+|  Query Service（多路召回 · RRF · Cross-Encoder · 负反馈降权） --召回--> Qdrant      |
+|    └─ 负反馈计数（rag_feedback，降权用） --> PostgreSQL                            |
 |  RAG Agent + intent/summary/memory --/v1/search--> Gateway / Query Service        |
 |    ├─ 记忆正文 --> PostgreSQL      └─ 记忆向量 --> Qdrant                          |
 +----------------------------------------------------------------------------------+
