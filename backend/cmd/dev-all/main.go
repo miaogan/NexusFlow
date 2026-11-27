@@ -114,9 +114,9 @@ func main() {
 	bus.Subscribe(cfg.QueueTopicUploaded, worker.Handle)
 
 	citations := []query.Chunk{
-		{ID: "doc-1", Content: "NexusFlow 采用 Go 负责编排调度、Python LlamaIndex 负责语义切块与索引构建。", Meta: map[string]string{"tenant_id": "default", "source": "architecture"}},
-		{ID: "doc-2", Content: "查询链路使用向量召回、BM25 与 LightRAG 三路召回，经 RRF 融合后由 Cross-Encoder 精排。", Meta: map[string]string{"tenant_id": "default", "source": "retrieval"}},
-		{ID: "doc-3", Content: "自定义代码节点通过 OpenSandbox 执行，具备强隔离、强制 TTL、出口白名单与凭据不落盘。", Meta: map[string]string{"tenant_id": "default", "source": "sandbox"}},
+		{ID: "doc-1", Content: "NexusFlow 采用 Go 负责编排调度、Python LlamaIndex 负责语义切块与索引构建。", Meta: map[string]string{"tenant_id": "default", "kb_id": identity.DefaultKnowledgeBaseID, "source": "architecture"}},
+		{ID: "doc-2", Content: "查询链路使用向量召回、BM25 与 LightRAG 三路召回，经 RRF 融合后由 Cross-Encoder 精排。", Meta: map[string]string{"tenant_id": "default", "kb_id": identity.DefaultKnowledgeBaseID, "source": "retrieval"}},
+		{ID: "doc-3", Content: "自定义代码节点通过 OpenSandbox 执行，具备强隔离、强制 TTL、出口白名单与凭据不落盘。", Meta: map[string]string{"tenant_id": "default", "kb_id": identity.DefaultKnowledgeBaseID, "source": "sandbox"}},
 	}
 	engine := query.NewEngine(logger, nil,
 		query.WithTracer(tracer),
@@ -158,6 +158,7 @@ func main() {
 		AllowSelfRegister: cfg.AllowSelfRegister,
 	}, identity.WithRevocationList(blacklist))
 	userSvc := identity.NewUserService(identityStore)
+	knowledgeBaseSvc := identity.NewKnowledgeBaseService(identityStore)
 
 	wfRegistry := workflow.NewRegistry()
 	wfRegistry.Register(workflow.NoopNode{})
@@ -220,6 +221,7 @@ func main() {
 	go func() {
 		errCh <- grpcserver.Serve(ctx, cfg.UserGRPCAddr, func(s *grpc.Server) {
 			pb.RegisterUserServiceServer(s, userSvc)
+			pb.RegisterKnowledgeBaseServiceServer(s, knowledgeBaseSvc)
 		}, logger)
 	}()
 
@@ -268,6 +270,7 @@ func main() {
 			pb.NewAuthServiceClient(authConn),
 			pb.NewUserServiceClient(userConn),
 		),
+		gateway.WithKnowledgeBases(pb.NewKnowledgeBaseServiceClient(userConn)),
 		gateway.WithRAGAgent(cfg.RAGAgentURL),
 		gateway.WithFeedbackStore(feedbackStore),
 		gateway.WithTokenBlacklist(blacklist),

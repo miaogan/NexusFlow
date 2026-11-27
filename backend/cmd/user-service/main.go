@@ -38,6 +38,7 @@ func main() {
 	}
 
 	svc := identity.NewUserService(store)
+	knowledgeBases := identity.NewKnowledgeBaseService(store)
 
 	go func() {
 		if err := metrics.Serve(ctx, cfg.MetricsAddr, logger); err != nil {
@@ -47,6 +48,7 @@ func main() {
 
 	if err := grpcserver.Serve(ctx, cfg.UserGRPCAddr, func(s *grpc.Server) {
 		pb.RegisterUserServiceServer(s, svc)
+		pb.RegisterKnowledgeBaseServiceServer(s, knowledgeBases)
 	}, logger); err != nil {
 		logger.Error("user service stopped", "error", err)
 		os.Exit(1)

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useOutletContext } from "react-router-dom";
 import { chatStream, getConversation, listConversations, submitFeedback } from "../api/client";
+import type { LayoutContext } from "../components/Layout";
 import type { ChatMessage, Citation, ConversationSummary, IntentInfo } from "../types";
 import { Button, EmptyState, PageHeader, Spinner } from "../components/ui";
 
@@ -67,6 +69,7 @@ function StageChip({
 }
 
 export default function Chat() {
+  const { kbID } = useOutletContext<LayoutContext>();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -108,6 +111,17 @@ export default function Chat() {
     setIntentInfo(null);
     setStageMessageId(null);
   };
+
+  // Switching knowledge base starts a fresh thread so old citations never
+  // appear to belong to the newly selected corpus.
+  useEffect(() => {
+    setActiveId(null);
+    setMessages([]);
+    setCorrectingId(null);
+    setCorrection("");
+    setError(null);
+    resetStage();
+  }, [kbID]);
 
   const jumpTo = (anchor: string, msg: ChatMessage) => {
     const el = document.getElementById(anchor);
@@ -284,7 +298,7 @@ export default function Chat() {
           setPhase("done");
           void refreshConversations();
         },
-      });
+      }, kbID);
     } catch (e) {
       setMessages((prev) => prev.filter((m) => m.id !== streamId));
       setInput(text);

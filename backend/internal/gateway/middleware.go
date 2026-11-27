@@ -41,7 +41,7 @@ func Auth(secret string, allowAnonymous bool, blacklist revocation.Blacklist) gi
 				TenantID:    "default",
 				UserID:      "anonymous",
 				Roles:       []string{"reader"},
-				Permissions: []string{"search:use"},
+				Permissions: []string{"search:use", "kb:read"},
 			}
 			c.Request = c.Request.WithContext(tenant.With(c.Request.Context(), p))
 			c.Next()

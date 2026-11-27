@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import { useOutletContext } from "react-router-dom";
 import { getTrace, runSearch, submitFeedback } from "../api/client";
+import type { LayoutContext } from "../components/Layout";
 import type { SearchResponse, Trace, TraceSpan } from "../types";
 import { Button, Card, EmptyState, PageHeader, Spinner } from "../components/ui";
 
@@ -22,6 +24,7 @@ function scalarEntries(obj: unknown): [string, string][] {
 }
 
 export default function Search() {
+  const { kbID } = useOutletContext<LayoutContext>();
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<SearchResponse | null>(null);
   const [searching, setSearching] = useState(false);
@@ -43,12 +46,18 @@ export default function Search() {
     setShowTrace(false);
   }, [result?.trace_id]);
 
+  // A knowledge base switch invalidates the current result set.
+  useEffect(() => {
+    setResult(null);
+    setError(null);
+  }, [kbID]);
+
   const handleSearch = async () => {
     if (!query.trim()) return;
     setSearching(true);
     setError(null);
     try {
-      setResult(await runSearch(query.trim()));
+      setResult(await runSearch(query.trim(), kbID));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setResult(null);

@@ -37,8 +37,8 @@ func (s *RedisStore) Close() error { return s.rdb.Close() }
 
 func taskKey(id string) string { return "nexusflow:task:" + id }
 
-func idemKey(tenantID, hash string) string {
-	return "nexusflow:idem:" + tenantID + ":" + hash
+func idemKey(t Task) string {
+	return "nexusflow:idem:" + taskIdempotencyKey(t)
 }
 
 func tenantTasksKey(tenantID string) string { return "nexusflow:tenant:" + tenantID + ":tasks" }
@@ -56,7 +56,7 @@ func (s *RedisStore) Create(ctx context.Context, t Task) (Task, bool, error) {
 	}
 
 	if t.ContentHash != "" {
-		key := idemKey(t.TenantID, t.ContentHash)
+		key := idemKey(t)
 		ok, err := s.rdb.SetNX(ctx, key, t.ID, 0).Result()
 		if err != nil {
 			return Task{}, false, err
@@ -226,7 +226,7 @@ func (s *RedisStore) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	if t.ContentHash != "" {
-		_ = s.rdb.Del(ctx, idemKey(t.TenantID, t.ContentHash)).Err()
+		_ = s.rdb.Del(ctx, idemKey(t)).Err()
 	}
 	return nil
 }

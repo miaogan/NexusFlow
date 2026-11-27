@@ -7,6 +7,7 @@ import type {
   Dag,
   IntentInfo,
   JwtClaims,
+  KnowledgeBase,
   LoginResponse,
   MeInfo,
   PermissionInfo,
@@ -29,6 +30,22 @@ const TOKEN_KEY = "nexusflow_token";
 const REFRESH_KEY = "nexusflow_refresh_token";
 const USER_KEY = "nexusflow_user";
 const ANON_KEY = "nexusflow_anon";
+const KB_KEY = "nexusflow_kb";
+
+/** The knowledge base currently selected in the console (defaults to "default"). */
+export function getActiveKB(): string {
+  return localStorage.getItem(KB_KEY) || "default";
+}
+
+export function setActiveKB(id: string) {
+  if (id) localStorage.setItem(KB_KEY, id);
+  else localStorage.removeItem(KB_KEY);
+}
+
+/** Query-string suffix scoping a request to a knowledge base. */
+function kbQuery(kbID: string): string {
+  return `?kb_id=${encodeURIComponent(kbID)}`;
+}
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -179,9 +196,11 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
 export async function uploadFile(
   file: File,
   metadata?: Record<string, string>,
+  kbID = getActiveKB(),
 ): Promise<UploadResult> {
   const form = new FormData();
   form.append("file", file);
+  form.append("kb_id", kbID);
   for (const [key, value] of Object.entries(metadata ?? {})) {
     form.append(key, value);
   }
@@ -199,34 +218,50 @@ export async function listTasks(
   status?: string,
   limit = 50,
   offset = 0,
+  kbID = getActiveKB(),
 ): Promise<TaskListResponse> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (status) params.set("status", status);
+  params.set("kb_id", kbID);
   return request<TaskListResponse>(`${GATEWAY_BASE}/v1/tasks?${params.toString()}`);
 }
 
-export async function getTask(id: string): Promise<TaskDetail> {
-  return request<TaskDetail>(`${GATEWAY_BASE}/v1/tasks/${encodeURIComponent(id)}`);
+export async function getTask(id: string, kbID = getActiveKB()): Promise<TaskDetail> {
+  return request<TaskDetail>(
+    `${GATEWAY_BASE}/v1/tasks/${encodeURIComponent(id)}${kbQuery(kbID)}`,
+  );
 }
 
-export async function deleteTask(id: string): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(`${GATEWAY_BASE}/v1/tasks/${encodeURIComponent(id)}`, {
-    method: "DELETE",
-  });
+export async function deleteTask(
+  id: string,
+  kbID = getActiveKB(),
+): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(
+    `${GATEWAY_BASE}/v1/tasks/${encodeURIComponent(id)}${kbQuery(kbID)}`,
+    { method: "DELETE" },
+  );
 }
 
-export async function retryTask(id: string): Promise<{ task_id: string; status: string; message: string }> {
-  return request(`${GATEWAY_BASE}/v1/tasks/${encodeURIComponent(id)}/retry`, {
-    method: "POST",
-  });
+export async function retryTask(
+  id: string,
+  kbID = getActiveKB(),
+): Promise<{ task_id: string; status: string; message: string }> {
+  return request(
+    `${GATEWAY_BASE}/v1/tasks/${encodeURIComponent(id)}/retry${kbQuery(kbID)}`,
+    { method: "POST" },
+  );
 }
 
-export async function runSearch(query: string): Promise<SearchResponse> {
+export async function runSearch(
+  query: string,
+  kbID = getActiveKB(),
+): Promise<SearchResponse> {
   return request<SearchResponse>(`${GATEWAY_BASE}/v1/search`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       query,
+      kb_id: kbID,
       routes: [
         { type: "vector", top_k: 20 },
         { type: "bm25", top_k: 20 },
@@ -242,6 +277,7 @@ export async function chat(
   message: string,
   conversationId?: string,
   topK?: number,
+  kbID = getActiveKB(),
 ): Promise<ChatResponse> {
   return request<ChatResponse>(`${GATEWAY_BASE}/v1/chat`, {
     method: "POST",
@@ -250,6 +286,7 @@ export async function chat(
       message,
       conversation_id: conversationId || undefined,
       top_k: topK,
+      kb_id: kbID,
     }),
   });
 }
@@ -271,12 +308,17 @@ export async function chatStream(
   message: string,
   conversationId: string | undefined,
   handlers: ChatStreamHandlers,
+  kbID = getActiveKB(),
 ): Promise<void> {
   const send = () =>
     fetch(`${GATEWAY_BASE}/v1/chat/stream`, {
       method: "POST",
       headers: new Headers({ ...authHeaders(), "Content-Type": "application/json" }),
-      body: JSON.stringify({ message, conversation_id: conversationId || undefined }),
+      body: JSON.stringify({
+        message,
+        conversation_id: conversationId || undefined,
+        kb_id: kbID,
+      }),
     });
 
   let response = await send();
@@ -528,6 +570,44 @@ export async function deleteRole(name: string): Promise<{ success: boolean }> {
 
 export async function listPermissions(): Promise<{ permissions: PermissionInfo[] }> {
   return request<{ permissions: PermissionInfo[] }>(`${GATEWAY_BASE}/v1/permissions`);
+}
+
+// ---------- Knowledge base APIs ----------
+
+export async function listKnowledgeBases(): Promise<{ knowledge_bases: KnowledgeBase[] }> {
+  return request<{ knowledge_bases: KnowledgeBase[] }>(`${GATEWAY_BASE}/v1/knowledge-bases`);
+}
+
+export async function createKnowledgeBase(input: {
+  name: string;
+  description?: string;
+}): Promise<{ knowledge_base: KnowledgeBase }> {
+  return request<{ knowledge_base: KnowledgeBase }>(`${GATEWAY_BASE}/v1/knowledge-bases`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateKnowledgeBase(
+  id: string,
+  input: { name?: string; description?: string },
+): Promise<{ knowledge_base: KnowledgeBase }> {
+  return request<{ knowledge_base: KnowledgeBase }>(
+    `${GATEWAY_BASE}/v1/knowledge-bases/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function deleteKnowledgeBase(id: string): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(
+    `${GATEWAY_BASE}/v1/knowledge-bases/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
 }
 
 // ---------- Workflow Engine APIs ----------

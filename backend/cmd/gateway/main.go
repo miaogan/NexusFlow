@@ -91,6 +91,7 @@ func main() {
 			pb.NewAuthServiceClient(authConn),
 			pb.NewUserServiceClient(userConn),
 		),
+		gateway.WithKnowledgeBases(pb.NewKnowledgeBaseServiceClient(userConn)),
 		gateway.WithRAGAgent(cfg.RAGAgentURL),
 		gateway.WithFeedbackStore(feedbackStore),
 		gateway.WithTokenBlacklist(blacklist),

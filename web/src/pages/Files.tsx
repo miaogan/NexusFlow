@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 import { deleteTask, listTasks, uploadFile } from "../api/client";
+import type { LayoutContext } from "../components/Layout";
 import type { TaskSummary, UploadResult } from "../types";
 import {
   Button,
@@ -16,6 +17,7 @@ import {
 } from "../components/ui";
 
 export default function Files() {
+  const { kbID } = useOutletContext<LayoutContext>();
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,13 +30,17 @@ export default function Files() {
   const refresh = useCallback(() => {
     setLoading(true);
     setError(null);
-    listTasks(undefined, 100)
+    listTasks(undefined, 100, 0, kbID)
       .then((r) => setTasks(r.tasks))
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [kbID]);
 
-  useEffect(refresh, [refresh]);
+  useEffect(() => {
+    setTasks([]);
+    setUploadResult(null);
+    refresh();
+  }, [refresh]);
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -43,7 +49,7 @@ export default function Files() {
     setUploadResult(null);
     try {
       for (const file of Array.from(files)) {
-        const result = await uploadFile(file, { source: "web-console" });
+        const result = await uploadFile(file, { source: "web-console" }, kbID);
         setUploadResult(result);
       }
       refresh();
@@ -60,7 +66,7 @@ export default function Files() {
       setBusy(true);
       setError(null);
       try {
-        await deleteTask(id);
+        await deleteTask(id, kbID);
         await refresh();
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -68,7 +74,7 @@ export default function Files() {
         setBusy(false);
       }
     },
-    [refresh],
+    [refresh, kbID],
   );
 
   return (

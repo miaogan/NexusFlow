@@ -45,6 +45,29 @@ func TestMachineIdempotency(t *testing.T) {
 	}
 }
 
+func TestMachineIdempotencyIsKnowledgeBaseScoped(t *testing.T) {
+	m := NewMachine()
+	ctx := context.Background()
+	first, created, err := m.Create(ctx, Task{
+		ID: "kb1-task", TenantID: "tenant", ContentHash: "same", Metadata: map[string]string{"kb_id": "kb1"},
+	})
+	if err != nil || !created {
+		t.Fatalf("create first: created=%v err=%v", created, err)
+	}
+	second, created, err := m.Create(ctx, Task{
+		ID: "kb2-task", TenantID: "tenant", ContentHash: "same", Metadata: map[string]string{"kb_id": "kb2"},
+	})
+	if err != nil || !created || second.ID == first.ID {
+		t.Fatalf("different KB must create a distinct task: second=%+v created=%v err=%v", second, created, err)
+	}
+	duplicate, created, err := m.Create(ctx, Task{
+		ID: "kb1-duplicate", TenantID: "tenant", ContentHash: "same", Metadata: map[string]string{"kb_id": "kb1"},
+	})
+	if err != nil || created || duplicate.ID != first.ID {
+		t.Fatalf("same KB must deduplicate: duplicate=%+v created=%v err=%v", duplicate, created, err)
+	}
+}
+
 func TestMachineTransition(t *testing.T) {
 	m := NewMachine()
 	ctx := context.Background()

@@ -36,16 +36,17 @@ var allowedUploadTypes = map[string]struct{}{
 }
 
 type Gateway struct {
-	ingestion pb.IngestionServiceClient
-	query     pb.QueryServiceClient
-	sandbox   pb.SandboxExecutionServiceClient
-	auth      pb.AuthServiceClient
-	users     pb.UserServiceClient
-	objects   store.ObjectStore
-	logger    *slog.Logger
-	secret    string
-	allowAnon bool
-	tracer    tracing.Tracer
+	ingestion      pb.IngestionServiceClient
+	query          pb.QueryServiceClient
+	sandbox        pb.SandboxExecutionServiceClient
+	auth           pb.AuthServiceClient
+	users          pb.UserServiceClient
+	knowledgeBases pb.KnowledgeBaseServiceClient
+	objects        store.ObjectStore
+	logger         *slog.Logger
+	secret         string
+	allowAnon      bool
+	tracer         tracing.Tracer
 	// feedbackStore persists user ratings independently of tracing.
 	feedbackStore feedback.Store
 	// rag proxies chat/conversation calls to the Python RAG agent.
@@ -90,6 +91,12 @@ func WithIdentity(auth pb.AuthServiceClient, users pb.UserServiceClient) Option 
 		g.auth = auth
 		g.users = users
 	}
+}
+
+// WithKnowledgeBases attaches the tenant-scoped knowledge-base client used by
+// both management endpoints and file/retrieval authorization checks.
+func WithKnowledgeBases(client pb.KnowledgeBaseServiceClient) Option {
+	return func(g *Gateway) { g.knowledgeBases = client }
 }
 
 // WithFeedbackStore persists ratings and implicit feedback for review.
@@ -155,12 +162,12 @@ func (g *Gateway) Router() *gin.Engine {
 
 	v1 := r.Group("/v1", Auth(g.secret, g.allowAnon, g.blacklist), RateLimit(50, 100))
 	v1.POST("/auth/logout", g.logout)
-	v1.POST("/files", g.uploadFile)
+	v1.POST("/files", RequirePermission("file:write"), g.uploadFile)
 	v1.GET("/tasks", g.listTasks)
 	v1.GET("/tasks/:id", g.getTask)
 	v1.DELETE("/tasks/:id", g.deleteTask)
 	v1.POST("/tasks/:id/retry", g.retryTask)
-	v1.POST("/search", g.search)
+	v1.POST("/search", RequirePermission("search:use"), g.search)
 	// RAG chat: multi-turn Q&A over the retrieval corpus, scoped to the caller.
 	v1.POST("/chat", RequirePermission("search:use"), g.chat)
 	v1.POST("/chat/stream", RequirePermission("search:use"), g.chatStream)
@@ -174,6 +181,12 @@ func (g *Gateway) Router() *gin.Engine {
 	v1.GET("/traces/:id", g.getTrace)
 	v1.POST("/sandbox/execute", g.executeSandbox)
 	v1.GET("/me", g.me)
+
+	// Knowledge-base management and namespace discovery.
+	v1.GET("/knowledge-bases", RequirePermission("kb:read"), g.listKnowledgeBases)
+	v1.POST("/knowledge-bases", RequirePermission("kb:write"), g.createKnowledgeBase)
+	v1.PATCH("/knowledge-bases/:id", RequirePermission("kb:write"), g.updateKnowledgeBase)
+	v1.DELETE("/knowledge-bases/:id", RequirePermission("kb:write"), g.deleteKnowledgeBase)
 
 	// User & RBAC management.
 	v1.GET("/users", RequirePermission("user:read"), g.listUsers)
@@ -221,6 +234,7 @@ type uploadReq struct {
 	FileSize     int64             `json:"file_size"`
 	PresignedURL string            `json:"presigned_url"`
 	Metadata     map[string]string `json:"metadata"`
+	KBID         string            `json:"kb_id"`
 }
 
 func (g *Gateway) uploadFile(c *gin.Context) {
@@ -243,6 +257,10 @@ func (g *Gateway) uploadJSON(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "presigned_url host not allowed"})
 		return
 	}
+	kbID, ok := g.resolveKnowledgeBase(c, body.KBID)
+	if !ok {
+		return
+	}
 	// Reserved metadata keys are server-owned: drop client-provided
 	// object_key/file_url and derive them from explicit fields only, so a
 	// caller cannot point deletes/retries at arbitrary objects.
@@ -252,6 +270,8 @@ func (g *Gateway) uploadJSON(c *gin.Context) {
 	}
 	delete(metadata, "object_key")
 	delete(metadata, "file_url")
+	delete(metadata, "kb_id")
+	metadata["kb_id"] = kbID
 	if body.PresignedURL != "" {
 		metadata["file_url"] = body.PresignedURL
 	}
@@ -268,6 +288,7 @@ func (g *Gateway) uploadJSON(c *gin.Context) {
 		FileSize:     body.FileSize,
 		PresignedUrl: body.PresignedURL,
 		Metadata:     metadata,
+		KbId:         kbID,
 	})
 	if err != nil {
 		g.logger.Error("upload failed", "tenant", p.TenantID, "error", err)
@@ -312,9 +333,13 @@ func (g *Gateway) uploadMultipart(c *gin.Context) {
 		return
 	}
 
+	kbID, ok := g.resolveKnowledgeBase(c, c.Request.PostForm.Get("kb_id"))
+	if !ok {
+		return
+	}
 	principal, _ := tenant.From(c.Request.Context())
 	uploadID := uuid.NewString()
-	objectKey := fmt.Sprintf("%s/upload/%s/%s", principal.TenantID, uploadID, header.Filename)
+	objectKey := fmt.Sprintf("%s/%s/upload/%s/%s", principal.TenantID, kbID, uploadID, header.Filename)
 
 	hasher := sha256.New()
 	if err := g.objects.Put(
@@ -344,6 +369,7 @@ func (g *Gateway) uploadMultipart(c *gin.Context) {
 	metadata["file_size"] = strconv.FormatInt(header.Size, 10)
 	metadata["content_hash"] = contentHash
 	metadata["object_key"] = objectKey
+	metadata["kb_id"] = kbID
 
 	ctx, _ := g.callerContext(c)
 	resp, err := g.ingestion.UploadFile(ctx, &pb.UploadFileRequest{
@@ -353,6 +379,7 @@ func (g *Gateway) uploadMultipart(c *gin.Context) {
 		ObjectKey:   objectKey,
 		ContentHash: contentHash,
 		Metadata:    metadata,
+		KbId:        kbID,
 	})
 	if err != nil {
 		g.logger.Error("upload register failed", "tenant", principal.TenantID, "error", err)
@@ -399,11 +426,16 @@ func (g *Gateway) listTasks(c *gin.Context) {
 	if offset < 0 {
 		offset = 0
 	}
+	kbID, ok := g.resolveKnowledgeBase(c, c.Query("kb_id"))
+	if !ok {
+		return
+	}
 	ctx, _ := g.callerContext(c)
 	resp, err := g.ingestion.ListTasks(ctx, &pb.ListTasksRequest{
 		Status: c.Query("status"),
 		Limit:  int32(limit),
 		Offset: int32(offset),
+		KbId:   kbID,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
@@ -422,14 +454,19 @@ func (g *Gateway) listTasks(c *gin.Context) {
 			"error_msg":    t.GetErrorMsg(),
 			"created_at":   t.GetCreatedAt(),
 			"updated_at":   t.GetUpdatedAt(),
+			"kb_id":        t.GetKbId(),
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"tasks": tasks, "total": resp.GetTotal()})
 }
 
 func (g *Gateway) getTask(c *gin.Context) {
+	kbID, ok := g.resolveKnowledgeBase(c, c.Query("kb_id"))
+	if !ok {
+		return
+	}
 	ctx, _ := g.callerContext(c)
-	resp, err := g.ingestion.GetTaskStatus(ctx, &pb.GetTaskStatusRequest{TaskId: c.Param("id")})
+	resp, err := g.ingestion.GetTaskStatus(ctx, &pb.GetTaskStatusRequest{TaskId: c.Param("id"), KbId: kbID})
 	if err != nil {
 		code, msg := grpcToHTTP(err)
 		c.JSON(code, gin.H{"error": msg})
@@ -447,12 +484,17 @@ func (g *Gateway) getTask(c *gin.Context) {
 		"file_size":    resp.GetFileSize(),
 		"created_at":   resp.GetCreatedAt(),
 		"updated_at":   resp.GetUpdatedAt(),
+		"kb_id":        resp.GetKbId(),
 	})
 }
 
 func (g *Gateway) deleteTask(c *gin.Context) {
+	kbID, ok := g.resolveKnowledgeBase(c, c.Query("kb_id"))
+	if !ok {
+		return
+	}
 	ctx, _ := g.callerContext(c)
-	resp, err := g.ingestion.DeleteTask(ctx, &pb.DeleteTaskRequest{TaskId: c.Param("id")})
+	resp, err := g.ingestion.DeleteTask(ctx, &pb.DeleteTaskRequest{TaskId: c.Param("id"), KbId: kbID})
 	if err != nil {
 		code, msg := grpcToHTTP(err)
 		c.JSON(code, gin.H{"error": msg})
@@ -462,8 +504,12 @@ func (g *Gateway) deleteTask(c *gin.Context) {
 }
 
 func (g *Gateway) retryTask(c *gin.Context) {
+	kbID, ok := g.resolveKnowledgeBase(c, c.Query("kb_id"))
+	if !ok {
+		return
+	}
 	ctx, _ := g.callerContext(c)
-	resp, err := g.ingestion.RetryTask(ctx, &pb.RetryTaskRequest{TaskId: c.Param("id")})
+	resp, err := g.ingestion.RetryTask(ctx, &pb.RetryTaskRequest{TaskId: c.Param("id"), KbId: kbID})
 	if err != nil {
 		code, msg := grpcToHTTP(err)
 		c.JSON(code, gin.H{"error": msg})
@@ -522,19 +568,32 @@ func (g *Gateway) search(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	kbID, ok := g.resolveKnowledgeBase(c, body.KBID)
+	if !ok {
+		return
+	}
 	routes := make([]*pb.RecallRoute, 0, len(body.Routes))
 	for _, r := range body.Routes {
 		routes = append(routes, &pb.RecallRoute{Type: r.Type, TopK: r.TopK, FilterExpr: r.Filters})
 	}
 
-	ctx, _ := g.callerContext(c)
+	filters := make(map[string]string, len(body.Filters)+2)
+	for key, value := range body.Filters {
+		if key == "kb_id" || key == "tenant_id" {
+			continue
+		}
+		filters[key] = value
+	}
+	ctx, principal := g.callerContext(c)
+	filters["kb_id"] = kbID
+	filters["tenant_id"] = principal.TenantID
 	resp, err := g.query.Search(ctx, &pb.SearchRequest{
 		Query:       body.Query,
 		Routes:      routes,
 		RerankModel: body.Rerank,
 		FinalTopN:   body.FinalTopN,
-		KbId:        body.KBID,
-		Filters:     body.Filters,
+		KbId:        kbID,
+		Filters:     filters,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})

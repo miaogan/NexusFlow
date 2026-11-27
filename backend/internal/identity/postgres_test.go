@@ -133,6 +133,21 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Error("user still present after delete")
 	}
 
+	// Knowledge bases share the same Postgres store across service instances.
+	kb, err := st.CreateKnowledgeBase(ctx, KnowledgeBase{TenantID: tenant, Name: "Postgres KB"})
+	if err != nil {
+		t.Fatalf("create knowledge base: %v", err)
+	}
+	if got, ok, err := stores[1].GetKnowledgeBase(ctx, tenant, kb.ID); err != nil || !ok || got.Name != "Postgres KB" {
+		t.Fatalf("shared knowledge base: kb=%+v ok=%v err=%v", got, ok, err)
+	}
+	if _, err := st.UpdateKnowledgeBase(ctx, KnowledgeBase{TenantID: tenant, ID: kb.ID, Name: "Postgres KB renamed"}); err != nil {
+		t.Fatalf("update knowledge base: %v", err)
+	}
+	if err := st.DeleteKnowledgeBase(ctx, tenant, kb.ID); err != nil {
+		t.Fatalf("delete knowledge base: %v", err)
+	}
+
 	// Keep the database clean for repeated runs.
 	if err := st.DeleteUser(ctx, tenant, admin.ID); err != nil {
 		t.Errorf("cleanup admin: %v", err)

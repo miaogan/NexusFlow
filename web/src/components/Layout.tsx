@@ -1,8 +1,21 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { clearAuth, getCurrentUser, getMe, getToken, hasPermission, isAnonymous } from "../api/client";
-import type { MeInfo } from "../types";
-import { Button } from "./ui";
+import {
+  clearAuth,
+  createKnowledgeBase,
+  deleteKnowledgeBase,
+  getActiveKB,
+  getCurrentUser,
+  getMe,
+  getToken,
+  hasPermission,
+  isAnonymous,
+  listKnowledgeBases,
+  setActiveKB,
+  updateKnowledgeBase,
+} from "../api/client";
+import type { KnowledgeBase, MeInfo } from "../types";
+import { Button, Spinner } from "./ui";
 
 type NavItem = { to: string; label: string; end?: boolean };
 
@@ -16,12 +29,49 @@ const NAV: NavItem[] = [
   { to: "/sandbox", label: "沙箱 Playground" },
 ];
 
+export type LayoutContext = { kbID: string };
+
 export default function Layout() {
   const navigate = useNavigate();
   const [me, setMe] = useState<MeInfo | null>(null);
   const [ready, setReady] = useState(false);
+  const [kbs, setKbs] = useState<KnowledgeBase[]>([]);
+  const [kbID, setKbID] = useState<string>(getActiveKB());
+  const [kbLoading, setKbLoading] = useState(false);
+  const [managing, setManaging] = useState(false);
+  const [kbError, setKbError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newDesc, setNewDesc] = useState("");
+  const [editID, setEditID] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editDesc, setEditDesc] = useState("");
+
   const user = getCurrentUser();
   const anon = isAnonymous();
+  const canReadKB = hasPermission("kb:read") || anon;
+  const canWriteKB = hasPermission("kb:write");
+
+  const loadKBs = useCallback(async () => {
+    if (!canReadKB) return;
+    setKbLoading(true);
+    try {
+      const res = await listKnowledgeBases();
+      setKbs(res.knowledge_bases);
+      const ids = res.knowledge_bases.map((kb) => kb.id);
+      const current = getActiveKB();
+      if (!ids.includes(current)) {
+        const fallback = ids.includes("default") ? "default" : ids[0] ?? "default";
+        setActiveKB(fallback);
+        setKbID(fallback);
+      }
+      setKbError(null);
+    } catch (e) {
+      setKbError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setKbLoading(false);
+    }
+  }, [canReadKB]);
 
   useEffect(() => {
     if (!getToken() && !isAnonymous()) {
@@ -32,7 +82,8 @@ export default function Layout() {
     getMe()
       .then(setMe)
       .catch(() => setMe(null));
-  }, [navigate]);
+    void loadKBs();
+  }, [navigate, loadKBs]);
 
   if (!ready) return null;
 
@@ -42,6 +93,61 @@ export default function Layout() {
     clearAuth();
     navigate("/login", { replace: true });
   };
+
+  const switchKB = (id: string) => {
+    setActiveKB(id);
+    setKbID(id);
+  };
+
+  const handleCreate = async () => {
+    if (!newName.trim() || busy) return;
+    setBusy(true);
+    setKbError(null);
+    try {
+      const res = await createKnowledgeBase({ name: newName.trim(), description: newDesc.trim() });
+      setNewName("");
+      setNewDesc("");
+      await loadKBs();
+      if (res.knowledge_base?.id) switchKB(res.knowledge_base.id);
+    } catch (e) {
+      setKbError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleUpdate = async (id: string) => {
+    if (!editName.trim() || busy) return;
+    setBusy(true);
+    setKbError(null);
+    try {
+      await updateKnowledgeBase(id, { name: editName.trim(), description: editDesc.trim() });
+      setEditID(null);
+      await loadKBs();
+    } catch (e) {
+      setKbError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDelete = async (kb: KnowledgeBase) => {
+    if (busy) return;
+    if (!window.confirm(`确定删除知识库「${kb.name}」吗？其中已上传的文件不会自动删除。`)) return;
+    setBusy(true);
+    setKbError(null);
+    try {
+      await deleteKnowledgeBase(kb.id);
+      if (kbID === kb.id) switchKB("default");
+      await loadKBs();
+    } catch (e) {
+      setKbError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const activeKB = kbs.find((kb) => kb.id === kbID);
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -81,10 +187,40 @@ export default function Layout() {
       </aside>
 
       <div className="flex flex-1 flex-col overflow-hidden">
-        <header className="flex h-14 shrink-0 items-center justify-between border-b border-white/5 px-6">
-          <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">
-            {user ? `${user.tenant_id} · ${user.username}` : me ? `${me.tenant_id} · ${me.username ?? me.user_id}` : "未连接"}
-          </p>
+        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-white/5 px-6">
+          <div className="flex min-w-0 items-center gap-3">
+            <p className="truncate text-[10px] uppercase tracking-[0.2em] text-slate-500">
+              {user ? `${user.tenant_id} · ${user.username}` : me ? `${me.tenant_id} · ${me.username ?? me.user_id}` : "未连接"}
+            </p>
+            {canReadKB && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-slate-500">知识库</span>
+                <select
+                  value={kbID}
+                  onChange={(e) => switchKB(e.target.value)}
+                  title={activeKB?.description || undefined}
+                  className="max-w-40 rounded-lg border border-white/10 bg-ink-950 px-2 py-1 text-[11px] text-slate-200 outline-none focus:border-accent/40"
+                >
+                  {kbs.length === 0 && <option value="default">默认知识库</option>}
+                  {kbs.map((kb) => (
+                    <option key={kb.id} value={kb.id}>
+                      {kb.name}
+                    </option>
+                  ))}
+                </select>
+                {canWriteKB && (
+                  <Button
+                    variant="ghost"
+                    className="px-2 py-1 text-[10px]"
+                    onClick={() => setManaging(true)}
+                  >
+                    管理
+                  </Button>
+                )}
+                {kbLoading && <Spinner className="h-3 w-3" />}
+              </div>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <span
               className={`flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] ${
@@ -111,9 +247,124 @@ export default function Layout() {
         </header>
 
         <main className="flex-1 overflow-auto p-6">
-          <Outlet />
+          <Outlet context={{ kbID } satisfies LayoutContext} />
         </main>
       </div>
+
+      {managing && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setManaging(false)}
+        >
+          <div
+            className="panel flex max-h-[80vh] w-full max-w-lg flex-col p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="panel-title">知识库管理</h3>
+              <button
+                type="button"
+                onClick={() => setManaging(false)}
+                className="rounded px-2 py-0.5 text-xs text-slate-400 hover:bg-white/5 hover:text-slate-200"
+              >
+                关闭
+              </button>
+            </div>
+
+            <div className="mb-4 space-y-2 rounded-lg border border-white/5 bg-white/[0.02] p-3">
+              <p className="text-[10px] uppercase tracking-wider text-slate-500">新建知识库</p>
+              <input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="名称，例如：研发资料"
+                className="w-full rounded-lg border border-white/10 bg-ink-950 px-3 py-1.5 text-xs text-slate-200 outline-none focus:border-accent/40"
+              />
+              <input
+                value={newDesc}
+                onChange={(e) => setNewDesc(e.target.value)}
+                placeholder="描述（可选）"
+                className="w-full rounded-lg border border-white/10 bg-ink-950 px-3 py-1.5 text-xs text-slate-200 outline-none focus:border-accent/40"
+              />
+              <Button disabled={busy || !newName.trim()} onClick={() => void handleCreate()}>
+                创建
+              </Button>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-2 overflow-auto">
+              {kbs.map((kb) => (
+                <div key={kb.id} className="rounded-lg border border-white/5 p-3">
+                  {editID === kb.id ? (
+                    <div className="space-y-2">
+                      <input
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        className="w-full rounded-lg border border-white/10 bg-ink-950 px-3 py-1.5 text-xs text-slate-200 outline-none focus:border-accent/40"
+                      />
+                      <input
+                        value={editDesc}
+                        onChange={(e) => setEditDesc(e.target.value)}
+                        placeholder="描述（可选）"
+                        className="w-full rounded-lg border border-white/10 bg-ink-950 px-3 py-1.5 text-xs text-slate-200 outline-none focus:border-accent/40"
+                      />
+                      <div className="flex gap-2">
+                        <Button disabled={busy || !editName.trim()} onClick={() => void handleUpdate(kb.id)}>
+                          保存
+                        </Button>
+                        <Button variant="ghost" onClick={() => setEditID(null)}>
+                          取消
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="flex items-center gap-1.5 text-xs text-slate-200">
+                          {kb.name}
+                          {kb.id === kbID && (
+                            <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[9px] text-accent">当前</span>
+                          )}
+                          {kb.id === "default" && (
+                            <span className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] text-slate-500">默认</span>
+                          )}
+                        </p>
+                        <p className="mt-0.5 break-words text-[10px] text-slate-500">
+                          {kb.description || "无描述"}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <Button
+                          variant="ghost"
+                          className="px-2 py-1 text-[10px]"
+                          disabled={busy}
+                          onClick={() => {
+                            setEditID(kb.id);
+                            setEditName(kb.name);
+                            setEditDesc(kb.description);
+                          }}
+                        >
+                          重命名
+                        </Button>
+                        {kb.id !== "default" && (
+                          <Button
+                            variant="danger"
+                            className="px-2 py-1 text-[10px]"
+                            disabled={busy}
+                            onClick={() => void handleDelete(kb)}
+                          >
+                            删除
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {kbError && <p className="mt-3 text-xs text-rose-300">{kbError}</p>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -52,6 +52,17 @@ var identitySchema = []string{
 		builtin BOOLEAN NOT NULL DEFAULT false,
 		description TEXT NOT NULL DEFAULT ''
 	)`,
+	`CREATE TABLE IF NOT EXISTS identity_knowledge_bases (
+		id TEXT NOT NULL,
+		tenant_id TEXT NOT NULL,
+		name TEXT NOT NULL,
+		description TEXT NOT NULL DEFAULT '',
+		created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+		PRIMARY KEY (tenant_id, id)
+	)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS identity_knowledge_bases_tenant_name_idx
+		ON identity_knowledge_bases (tenant_id, lower(name))`,
 }
 
 // NewPostgresStore opens the database, verifies connectivity and ensures the
@@ -104,6 +115,9 @@ func (s *PostgresStore) ensureSchema(ctx context.Context) error {
 func (s *PostgresStore) Seed(opts SeedOptions) error {
 	ctx := context.Background()
 	if err := s.seedRoles(ctx); err != nil {
+		return err
+	}
+	if _, err := s.CreateKnowledgeBase(ctx, defaultKnowledgeBase(tenantOr(opts.TenantID))); err != nil && !errors.Is(err, ErrKnowledgeBaseExists) {
 		return err
 	}
 	return s.seedAdmin(ctx, opts)

@@ -80,6 +80,8 @@ var Permissions = []Permission{
 	{"file:read", "查看文件"},
 	{"file:write", "上传文件"},
 	{"file:delete", "删除文件"},
+	{"kb:read", "查看知识库"},
+	{"kb:write", "创建、修改与删除知识库"},
 	{"task:read", "查看任务"},
 	{"task:write", "操作任务（重试/删除）"},
 	{"search:use", "使用检索"},
@@ -102,7 +104,7 @@ func BuiltinRoles() []Role {
 		{
 			Name: RoleEditor,
 			Permissions: []string{
-				"file:read", "file:write", "file:delete",
+				"file:read", "file:write", "file:delete", "kb:read", "kb:write",
 				"task:read", "task:write",
 				"search:use", "sandbox:execute", "workflow:run",
 				"trace:read", "user:read", "role:read",
@@ -113,7 +115,7 @@ func BuiltinRoles() []Role {
 		{
 			Name: RoleViewer,
 			Permissions: []string{
-				"file:read", "task:read", "search:use", "trace:read",
+				"file:read", "kb:read", "task:read", "search:use", "trace:read",
 			},
 			Builtin:     true,
 			Description: "只读访客",

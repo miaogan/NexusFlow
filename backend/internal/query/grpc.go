@@ -43,6 +43,21 @@ func traceCtx(ctx context.Context) (context.Context, string) {
 	return tracing.EnsureTraceID(ctx)
 }
 
+func scopedFilters(raw map[string]string, tenantID, kbID string) map[string]string {
+	filters := make(map[string]string, len(raw)+2)
+	for key, value := range raw {
+		filters[key] = value
+	}
+	if strings.TrimSpace(kbID) == "" {
+		kbID = "default"
+	}
+	// Namespace and tenant are server-owned; client filters can add criteria but
+	// can never override either isolation boundary.
+	filters["kb_id"] = kbID
+	filters["tenant_id"] = tenantID
+	return filters
+}
+
 func (s *GRPCService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.SearchResponse, error) {
 	ctx, trace := traceCtx(ctx)
 
@@ -51,12 +66,13 @@ func (s *GRPCService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 		routes = append(routes, Route{Type: r.GetType(), TopK: int(r.GetTopK()), FilterExpr: r.GetFilterExpr()})
 	}
 
+	tenantID := tenant.FromIncoming(ctx).TenantID
 	res, err := s.engine.Search(ctx, SearchOptions{
 		Query:     req.GetQuery(),
 		Routes:    routes,
 		FinalTopN: int(req.GetFinalTopN()),
-		Filters:   req.GetFilters(),
-		TenantID:  tenant.FromIncoming(ctx).TenantID,
+		Filters:   scopedFilters(req.GetFilters(), tenantID, req.GetKbId()),
+		TenantID:  tenantID,
 	})
 	if err != nil {
 		return nil, err
@@ -101,11 +117,12 @@ func (s *GRPCService) Answer(req *pb.AnswerRequest, stream pb.QueryService_Answe
 	for _, r := range req.GetRoutes() {
 		routes = append(routes, Route{Type: r.GetType(), TopK: int(r.GetTopK()), FilterExpr: r.GetFilterExpr()})
 	}
+	tenantID := tenant.FromIncoming(ctx).TenantID
 	res, err := s.engine.Search(ctx, SearchOptions{
 		Query:    req.GetQuery(),
 		Routes:   routes,
-		Filters:  req.GetFilters(),
-		TenantID: tenant.FromIncoming(ctx).TenantID,
+		Filters:  scopedFilters(req.GetFilters(), tenantID, req.GetKbId()),
+		TenantID: tenantID,
 	})
 	if err != nil {
 		span.RecordError(err)

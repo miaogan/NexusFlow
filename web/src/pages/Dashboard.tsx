@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
+import { Link, useOutletContext } from "react-router-dom";
 import { listTasks } from "../api/client";
+import type { LayoutContext } from "../components/Layout";
 import type { TaskSummary } from "../types";
 import { Button, Card, EmptyState, PageHeader, ProgressBar, StatePill } from "../components/ui";
 
@@ -14,20 +15,24 @@ function StatCard({ label, value, accent }: { label: string; value: number | str
 }
 
 export default function Dashboard() {
+  const { kbID } = useOutletContext<LayoutContext>();
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = () => {
+  const refresh = useCallback(() => {
     setLoading(true);
     setError(null);
-    listTasks(undefined, 100)
+    listTasks(undefined, 100, 0, kbID)
       .then((r) => setTasks(r.tasks))
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  };
+  }, [kbID]);
 
-  useEffect(refresh, []);
+  useEffect(() => {
+    setTasks([]);
+    refresh();
+  }, [refresh]);
 
   const total = tasks.length;
   const done = tasks.filter((t) => t.status === "COMPLETED").length;

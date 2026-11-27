@@ -71,12 +71,25 @@ func (s *Service) UploadFile(ctx context.Context, req *pb.UploadFileRequest) (*p
 		return nil, status.Error(codes.InvalidArgument, "unsupported file_type")
 	}
 
+	metadata := make(map[string]string, len(req.GetMetadata())+1)
+	for key, value := range req.GetMetadata() {
+		metadata[key] = value
+	}
+	kbID := strings.TrimSpace(req.GetKbId())
+	if kbID == "" {
+		kbID = strings.TrimSpace(metadata["kb_id"])
+	}
+	if kbID == "" {
+		kbID = "default"
+	}
+	metadata["kb_id"] = kbID
+
 	principal := tenant.FromIncoming(ctx)
 	taskID := uuid.NewString()
 	// object_key 由 gateway 直传时指定（文件已落地对象存储），否则在此生成。
 	objectKey := req.GetObjectKey()
 	if objectKey == "" {
-		objectKey = fmt.Sprintf("%s/%s/%s", principal.TenantID, taskID, req.GetFileName())
+		objectKey = fmt.Sprintf("%s/%s/%s/%s", principal.TenantID, kbID, taskID, req.GetFileName())
 	}
 
 	contentHash := req.GetContentHash()
@@ -89,7 +102,7 @@ func (s *Service) UploadFile(ctx context.Context, req *pb.UploadFileRequest) (*p
 		TenantID:    principal.TenantID,
 		State:       state.Pending,
 		ContentHash: contentHash,
-		Metadata:    req.GetMetadata(),
+		Metadata:    metadata,
 	})
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
@@ -115,7 +128,7 @@ func (s *Service) UploadFile(ctx context.Context, req *pb.UploadFileRequest) (*p
 		FileType:  req.GetFileType(),
 		FileName:  req.GetFileName(),
 		ObjectKey: objectKey,
-		Metadata:  req.GetMetadata(),
+		Metadata:  metadata,
 	})
 	if err := s.pub.Publish(ctx, queue.Message{
 		Topic:   s.topicUploaded,
@@ -130,7 +143,7 @@ func (s *Service) UploadFile(ctx context.Context, req *pb.UploadFileRequest) (*p
 		return nil, status.Error(codes.Unavailable, "enqueue task: "+err.Error())
 	}
 
-	s.logger.Info("upload registered", "task_id", task.ID, "tenant", task.TenantID, "file", req.GetFileName())
+	s.logger.Info("upload registered", "task_id", task.ID, "tenant", task.TenantID, "kb_id", kbID, "file", req.GetFileName())
 	return &pb.UploadFileResponse{
 		TaskId:  task.ID,
 		Status:  string(task.State),
@@ -139,10 +152,16 @@ func (s *Service) UploadFile(ctx context.Context, req *pb.UploadFileRequest) (*p
 	}, nil
 }
 
-// loadOwnedTask fetches a task and enforces tenant ownership. Missing tasks
-// and tasks belonging to another tenant both surface as NotFound so task
-// existence is never leaked across tenants.
-func (s *Service) loadOwnedTask(ctx context.Context, id string) (state.Task, error) {
+func taskKnowledgeBaseID(task state.Task) string {
+	if id := strings.TrimSpace(task.Metadata["kb_id"]); id != "" {
+		return id
+	}
+	return "default"
+}
+
+// loadOwnedTask enforces tenant and knowledge-base ownership. Missing and
+// out-of-scope tasks both surface as NotFound to avoid leaking their existence.
+func (s *Service) loadOwnedTask(ctx context.Context, id, kbID string) (state.Task, error) {
 	principal := tenant.FromIncoming(ctx)
 	task, ok, err := s.machine.Get(ctx, id)
 	if err != nil {
@@ -151,11 +170,14 @@ func (s *Service) loadOwnedTask(ctx context.Context, id string) (state.Task, err
 	if !ok || task.TenantID != principal.TenantID {
 		return state.Task{}, status.Error(codes.NotFound, "task not found")
 	}
+	if kbID != "" && taskKnowledgeBaseID(task) != kbID {
+		return state.Task{}, status.Error(codes.NotFound, "task not found")
+	}
 	return task, nil
 }
 
 func (s *Service) GetTaskStatus(ctx context.Context, req *pb.GetTaskStatusRequest) (*pb.GetTaskStatusResponse, error) {
-	task, err := s.loadOwnedTask(ctx, req.GetTaskId())
+	task, err := s.loadOwnedTask(ctx, req.GetTaskId(), req.GetKbId())
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +206,7 @@ func toTaskStatus(t state.Task) *pb.GetTaskStatusResponse {
 		FileSize:    fileSize,
 		CreatedAt:   t.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:   t.UpdatedAt.Format(time.RFC3339),
+		KbId:        taskKnowledgeBaseID(t),
 	}
 }
 
@@ -191,7 +214,7 @@ func toTaskStatus(t state.Task) *pb.GetTaskStatusResponse {
 // Index entries are left in place (see known limitation); deleting a task does
 // not guarantee its chunks disappear from search results immediately.
 func (s *Service) DeleteTask(ctx context.Context, req *pb.DeleteTaskRequest) (*pb.DeleteTaskResponse, error) {
-	task, err := s.loadOwnedTask(ctx, req.GetTaskId())
+	task, err := s.loadOwnedTask(ctx, req.GetTaskId(), req.GetKbId())
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +236,7 @@ func (s *Service) DeleteTask(ctx context.Context, req *pb.DeleteTaskRequest) (*p
 // RetryTask re-enqueues a FAILED task by rolling it back to PENDING and
 // re-publishing the original upload event. Only FAILED tasks are retryable.
 func (s *Service) RetryTask(ctx context.Context, req *pb.RetryTaskRequest) (*pb.RetryTaskResponse, error) {
-	task, err := s.loadOwnedTask(ctx, req.GetTaskId())
+	task, err := s.loadOwnedTask(ctx, req.GetTaskId(), req.GetKbId())
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +290,32 @@ func (s *Service) ListTasks(ctx context.Context, req *pb.ListTasksRequest) (*pb.
 	if offset < 0 {
 		offset = 0
 	}
-	tasks, total, err := s.machine.List(ctx, principal.TenantID, req.GetStatus(), limit, offset)
+	var tasks []state.Task
+	var total int
+	var err error
+	if req.GetKbId() == "" {
+		tasks, total, err = s.machine.List(ctx, principal.TenantID, req.GetStatus(), limit, offset)
+	} else {
+		var all []state.Task
+		all, _, err = s.machine.List(ctx, principal.TenantID, req.GetStatus(), 0, 0)
+		if err == nil {
+			filtered := make([]state.Task, 0, len(all))
+			for _, task := range all {
+				if taskKnowledgeBaseID(task) == req.GetKbId() {
+					filtered = append(filtered, task)
+				}
+			}
+			total = len(filtered)
+			if offset > total {
+				offset = total
+			}
+			end := offset + limit
+			if limit <= 0 || end > total {
+				end = total
+			}
+			tasks = filtered[offset:end]
+		}
+	}
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -295,5 +343,6 @@ func toTaskSummary(t state.Task) *pb.TaskSummary {
 		ErrorMsg:    t.ErrorMsg,
 		CreatedAt:   t.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:   t.UpdatedAt.Format(time.RFC3339),
+		KbId:        taskKnowledgeBaseID(t),
 	}
 }

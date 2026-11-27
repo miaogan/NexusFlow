@@ -170,6 +170,16 @@ func (g *Gateway) readChatBody(c *gin.Context) ([]byte, bool) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "message is required"})
 		return nil, false
 	}
+	kbID, ok := g.resolveKnowledgeBase(c, req.KBID)
+	if !ok {
+		return nil, false
+	}
+	req.KBID = kbID
+	body, err = json.Marshal(req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "encode chat request: " + err.Error()})
+		return nil, false
+	}
 	return body, true
 }
 

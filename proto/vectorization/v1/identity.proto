@@ -14,6 +14,14 @@ service AuthService {
 }
 
 // ========== 用户与 RBAC 服务：用户 CRUD + 角色/权限管理 ==========
+service KnowledgeBaseService {
+  rpc CreateKnowledgeBase(CreateKnowledgeBaseRequest) returns (KnowledgeBaseResponse);
+  rpc GetKnowledgeBase(GetKnowledgeBaseRequest) returns (KnowledgeBaseResponse);
+  rpc ListKnowledgeBases(ListKnowledgeBasesRequest) returns (ListKnowledgeBasesResponse);
+  rpc UpdateKnowledgeBase(UpdateKnowledgeBaseRequest) returns (KnowledgeBaseResponse);
+  rpc DeleteKnowledgeBase(DeleteKnowledgeBaseRequest) returns (DeleteKnowledgeBaseResponse);
+}
+
 service UserService {
   rpc CreateUser(CreateUserRequest) returns (UserResponse);
   rpc GetUser(GetUserRequest) returns (UserResponse);
@@ -57,6 +65,50 @@ message RoleInfo {
 message PermissionInfo {
   string key = 1;
   string description = 2;
+}
+
+// ---------- Knowledge bases ----------
+
+message KnowledgeBaseInfo {
+  string id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  string description = 4;
+  string created_at = 5;
+  string updated_at = 6;
+}
+
+message CreateKnowledgeBaseRequest {
+  string name = 1;
+  string description = 2;
+}
+
+message GetKnowledgeBaseRequest {
+  string id = 1;
+}
+
+message ListKnowledgeBasesRequest {}
+
+message UpdateKnowledgeBaseRequest {
+  string id = 1;
+  string name = 2;          // 空表示不改
+  string description = 3;
+}
+
+message DeleteKnowledgeBaseRequest {
+  string id = 1;
+}
+
+message KnowledgeBaseResponse {
+  KnowledgeBaseInfo knowledge_base = 1;
+}
+
+message ListKnowledgeBasesResponse {
+  repeated KnowledgeBaseInfo knowledge_bases = 1;
+}
+
+message DeleteKnowledgeBaseResponse {
+  bool success = 1;
 }
 
 // ---------- Auth ----------

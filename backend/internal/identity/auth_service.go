@@ -246,8 +246,14 @@ func toStatus(err error) error {
 		return status.Error(codes.NotFound, err.Error())
 	case errors.Is(err, ErrBuiltinRole):
 		return status.Error(codes.FailedPrecondition, err.Error())
-	case errors.Is(err, ErrInvalidCreds):
+	case errors.Is(err, ErrInvalidCreds), errors.Is(err, ErrKnowledgeBaseName):
 		return status.Error(codes.InvalidArgument, err.Error())
+	case errors.Is(err, ErrKnowledgeBaseNotFound):
+		return status.Error(codes.NotFound, err.Error())
+	case errors.Is(err, ErrKnowledgeBaseExists):
+		return status.Error(codes.AlreadyExists, err.Error())
+	case errors.Is(err, ErrDefaultKnowledgeBase):
+		return status.Error(codes.FailedPrecondition, err.Error())
 	default:
 		return status.Error(codes.Internal, err.Error())
 	}

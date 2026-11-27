@@ -27,6 +27,12 @@ type Store interface {
 	GetRole(ctx context.Context, name string) (Role, bool, error)
 	UpsertRole(ctx context.Context, r Role) (Role, error)
 	DeleteRole(ctx context.Context, name string) error
+
+	CreateKnowledgeBase(ctx context.Context, kb KnowledgeBase) (KnowledgeBase, error)
+	GetKnowledgeBase(ctx context.Context, tenantID, id string) (KnowledgeBase, bool, error)
+	ListKnowledgeBases(ctx context.Context, tenantID string) ([]KnowledgeBase, error)
+	UpdateKnowledgeBase(ctx context.Context, kb KnowledgeBase) (KnowledgeBase, error)
+	DeleteKnowledgeBase(ctx context.Context, tenantID, id string) error
 }
 
 // SeedOptions configures the startup seed of built-in roles and the first admin.
@@ -39,9 +45,11 @@ type SeedOptions struct {
 // MemoryStore keeps users and roles in process memory.
 type MemoryStore struct {
 	mu        sync.RWMutex
-	users     map[string]*User  // tenantID:id -> user
-	usernames map[string]string // tenantID:username(lower) -> id
-	roles     map[string]*Role  // name -> role
+	users     map[string]*User          // tenantID:id -> user
+	usernames map[string]string         // tenantID:username(lower) -> id
+	roles     map[string]*Role          // name -> role
+	kbs       map[string]*KnowledgeBase // tenantID:id -> knowledge base
+	kbNames   map[string]string         // tenantID:name(lower) -> id
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -49,6 +57,8 @@ func NewMemoryStore() *MemoryStore {
 		users:     make(map[string]*User),
 		usernames: make(map[string]string),
 		roles:     make(map[string]*Role),
+		kbs:       make(map[string]*KnowledgeBase),
+		kbNames:   make(map[string]string),
 	}
 }
 
@@ -72,10 +82,11 @@ func (m *MemoryStore) Seed(opts SeedOptions) error {
 		copied := r
 		m.roles[r.Name] = &copied
 	}
+	tenant := tenantOr(opts.TenantID)
+	m.seedDefaultKnowledgeBaseLocked(tenant)
 	if opts.AdminUsername == "" || opts.AdminPassword == "" {
 		return nil
 	}
-	tenant := tenantOr(opts.TenantID)
 	key := nameKey(tenant, opts.AdminUsername)
 	if _, exists := m.usernames[key]; exists {
 		return nil

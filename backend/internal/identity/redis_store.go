@@ -3,6 +3,7 @@ package identity
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -47,10 +48,13 @@ func (r *RedisStore) Seed(opts SeedOptions) error {
 			return err
 		}
 	}
+	tenant := tenantOr(opts.TenantID)
+	if _, err := r.CreateKnowledgeBase(ctx, defaultKnowledgeBase(tenant)); err != nil && !errors.Is(err, ErrKnowledgeBaseExists) {
+		return err
+	}
 	if opts.AdminUsername == "" || opts.AdminPassword == "" {
 		return nil
 	}
-	tenant := tenantOr(opts.TenantID)
 	exists, err := r.rdb.Exists(ctx, r.nameKey(tenant, opts.AdminUsername)).Result()
 	if err != nil {
 		return err

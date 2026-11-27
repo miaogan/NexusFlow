@@ -82,7 +82,7 @@ type Store interface {
 type Machine struct {
 	mu    sync.RWMutex
 	tasks map[string]*Task
-	byKey map[string]string // tenant:content_hash -> task_id
+	byKey map[string]string // tenant:kb_id:content_hash -> task_id
 }
 
 func NewMachine() *Machine {
@@ -98,9 +98,21 @@ func CanTransition(from, to State) bool {
 	return false
 }
 
-// Create registers a task. When a content hash is provided the (tenant, hash)
-// pair acts as the idempotency key: an existing task is returned instead of
-// creating a duplicate.
+func taskIdempotencyKey(t Task) string {
+	kbID := "default"
+	if value := t.Metadata["kb_id"]; value != "" {
+		kbID = value
+	}
+	if kbID == "default" {
+		// Preserve the pre-KB key format for existing default-namespace data.
+		return t.TenantID + ":" + t.ContentHash
+	}
+	return t.TenantID + ":" + kbID + ":" + t.ContentHash
+}
+
+// Create registers a task. When a content hash is provided the
+// (tenant, knowledge base, hash) tuple acts as the idempotency key: an existing
+// task is returned instead of creating a duplicate.
 func (m *Machine) Create(_ context.Context, t Task) (Task, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -109,7 +121,7 @@ func (m *Machine) Create(_ context.Context, t Task) (Task, bool, error) {
 		return Task{}, false, ErrDuplicateTask
 	}
 	if t.ContentHash != "" {
-		key := t.TenantID + ":" + t.ContentHash
+		key := taskIdempotencyKey(t)
 		if id, ok := m.byKey[key]; ok {
 			return *m.tasks[id], false, nil
 		}
@@ -202,7 +214,7 @@ func (m *Machine) Delete(_ context.Context, id string) error {
 		return ErrTaskNotFound
 	}
 	if t.ContentHash != "" {
-		delete(m.byKey, t.TenantID+":"+t.ContentHash)
+		delete(m.byKey, taskIdempotencyKey(*t))
 	}
 	delete(m.tasks, id)
 	return nil

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
+import { useOutletContext } from "react-router-dom";
 import { deleteTask, getTask, listTasks, retryTask } from "../api/client";
+import type { LayoutContext } from "../components/Layout";
 import type { TaskDetail, TaskSummary } from "../types";
 import {
   Button,
@@ -36,6 +38,7 @@ const STAGES: { label: string; min: number }[] = [
 ];
 
 export default function Tasks() {
+  const { kbID } = useOutletContext<LayoutContext>();
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
   const [loading, setLoading] = useState(false);
@@ -47,13 +50,18 @@ export default function Tasks() {
   const refresh = useCallback(() => {
     setLoading(true);
     setError(null);
-    listTasks(undefined, 200)
+    listTasks(undefined, 200, 0, kbID)
       .then((r) => setTasks(r.tasks))
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [kbID]);
 
-  useEffect(refresh, [refresh]);
+  useEffect(() => {
+    setTasks([]);
+    setSelected(null);
+    setSelectedId(null);
+    refresh();
+  }, [refresh]);
 
   // Poll while any task is still in-flight.
   useEffect(() => {
@@ -66,11 +74,11 @@ export default function Tasks() {
   useEffect(() => {
     if (!selectedId) return;
     let alive = true;
-    getTask(selectedId)
+    getTask(selectedId, kbID)
       .then((d) => alive && setSelected(d))
       .catch(() => alive && setSelected(null));
     return () => { alive = false; };
-  }, [selectedId, tasks]);
+  }, [selectedId, tasks, kbID]);
 
   const filtered = tasks.filter((t) => {
     if (filter === "running") return !TERMINAL.has(t.status);
@@ -85,7 +93,7 @@ export default function Tasks() {
       setBusy(true);
       setError(null);
       try {
-        await deleteTask(id);
+        await deleteTask(id, kbID);
         if (selectedId === id) {
           setSelectedId(null);
           setSelected(null);
@@ -97,7 +105,7 @@ export default function Tasks() {
         setBusy(false);
       }
     },
-    [refresh, selectedId],
+    [refresh, selectedId, kbID],
   );
 
   const handleRetry = useCallback(
@@ -105,7 +113,7 @@ export default function Tasks() {
       setBusy(true);
       setError(null);
       try {
-        await retryTask(id);
+        await retryTask(id, kbID);
         await refresh();
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -113,7 +121,7 @@ export default function Tasks() {
         setBusy(false);
       }
     },
-    [refresh],
+    [refresh, kbID],
   );
 
   return (

@@ -38,6 +38,7 @@ func newIdentityGateway(t *testing.T) *Gateway {
 		Secret: "test-secret", AccessTTL: 5 * time.Minute, RefreshTTL: time.Hour, AllowSelfRegister: true,
 	}, identity.WithRevocationList(blacklist)))
 	pb.RegisterUserServiceServer(srv, identity.NewUserService(store))
+	pb.RegisterKnowledgeBaseServiceServer(srv, identity.NewKnowledgeBaseService(store))
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 
@@ -53,6 +54,7 @@ func newIdentityGateway(t *testing.T) *Gateway {
 
 	return New(nil, nil, nil, nil, log.New("gateway-test"), "test-secret", true,
 		WithIdentity(pb.NewAuthServiceClient(conn), pb.NewUserServiceClient(conn)),
+		WithKnowledgeBases(pb.NewKnowledgeBaseServiceClient(conn)),
 		WithTokenBlacklist(blacklist),
 	)
 }
@@ -160,6 +162,77 @@ func TestIdentityAdminLoginAndUserCRUD(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &roles)
 	if len(roles.Roles) != 3 {
 		t.Errorf("roles = %d, want 3", len(roles.Roles))
+	}
+}
+
+func TestKnowledgeBaseCRUDAndPermissions(t *testing.T) {
+	h := newIdentityGateway(t).Router()
+	admin := loginToken(t, h, "admin", "admin123")
+
+	w := call(t, h, http.MethodGet, "/v1/knowledge-bases", admin, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list default: %d %s", w.Code, w.Body.String())
+	}
+	var list struct {
+		Items []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"knowledge_bases"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil || len(list.Items) != 1 || list.Items[0].ID != identity.DefaultKnowledgeBaseID {
+		t.Fatalf("default list=%+v err=%v", list, err)
+	}
+
+	w = call(t, h, http.MethodPost, "/v1/knowledge-bases", admin, map[string]string{"name": "项目资料", "description": "旧"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	var created struct {
+		KB struct {
+			ID string `json:"id"`
+		} `json:"knowledge_base"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &created)
+	if created.KB.ID == "" {
+		t.Fatal("create returned empty knowledge base id")
+	}
+	w = call(t, h, http.MethodPatch, "/v1/knowledge-bases/"+created.KB.ID, admin, map[string]string{"name": "项目知识库", "description": "新"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("update: %d %s", w.Code, w.Body.String())
+	}
+
+	if w := call(t, h, http.MethodPost, "/v1/auth/register", "", map[string]string{
+		"username": "reader", "password": "reader123",
+	}); w.Code != http.StatusOK {
+		t.Fatalf("register reader: %d %s", w.Code, w.Body.String())
+	}
+	viewer := loginToken(t, h, "reader", "reader123")
+	if w := call(t, h, http.MethodGet, "/v1/knowledge-bases", viewer, nil); w.Code != http.StatusOK {
+		t.Errorf("viewer list = %d, want 200", w.Code)
+	}
+	if w := call(t, h, http.MethodPost, "/v1/knowledge-bases", viewer, map[string]string{"name": "越权库"}); w.Code != http.StatusForbidden {
+		t.Errorf("viewer create = %d, want 403", w.Code)
+	}
+	if w := call(t, h, http.MethodDelete, "/v1/knowledge-bases/default", admin, nil); w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("delete default = %d, want 422", w.Code)
+	}
+	if w := call(t, h, http.MethodDelete, "/v1/knowledge-bases/"+created.KB.ID, admin, nil); w.Code != http.StatusOK {
+		t.Errorf("delete custom = %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestKnowledgeBaseRejectsUnknownNamespace(t *testing.T) {
+	h := newIdentityGateway(t).Router()
+	admin := loginToken(t, h, "admin", "admin123")
+	if w := call(t, h, http.MethodPost, "/v1/search", admin, map[string]any{
+		"query": "test", "kb_id": "missing", "filters": map[string]string{"kb_id": "default"},
+	}); w.Code != http.StatusNotFound {
+		t.Errorf("search unknown KB = %d body=%s, want 404", w.Code, w.Body.String())
+	}
+	if w := call(t, h, http.MethodPost, "/v1/files", admin, map[string]any{
+		"file_name": "a.txt", "file_type": "txt", "kb_id": "missing",
+	}); w.Code != http.StatusNotFound {
+		t.Errorf("upload unknown KB = %d body=%s, want 404", w.Code, w.Body.String())
 	}
 }
 

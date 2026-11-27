@@ -65,6 +65,7 @@ export interface TaskSummary {
   file_size: number;
   content_hash?: string;
   error_msg?: string;
+  kb_id?: string;
   created_at?: string;
   updated_at?: string;
 }
@@ -84,6 +85,7 @@ export interface TaskDetail {
   file_name?: string;
   file_type?: string;
   file_size?: number;
+  kb_id?: string;
   created_at?: string;
   updated_at?: string;
 }
@@ -260,6 +262,15 @@ export interface PermissionInfo {
 export interface UserListResponse {
   users: AuthUser[];
   total: number;
+}
+
+export interface KnowledgeBase {
+  id: string;
+  tenant_id: string;
+  name: string;
+  description: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface JwtClaims {

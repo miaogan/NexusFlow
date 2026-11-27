@@ -288,5 +288,40 @@ func TestUploadFile_RollsBackOnPublishFailure(t *testing.T) {
 	}
 }
 
+func TestUploadAndTaskAccessAreKnowledgeBaseScoped(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	ctx := ctxWithTenant("default")
+	first, err := svc.UploadFile(ctx, &pb.UploadFileRequest{
+		FileName: "same.txt", FileType: "txt", ContentHash: "same-hash", KbId: "kb1",
+	})
+	if err != nil || !first.GetCreated() {
+		t.Fatalf("first upload: resp=%+v err=%v", first, err)
+	}
+	second, err := svc.UploadFile(ctx, &pb.UploadFileRequest{
+		FileName: "same.txt", FileType: "txt", ContentHash: "same-hash", KbId: "kb2",
+	})
+	if err != nil || !second.GetCreated() || second.GetTaskId() == first.GetTaskId() {
+		t.Fatalf("different KB must not deduplicate: resp=%+v err=%v", second, err)
+	}
+	duplicate, err := svc.UploadFile(ctx, &pb.UploadFileRequest{
+		FileName: "same.txt", FileType: "txt", ContentHash: "same-hash", KbId: "kb1",
+	})
+	if err != nil || duplicate.GetCreated() || duplicate.GetTaskId() != first.GetTaskId() {
+		t.Fatalf("same KB must deduplicate: resp=%+v err=%v", duplicate, err)
+	}
+
+	list, err := svc.ListTasks(ctx, &pb.ListTasksRequest{KbId: "kb1"})
+	if err != nil || list.GetTotal() != 1 || len(list.GetTasks()) != 1 || list.GetTasks()[0].GetKbId() != "kb1" {
+		t.Fatalf("KB-filtered list=%+v err=%v", list, err)
+	}
+	if _, err := svc.GetTaskStatus(ctx, &pb.GetTaskStatusRequest{TaskId: second.GetTaskId(), KbId: "kb1"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("cross-KB task access code=%v, want NotFound", status.Code(err))
+	}
+	statusResp, err := svc.GetTaskStatus(ctx, &pb.GetTaskStatusRequest{TaskId: second.GetTaskId(), KbId: "kb2"})
+	if err != nil || statusResp.GetKbId() != "kb2" || statusResp.GetMetadata()["kb_id"] != "kb2" {
+		t.Fatalf("owned task status=%+v err=%v", statusResp, err)
+	}
+}
+
 // Ensure the fake object store satisfies the interface at compile time.
 var _ store.ObjectStore = (*fakeObjectStore)(nil)

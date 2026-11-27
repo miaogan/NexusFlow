@@ -21,6 +21,7 @@ message UploadFileRequest {
   map<string, string> metadata = 5;
   string object_key = 6;    // 已落地的对象存储 key（gateway 直传时填写）
   string content_hash = 7;  // 文件内容 sha256，作为幂等键
+  string kb_id = 8;         // 知识库 ID，空值由入口规范化为 default
 }
 
 message TaskSummary {
@@ -34,12 +35,14 @@ message TaskSummary {
   string error_msg = 8;
   string created_at = 9;
   string updated_at = 10;
+  string kb_id = 11;
 }
 
 message ListTasksRequest {
   string status = 1;  // 空表示全部
   int32 limit = 2;
   int32 offset = 3;
+  string kb_id = 4;  // 非空时仅返回该知识库任务
 }
 
 message ListTasksResponse {
@@ -58,6 +61,7 @@ message UploadFileResponse {
 
 message GetTaskStatusRequest {
   string task_id = 1;
+  string kb_id = 2;
 }
 
 message GetTaskStatusResponse {
@@ -72,10 +76,12 @@ message GetTaskStatusResponse {
   int64 file_size = 9;
   string created_at = 10;
   string updated_at = 11;
+  string kb_id = 12;
 }
 
 message DeleteTaskRequest {
   string task_id = 1;
+  string kb_id = 2;
 }
 
 message DeleteTaskResponse {
@@ -84,6 +90,7 @@ message DeleteTaskResponse {
 
 message RetryTaskRequest {
   string task_id = 1;
+  string kb_id = 2;
 }
 
 message RetryTaskResponse {
