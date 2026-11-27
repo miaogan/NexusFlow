@@ -94,6 +94,7 @@ V4.0 在接入层进一步拆出 Auth Service 与 User Service：JWT 的签发�
 | Ingestion Service | Go | 接收上传，写对象存储与元数据，投递任务 | I/O 密集 |
 | Processing Worker | Go | 消费任务，调用 MinerU 解析，产出 Markdown | I/O+等待，异步解析 |
 | LlamaIndex Service | Python | 语义/层级切块、索引构建、调用 Embedding API 并写向量库 | CPU+网络，可水平扩展 |
+| Query Service | Go | 多路召回并行编排、RRF 融合、Cross-Encoder 重排与问答入口 | I/O+网络，无状态，可水平扩展 |
 | Sandbox Execution Service | Go | 经 OpenSandbox 执行自定义代码节点 | 隔离执行，短时生命周期 |
 
 说明：将切块与向量化下沉到 LlamaIndex（Python）服务，是 V2.0 最重要的架构调整。它避免了用 Go 从零复刻语义切块与高级索引策略，直接复用 LlamaIndex 成熟的 Node Parser、Ingestion Pipeline 与向量库集成，同时保持了 Go 侧的轻量与高并发。
@@ -137,9 +138,13 @@ PENDING -> FETCHED -> PARSING -> PARSED
    -> CHUNKED (LlamaIndex 切块) -> EMBEDDED (LlamaIndex 调用 API)
    -> INDEXED -> COMPLETED
                                      \-> FAILED (重试耗尽进 DLQ)
+
+原地重建：COMPLETED -> REINDEXING -> CHUNKED -> ... -> COMPLETED
 ```
 
 自定义代码节点在执行上下文中引入独立的运行态：SANDBOX_CREATING -> SANDBOX_RUNNING -> SANDBOX_DONE，并在沙箱销毁后并入主状态机。
+
+重建索引（Reindex）复用解析阶段持久化的 Markdown，不重新调用 MinerU；分片使用确定性 UUID，先写入新点再删除旧点，检索侧无空窗。级联删除按 `DELETE /v1/files/{id}` 依次清理检索索引、对象存储与任务记录，索引清理失败时保留任务以便重试。
 
 幂等性约束：消费端以 task_id 结合 content_hash 作为幂等键，防止消息重复投递导致重复调用 MinerU、LlamaIndex 或 Embedding API，避免资源浪费与脏数据。
 
@@ -610,7 +615,7 @@ message FeedbackEvent {
 | 阈值门禁 | 已实现 | `eval/thresholds.json` + `make eval-rag`，低于阈值退出码 1 |
 | 低分归因 / 回归集导出 | 已实现 | `eval/analyze_feedback.py`：五类归因 + `eval/regressions.jsonl` |
 | RAGAS / LLM-as-judge | 已接入（需 LLM Key） | `eval/judge.py`：faithfulness / relevancy / completeness |
-| 在线降权 / 灰度回灌 | 规划中 | P3 |
+| 在线降权 / 灰度回灌 | 已实现 | 检索 `FeedbackPenalty`（累计负反馈降权）；`GET /v1/corrected-answers` 供 rag-agent 检索前置回灌 |
 
 ## 15. 多租户与权限治理
 
@@ -624,7 +629,9 @@ message FeedbackEvent {
 
 网关层解析 JWT 提取 tenant_id 与权限点，注入下游请求上下文（gRPC metadata `x-tenant-id` / `x-user-id` / `x-roles` / `x-permissions`）随任务全程透传；路由级 `RequirePermission` 中间件据此零回调判定鉴权，并基于 tenant_id 实施 API 限流与配额，形成"一次鉴权、全链携带"的闭环。
 
-权限模型为固定权限点目录（`user:read`、`file:write`、`sandbox:execute`、`trace:read` 等 14 个 + 通配 `*`）与角色组合：内置 `admin`（全量）、`editor`（内容读写 + 检索/沙箱/工作流）、`viewer`（只读），并支持自定义角色自由组合权限点；内置角色不可修改删除。
+权限模型为固定权限点目录（`user:read`、`file:write`、`kb:read`、`kb:write`、`usage:read`、`sandbox:execute`、`trace:read` 等 17 个 + 通配 `*`）与角色组合：内置 `admin`（全量）、`editor`（内容与知识库读写 + 检索/沙箱/工作流）、`viewer`（只读），并支持自定义角色自由组合权限点；内置角色不可修改删除。
+
+在全局角色之外，系统还提供知识库级 RBAC：`kb_permissions` 按 `kb_id` 将用户或角色绑定到 `kb:admin` / `kb:editor` / `kb:viewer`。解析优先级为「显式用户绑定 > 角色绑定 > 租户 admin > default 库成员默认 viewer」，未绑定且非 default 的知识库对调用者不可见；网关在文件上传/删除/重建、检索问答与知识库管理入口按该角色校验。
 
 ### 15.2 ACL 元数据绑定与前置过滤
 

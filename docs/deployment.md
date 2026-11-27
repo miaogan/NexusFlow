@@ -19,6 +19,7 @@
 1. 修改 ConfigMap `app-config`：
    - `REDIS_ADDR`、`QUEUE_URL`、`OBJECT_STORE_BASE`、`OPENSANDBOX_URL` 指向实际服务。
    - `IDENTITY_DRIVER=redis`、`METERING_DRIVER=redis`：身份与计量在副本间共享，必须使用同一 Redis。
+   - 若改用 `IDENTITY_DRIVER=postgres`（`IDENTITY_DATABASE_URL`），服务启动时会在 advisory lock 下自动创建 `identity_users` / `identity_roles` / `knowledge_bases` / `kb_permissions`，并把旧 `identity_knowledge_bases` 幂等迁入；多副本并发启动安全。表结构与 `docs/schema_enterprise_v1_1_to_1_5.sql` 对齐。
    - `LLAMAINDEX_URL`：开启切块/索引与删除级联清理；未配置时删除只清理对象与任务记录。
    - `QUOTA_MAX_STORAGE_BYTES` / `QUOTA_MAX_FILES` / `QUOTA_MAX_QUERIES`：租户配额，`0` 表示不限。
 2. 修改 Secret `app-secret`：`JWT_SECRET`、`OPENSANDBOX_TOKEN`、`LLAMAINDEX_EMBEDDING_API_KEY`、`RAG_LLM_BASE_URL`、`RAG_LLM_API_KEY`。生产环境建议改用 SealedSecret / ExternalSecret 管理。
@@ -29,7 +30,7 @@
 
 | PVC | 挂载点 | 使用方 | 说明 |
 | --- | --- | --- | --- |
-| `object-store` | `/data/objects` | gateway / ingestion / processing-worker | 上传落地、级联删除、解析回读需共享同一份数据 |
+| `object-store` | `/data/objects` | gateway / ingestion / processing-worker | 上传落地、级联删除、解析回读与重建索引需共享同一份数据；解析产物落盘为 `tenant/kb/parsed/<task>.md` |
 | `sandbox-work` | `/data/sandboxes` | sandbox-execution | 沙箱工作目录 |
 
 ```bash
@@ -84,7 +85,7 @@ kubectl -n nexusflow describe hpa processing-worker
 
 ## 6. 容量与配额
 
-`GET /v1/usage` 返回租户存储、文件数、检索/问答次数、按知识库拆分以及配额余量；控制台概览页直接展示三张用量卡片。上传或检索超过配额时 Gateway 返回 `429` 并携带当前用量。
+`GET /v1/usage`（需 `usage:read`）返回租户存储、文件数、检索/问答次数、按知识库拆分以及配额余量；控制台概览页直接展示三张用量卡片。上传或检索超过配额时 Gateway 返回 `429` 并携带当前用量。
 
 计量与身份一样依赖 Redis，多副本部署时请勿使用内存驱动；Redis 不可用时计量记录会退化为 fail-open（不阻断业务），但配额拦截将失效。
 
@@ -98,6 +99,21 @@ kubectl -n nexusflow describe hpa processing-worker
 4. 回退租户存储计量。
 
 索引清理失败时接口返回 `503` 且保留任务记录，便于重试，避免「任务已删但向量残留」。未配置 `LLAMAINDEX_URL` 时跳过第 1 步。
+
+### 7.1 重建索引（Reindex）
+
+`POST /v1/files/{task_id}/reindex?kb_id=...` 在不重新解析的前提下原地重建该文档索引，鉴权为 `task:write` 且当前知识库角色不低于 `kb:editor`。
+
+**前提**：任务处于 `COMPLETED`，且 metadata 中存在 `markdown_key`——解析完成后 Markdown 会持久化为 `tenant/kb/parsed/<task>.md`，因此 `processing-worker` 与 gateway 必须挂载同一 `object-store` PVC。升级前上传的历史文档没有该产物，重建会返回 `400`，需重新上传后再重建（重新上传会补齐 `markdown_key`）。
+
+**执行过程**：
+
+1. 任务状态切到 `REINDEXING`，从对象存储读取已持久化的 Markdown；
+2. 调用 LlamaIndex `/v1/index` 重新切块、Embedding，分片 ID 使用 `task_id + 序号 + 内容摘要` 的确定性 UUIDv5；
+3. 新向量点全部写入成功后再删除旧点，检索侧无空窗；
+4. 成功后回到 `COMPLETED`。
+
+失败时状态回滚为 `COMPLETED`，旧索引保持可用，可直接重试，无需重新上传。级联删除会同时清理 `parsed/` 下的解析产物，请勿单独清理该目录，否则重建将不可用。
 
 ## 8. 沙箱后端（OpenSandbox）
 
@@ -193,5 +209,6 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 ## 9. 回滚与升级
 
 - 滚动升级：逐个更新 `image` 标签后 `kubectl apply`，Deployment 默认使用 RollingUpdate。
-- 数据库/模式：身份表在服务启动时以 advisory lock 自动迁移；多副本并发启动是安全的。
+- 数据库/模式：身份表（含 `knowledge_bases` / `kb_permissions` 与旧表迁移）在服务启动时以 advisory lock 自动迁移；多副本并发启动是安全的。
+- 从 v1.1.0 之前升级：历史任务没有 `markdown_key`，重建索引会返回 `400`，需重新上传文件；既有向量与检索不受影响。
 - 回滚：`kubectl -n nexusflow rollout undo deploy/<name>`。PVC 中的数据不会随回滚删除。

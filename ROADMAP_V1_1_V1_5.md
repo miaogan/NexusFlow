@@ -10,8 +10,8 @@
 ## Milestone 1: 知识库生命周期管理与精细化权限（v1.1.0）
 
 * **[x] Task 1.1: 实现 kb_id 维度的独立生命周期与多维度 RBAC 权限隔离（kb:admin / kb:editor / kb:viewer），改造网关鉴权与前端切换器**
-  * 现状：基础版 `kb_id` 隔离与知识库 CRUD 已交付（c880e64），当前仅有 `kb:read` / `kb:write` 两档权限。
-  * 增量目标：引入三级知识库角色，按 kb_id 维度授权（用户在不同知识库可拥有不同角色），网关与检索入口按角色校验，前端切换器展示当前角色并限制操作。
+  * 历史现状：基础版 `kb_id` 隔离与知识库 CRUD 已交付（c880e64），此前仅有 `kb:read` / `kb:write` 两档权限。
+  * 交付情况：已新增 `knowledge_bases` / `kb_permissions`（旧 `identity_knowledge_bases` 自动迁移），支持按 `kb_id` 授予 `kb:admin` / `kb:editor` / `kb:viewer` 并按用户或角色绑定；网关在文件上传/删除/重建、检索问答与知识库管理入口按角色校验，前端切换器展示当前库角色并限制操作。
 
 * **[x] Task 1.2: 文档全生命周期治理，支持分布式级联物理删除（Qdrant 向量点、LightRAG 子图、对象存储源文件）及无感重新索引（Reindex）**
   * 现状：级联删除已交付（44b9284），覆盖 Qdrant 分片、图谱缓存失效与对象文件清理；Reindex 已交付：解析产物持久化、REINDEXING 状态、稳定分片 ID 与先写后清理。

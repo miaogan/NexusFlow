@@ -7,11 +7,13 @@
 --   2. 严格遵循幂等性 (IF NOT EXISTS)，支持服务启动时自动迁移执行
 --   3. 敏感凭据字段 (_encrypted / _hash) 严禁明文存储
 --
--- 与当前实现的衔接（落地前必须确认，避免双表/双写）:
---   * 现有 identity 包使用的是 identity_knowledge_bases(tenant_id, id) 主键表；
---     本草案的 knowledge_bases 为企业版目标模型，落地时应二选一，并提供数据迁移脚本。
---   * 租户配额目前由 Redis 计量（internal/metering），tenant_quotas 是持久化配额的
---     草案表；落地时需明确 Postgres 与 Redis 的主从关系，避免计数漂移。
+-- 与当前实现的衔接:
+--   * knowledge_bases / kb_permissions 已落地：identity 包启动时以 advisory lock 幂等建表，
+--     并将旧 identity_knowledge_bases 数据一次性迁入 knowledge_bases（旧表仅保留读取兼容）。
+--   * 租户配额目前仍由 internal/metering 在 Redis / 内存中计量，tenant_quotas 是目标持久化
+--     模型，尚未落地；接入时需明确 Postgres 与 Redis 的主从关系，避免计数漂移。
+--   * Milestone 2 及之后的表（data_connectors、document_media_assets 等）仍为规划草案，
+--     代码中尚未建表。
 --   * 所有状态/枚举字段以字符串存储，应用层常量必须与本文件的取值保持一致。
 --   * audit_logs 在生产环境建议按月分区（本文件只保留基表定义）。
 -- ============================================================================

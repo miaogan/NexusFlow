@@ -54,13 +54,13 @@ flowchart TB
 | Intent Agent | Python | `services/intent-agent` | 8002 | 独立意图识别服务（Supervisor 第一步），LLM + 规则降级 |
 | Summary Agent | Python | `services/summary-agent` | 8003 | 上下文总结 / 自动压缩（滚动摘要 + 预算裁剪），LLM + 抽取式降级 |
 | Memory Agent | Python | `services/memory-agent` | 8004 | 长期记忆抽取、去重合并、召回；规则 + LLM、词面 + embedding 降级 |
-| Web Console | React | `web` | 5173 / 8088 | 控制台：文件管理 / 任务中心 / 检索 / 沙箱 / DAG 编排 |
+| Web Console | React | `web` | 5173 / 8088 | 控制台：知识库切换与授权 / 文件 / 任务 / 检索 / 问答 / 沙箱 / DAG |
 
 ```text
 .
 ├── proto/vectorization/v1/        # Protobuf 契约（跨语言唯一事实来源）
 ├── backend/
-│   ├── cmd/                       # 7 个可执行入口（含单进程 dev-all）
+│   ├── cmd/                       # 9 个可执行入口（含单进程 dev-all）
 │   ├── internal/
 │   │   ├── gateway/               # 鉴权、限流、HTTP 路由
 │   │   ├── workflow/              # DAG 校验、拓扑调度、节点注册
@@ -68,6 +68,8 @@ flowchart TB
 │   │   ├── processing/            # MinerU 解析 Worker
 │   │   ├── sandbox/               # Local / OpenSandbox 双后端
 │   │   ├── query/                 # 召回、RRF、Rerank
+│   │   ├── identity/              # 用户/角色、知识库与 kb 级权限
+│   │   ├── metering/              # 租户用量计量与配额（memory / Redis）
 │   │   ├── state/                 # 状态机（memory / Redis）
 │   │   ├── queue/                 # 消息总线（memory / RabbitMQ）
 │   │   └── platform/              # 日志、指标、HTTP/gRPC 服务封装
@@ -81,8 +83,11 @@ flowchart TB
 ├── deploy/
 │   ├── docker-compose.yml         # 完整本地编排
 │   ├── k8s/nexusflow.yaml         # K8s 部署 + HPA 自定义指标
+│   ├── opensandbox/               # OpenSandbox server（Docker 模式）示例配置
 │   └── prometheus/                # 指标抓取配置
 ├── docs/architecture.md           # 架构设计文档（V4.0）
+├── docs/deployment.md             # Kubernetes 生产部署指南
+├── docs/schema_enterprise_v1_1_to_1_5.sql  # 企业版增量 DDL
 └── Makefile
 ```
 
@@ -144,8 +149,8 @@ make web-dev        # http://localhost:5173
 | 页面 | 路径 | 功能 |
 | --- | --- | --- |
 | 登录 / 注册 | `/login` | 账号密码登录、自助注册、匿名浏览 |
-| 概览 | `/` | 任务统计、最近任务、快捷入口 |
-| 文件管理 | `/files` | 拖拽/点击上传文件，查看处理状态 |
+| 概览 | `/` | 任务统计、租户存储/文件/问答配额卡片、最近任务 |
+| 文件管理 | `/files` | 按知识库上传、查看状态、级联删除与重建索引（viewer 只读） |
 | 任务中心 | `/tasks` | 任务列表、状态过滤、自动轮询、详情 |
 | 检索测试 | `/search` | 多路召回检索、赞/踩反馈与链路分解 |
 | 智能问答 | `/chat` | 多轮 RAG 问答、过程节点、检索知识、正文引用一键跳转 |
@@ -153,7 +158,7 @@ make web-dev        # http://localhost:5173
 | 沙箱 Playground | `/sandbox` | 自定义代码执行与输入/输出合约调试 |
 | 工作流编排 | `/workflow` | 拖拽节点、连线、DAG 校验与试运行 |
 
-访问控制台会跳转 `/login`：用种子管理员 `admin / admin123` 登录，或自助注册（默认 viewer 角色），也可点"以匿名身份浏览"（需 `ALLOW_ANONYMOUS=true`）。登录后右上角显示当前身份与登出按钮，拥有 `user:read` 的用户可见"用户管理"入口。
+访问控制台会跳转 `/login`：用种子管理员 `admin / admin123` 登录，或自助注册（默认 viewer 角色），也可点"以匿名身份浏览"（需 `ALLOW_ANONYMOUS=true`）。登录后右上角显示当前身份、知识库切换器与当前库角色（管理员/编辑者/只读），拥有 `user:read` 的用户可见"用户管理"入口；知识库管理员可在"管理"弹窗中改名、删除与授权成员。
 
 ### 3. 完整容器编排
 
@@ -226,10 +231,13 @@ python scripts/smoke_test.py --require-mineru
 PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED → COMPLETED
                                    ↘ FAILED（重试耗尽进 DLQ）
 
+原地重建：COMPLETED → REINDEXING → CHUNKED → EMBEDDED → INDEXED → COMPLETED
 自定义节点：SANDBOX_CREATING → SANDBOX_RUNNING → SANDBOX_DONE → 并入主链路
 ```
 
-消费端以 `task_id + content_hash` 为幂等键，避免重复解析与重复向量化。`processing-worker` 在解析完成后消费 `file.parsed`，通过 LlamaIndex `/v1/index` 完成切块、Embedding 与 Qdrant 写入（未配置 `LLAMAINDEX_URL` 时跳过索引并告警）。
+消费端以 `task_id + content_hash` 为幂等键，避免重复解析与重复向量化。`processing-worker` 在解析完成后消费 `file.parsed`，通过 LlamaIndex `/v1/index` 完成切块、Embedding 与 Qdrant 写入（未配置 `LLAMAINDEX_URL` 时跳过索引并告警），并把解析产物保存为 `tenant/kb/parsed/<task>.md` 作为重建索引的输入。
+
+**文档治理**：`DELETE /v1/files/{id}` 级联清理对象存储、Qdrant 分片与图谱缓存，并回退租户计量；索引清理失败时保留任务记录以便重试。`POST /v1/files/{id}/reindex` 复用已持久化的 Markdown 原地重建：分片使用确定性 UUID 覆盖写，新点写入后再删除旧点，检索侧无空窗；升级前上传的历史文档没有解析产物，需重新上传后才能重建。
 
 **DAG 引擎**（`backend/internal/workflow`）：校验节点类型、引用完整性与环路，按拓扑层级并发执行就绪节点，上游输出写入共享 `ExecutionContext`。
 
@@ -239,7 +247,7 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 
 **Rerank / Embedding 协议**：`RERANK_PROTOCOL=generic|dashscope`。`generic` 为 bge/Cohere 风格 `{model,query,documents,top_n}`；`dashscope` 使用阿里云原生 `{model,input:{query,documents},parameters:{top_n}}` 并以 `RERANK_API_KEY` 作 Bearer 认证，`RERANK_POOL` 限制送排候选数、`RERANK_TIMEOUT` 控制超时；LlamaIndex 侧对应 `LLAMAINDEX_RERANK_*`。Embedding 批次由 `LLAMAINDEX_EMBEDDING_BATCH_SIZE` 控制，`MEMORY_EMBEDDING_DIM` 必须与模型输出维度一致（如 DashScope 1024）。
 
-**沙箱护栏**（`backend/internal/sandbox`）：强制 TTL、`defer` 无条件销毁、输入/输出走约定文件、出口白名单与凭据不落盘。`local` 后端仅用于本机调试，生产必须使用 `remote`（OpenSandbox）。
+**沙箱护栏**（`backend/internal/sandbox`）：强制 TTL、`defer` 无条件销毁、输入/输出走约定文件、出口白名单与凭据不落盘。`local` 后端仅用于本机调试；生产必须使用 `remote`——已接入官方 OpenSandbox Go SDK（创建/等待就绪、execd 执行与文件传输、强制删除），配置方式见 `docs/deployment.md` 第 8 节。
 
 ## 用户与认证（RBAC）
 
@@ -250,17 +258,19 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 
 **令牌模型**：HS256 JWT，claims 携带 `tenant_id` / `user_id` / `roles` / `permissions` / `token_type` / `jti`。access token 默认 15 分钟（`ACCESS_TOKEN_TTL`），refresh token 默认 168 小时（`REFRESH_TOKEN_TTL`）；`token_type` 区分用途，refresh token 不能当 access 用。权限点在登录时由角色展开并写入 token，网关据此本地判定权限，无需每次回调鉴权服务；仅额外查询一次吊销名单以拦截已登出的 `jti`。控制台在 access token 过期（401）时用 refresh token 自动换新并重试原请求，刷新失败则清理登录态并回到 `/login`。
 
-**存储**：`IDENTITY_DRIVER=memory`（默认，dev-all 单进程）、`redis` 或 `postgres`（独立部署时 Auth / User 服务共享同一份用户与角色数据；postgres 使用 `IDENTITY_DATABASE_URL`，启动时自动建 `identity_users` / `identity_roles` 表）。
+**存储**：`IDENTITY_DRIVER=memory`（默认，dev-all 单进程）、`redis` 或 `postgres`（独立部署时 Auth / User 服务共享同一份用户与角色数据；postgres 使用 `IDENTITY_DATABASE_URL`，启动时自动建 `identity_users` / `identity_roles` / `knowledge_bases` / `kb_permissions` 表，并把旧 `identity_knowledge_bases` 幂等迁入）。
 
-**权限模型**：固定权限点目录（`user:read`、`file:write`、`sandbox:execute`、`trace:read` 等 14 个 + 通配 `*`）→ 角色组合 → 用户绑定角色。内置三个角色：
+**权限模型**：固定权限点目录（17 个 + 通配 `*`，含 `kb:read` / `kb:write`、`usage:read`）→ 角色组合 → 用户绑定角色。内置三个角色：
 
 | 角色 | 权限 | 说明 |
 | --- | --- | --- |
 | `admin` | `*` | 全量权限 |
-| `editor` | 文件/任务读写、检索、沙箱、工作流、trace、user:read | 内容编辑者 |
-| `viewer` | 文件/任务只读、检索、trace | 只读访客 |
+| `editor` | 文件/任务读写、知识库读写、检索、沙箱、工作流、trace、user:read、usage:read | 内容编辑者 |
+| `viewer` | 文件/任务与知识库只读、检索、trace、usage:read | 只读访客 |
 
 内置角色不可修改删除；自定义角色可自由组合权限点。
+
+**知识库级权限**：除全局角色外，`kb_permissions` 按知识库授予 `kb:admin` / `kb:editor` / `kb:viewer`。显式用户绑定优先于角色绑定，租户 `admin` 兜底，`default` 知识库对成员默认 viewer；无绑定且非 default 的知识库对该用户不可见。viewer 只能检索与查看，editor 可上传、删除与重建索引，admin 才能改名、删除知识库和授权。表结构见 `docs/schema_enterprise_v1_1_to_1_5.sql`。
 
 **HTTP 端点**（Gateway 暴露）：
 
@@ -275,6 +285,12 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 | GET/POST | `/v1/roles` | `role:read` / `role:write` | 角色列表 / 新建或更新 |
 | DELETE | `/v1/roles/:name` | `role:write` | 删除自定义角色 |
 | GET | `/v1/permissions` | `role:read` | 权限点目录 |
+| GET/POST | `/v1/knowledge-bases` | `kb:read` / `kb:write` | 知识库列表 / 创建 |
+| PATCH/DELETE | `/v1/knowledge-bases/:id` | `kb:read` + 服务端校验 `kb:admin` | 改名 / 删除知识库 |
+| GET/POST/DELETE | `/v1/knowledge-bases/:id/permissions` | `kb:read` + 服务端校验 `kb:admin` | 列出 / 授权 / 撤销 |
+| GET | `/v1/usage` | `usage:read` | 租户用量、配额与余量 |
+| DELETE | `/v1/files/:id` | `file:delete` + `kb:editor` | 级联删除对象、向量与任务 |
+| POST | `/v1/files/:id/reindex` | `task:write` + `kb:editor` | 从已解析内容重建索引 |
 
 首次启动会自动种子管理员：`admin / admin123`（可用 `SEED_ADMIN_*` 覆盖）。控制台 `/login` 登录后，`admin` 可在"用户管理"页创建账号、分配角色、启停用户，并新建自定义角色。未登录可点"以匿名身份浏览"（需 `ALLOW_ANONYMOUS=true`），匿名身份仅有 `search:use`，可使用检索与智能问答，但无任何管理权限。
 
@@ -291,7 +307,7 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 - **流式过程事件**：`/v1/chat/stream` 以 SSE 依次推送 `stage(intent) → intent → stage(retrieve) → sources → stage(generate) → token* → done`；控制台据此渲染「意图 → 检索 → 生成 → 回答」节点、检索知识面板，并支持正文 `[n]` 标记点击跳转到对应来源。非检索意图的「检索」节点显示为跳过。
 - **会话存储**：`RAG_DATABASE_URL` 指向 Postgres 时持久化到 `rag_conversations` / `rag_messages`；为空则使用进程内存储（仅开发）。
 
-本地运行（先启动 dev-all 提供网关与检索，再分别启动两个 Python 服务）：
+本地运行（先启动 dev-all 提供网关与检索，再分别启动四个 Python 服务）：
 
 ```bash
 # 终端 1：Go 全链路（含 Gateway :8080 与查询服务）
@@ -322,7 +338,7 @@ RAG_MEMORY_URL=http://127.0.0.1:8004 \
 uvicorn app.main:app --port 8001
 ```
 
-接入 DeepSeek（OpenAI 兼容，两个服务分别配置）：
+接入 DeepSeek（OpenAI 兼容，各 agent 分别配置）：
 
 ```bash
 RAG_LLM_BASE_URL=https://api.deepseek.com/v1
