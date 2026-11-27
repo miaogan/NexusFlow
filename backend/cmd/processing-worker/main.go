@@ -15,6 +15,7 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/platform/metrics"
 	"github.com/nexusflow/nexusflow/backend/internal/processing"
 	"github.com/nexusflow/nexusflow/backend/internal/state"
+	"github.com/nexusflow/nexusflow/backend/internal/store"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 	"google.golang.org/grpc"
 )
@@ -63,10 +64,19 @@ func main() {
 		client = httpClient
 	}
 
+	objects, objErr := store.NewLocalObjectStore(cfg.ObjectStoreDir, cfg.ObjectStoreBase)
+	if objErr != nil {
+		logger.Warn("object store unavailable, parsed markdown will not be persisted", "error", objErr)
+	}
+	workerOpts := []processing.WorkerOption{}
+	if objErr == nil {
+		workerOpts = append(workerOpts, processing.WithObjectStore(objects))
+	}
 	worker := processing.NewWorker(
 		client, st, b, logger,
 		cfg.ParsePollInterval, 60, cfg.ParseMaxAttempts,
 		cfg.QueueTopicParsed, cfg.QueueTopicDLQ, "processing-worker",
+		workerOpts...,
 	)
 	b.Subscribe(cfg.QueueTopicUploaded, worker.Handle)
 

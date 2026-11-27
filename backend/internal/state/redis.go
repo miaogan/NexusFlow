@@ -209,6 +209,31 @@ func (s *RedisStore) Transition(ctx context.Context, id string, to State, errMsg
 	return Task{}, ErrConflict
 }
 
+// UpdateMetadata merges metadata keys into the task hash.
+func (s *RedisStore) UpdateMetadata(ctx context.Context, id string, patch map[string]string) error {
+	t, ok, err := s.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrTaskNotFound
+	}
+	if t.Metadata == nil {
+		t.Metadata = make(map[string]string, len(patch))
+	}
+	for key, value := range patch {
+		t.Metadata[key] = value
+	}
+	meta, err := json.Marshal(t.Metadata)
+	if err != nil {
+		return err
+	}
+	return s.rdb.HSet(ctx, taskKey(id),
+		"metadata", string(meta),
+		"updated_at", time.Now().Format(time.RFC3339Nano),
+	).Err()
+}
+
 // Delete removes the task hash, its tenant index entry and the idempotency
 // key (when present) so the same content can be uploaded again afterwards.
 func (s *RedisStore) Delete(ctx context.Context, id string) error {

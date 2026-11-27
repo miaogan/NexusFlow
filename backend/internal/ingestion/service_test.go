@@ -410,5 +410,117 @@ func TestDeleteTaskKeepsTaskWhenIndexCleanupFails(t *testing.T) {
 	}
 }
 
+func advanceToCompleted(t *testing.T, m *state.Machine, id string) {
+	t.Helper()
+	for _, to := range []state.State{state.Fetched, state.Parsing, state.Parsed, state.Chunked, state.Embedded, state.Indexed, state.Completed} {
+		if _, err := m.Transition(context.Background(), id, to, ""); err != nil {
+			t.Fatalf("transition %s: %v", to, err)
+		}
+	}
+}
+
+func TestReindexTaskRequeuesPersistedMarkdown(t *testing.T) {
+	m := state.NewMachine()
+	objects := newFakeObjectStore()
+	pub := &fakePublisher{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc := NewService(objects, m, pub, logger, "http://objects", "file.uploaded",
+		WithParsedTopic("file.parsed"))
+
+	meta := map[string]string{
+		"file_name": "a.md", "file_type": "md", "kb_id": "kb1",
+		"markdown_key": "default/kb1/parsed/t1.md", "content_hash": "h1",
+	}
+	seedTask(t, m, "t1", "default", meta)
+	advanceToCompleted(t, m, "t1")
+	if err := objects.Put(context.Background(), meta["markdown_key"],
+		bytes.NewReader([]byte("# parsed content")), 16, "text/markdown"); err != nil {
+		t.Fatalf("seed markdown: %v", err)
+	}
+
+	resp, err := svc.ReindexTask(context.Background(), &pb.ReindexTaskRequest{TaskId: "t1", KbId: "kb1"})
+	if err != nil {
+		t.Fatalf("reindex: %v", err)
+	}
+	if resp.GetStatus() != string(state.Reindexing) {
+		t.Fatalf("status = %q, want REINDEXING", resp.GetStatus())
+	}
+	task, ok, _ := m.Get(context.Background(), "t1")
+	if !ok || task.State != state.Reindexing {
+		t.Fatalf("task state = %v, want REINDEXING", task.State)
+	}
+	if pub.count() != 1 {
+		t.Fatalf("published %d messages, want 1", pub.count())
+	}
+	msg := pub.messages[0]
+	if msg.Topic != "file.parsed" {
+		t.Fatalf("topic = %q, want file.parsed", msg.Topic)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload["markdown"] != "# parsed content" || payload["task_id"] != "t1" {
+		t.Fatalf("payload = %v", payload)
+	}
+}
+
+func TestReindexTaskGuards(t *testing.T) {
+	m := state.NewMachine()
+	objects := newFakeObjectStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc := NewService(objects, m, &fakePublisher{}, logger, "http://objects", "file.uploaded",
+		WithParsedTopic("file.parsed"))
+
+	// Not completed yet.
+	seedTask(t, m, "running", "default", map[string]string{
+		"file_name": "a.md", "kb_id": "kb1", "markdown_key": "k",
+	})
+	if _, err := svc.ReindexTask(context.Background(), &pb.ReindexTaskRequest{TaskId: "running"}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("non-completed code = %v, want FailedPrecondition", status.Code(err))
+	}
+
+	// Completed but the parsed markdown was never persisted.
+	seedTask(t, m, "no-md", "default", map[string]string{"file_name": "b.md", "kb_id": "kb1"})
+	advanceToCompleted(t, m, "no-md")
+	if _, err := svc.ReindexTask(context.Background(), &pb.ReindexTaskRequest{TaskId: "no-md"}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("missing markdown code = %v, want FailedPrecondition", status.Code(err))
+	}
+
+	// Cross-KB access stays hidden.
+	seedTask(t, m, "kb-task", "default", map[string]string{
+		"file_name": "c.md", "kb_id": "kb1", "markdown_key": "default/kb1/parsed/kb-task.md",
+	})
+	advanceToCompleted(t, m, "kb-task")
+	if _, err := svc.ReindexTask(context.Background(), &pb.ReindexTaskRequest{TaskId: "kb-task", KbId: "kb2"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("cross-kb reindex code = %v, want NotFound", status.Code(err))
+	}
+}
+
+func TestReindexTaskRollsBackWhenEnqueueFails(t *testing.T) {
+	m := state.NewMachine()
+	objects := newFakeObjectStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc := NewService(objects, m, failPublisher{err: errors.New("broker down")}, logger,
+		"http://objects", "file.uploaded", WithParsedTopic("file.parsed"))
+
+	key := "default/kb1/parsed/t1.md"
+	seedTask(t, m, "t1", "default", map[string]string{
+		"file_name": "a.md", "kb_id": "kb1", "markdown_key": key,
+	})
+	advanceToCompleted(t, m, "t1")
+	if err := objects.Put(context.Background(), key, bytes.NewReader([]byte("md")), 2, "text/markdown"); err != nil {
+		t.Fatalf("seed markdown: %v", err)
+	}
+
+	if _, err := svc.ReindexTask(context.Background(), &pb.ReindexTaskRequest{TaskId: "t1"}); status.Code(err) != codes.Unavailable {
+		t.Fatalf("enqueue failure code = %v, want Unavailable", status.Code(err))
+	}
+	task, _, _ := m.Get(context.Background(), "t1")
+	if task.State != state.Completed {
+		t.Fatalf("state = %v, want COMPLETED after rollback", task.State)
+	}
+}
+
 // Ensure the fake object store satisfies the interface at compile time.
 var _ store.ObjectStore = (*fakeObjectStore)(nil)

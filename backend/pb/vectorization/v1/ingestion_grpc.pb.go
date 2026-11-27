@@ -24,6 +24,7 @@ const (
 	IngestionService_ListTasks_FullMethodName     = "/vectorization.v1.IngestionService/ListTasks"
 	IngestionService_DeleteTask_FullMethodName    = "/vectorization.v1.IngestionService/DeleteTask"
 	IngestionService_RetryTask_FullMethodName     = "/vectorization.v1.IngestionService/RetryTask"
+	IngestionService_ReindexTask_FullMethodName   = "/vectorization.v1.IngestionService/ReindexTask"
 )
 
 // IngestionServiceClient is the client API for IngestionService service.
@@ -37,6 +38,7 @@ type IngestionServiceClient interface {
 	ListTasks(ctx context.Context, in *ListTasksRequest, opts ...grpc.CallOption) (*ListTasksResponse, error)
 	DeleteTask(ctx context.Context, in *DeleteTaskRequest, opts ...grpc.CallOption) (*DeleteTaskResponse, error)
 	RetryTask(ctx context.Context, in *RetryTaskRequest, opts ...grpc.CallOption) (*RetryTaskResponse, error)
+	ReindexTask(ctx context.Context, in *ReindexTaskRequest, opts ...grpc.CallOption) (*ReindexTaskResponse, error)
 }
 
 type ingestionServiceClient struct {
@@ -97,6 +99,16 @@ func (c *ingestionServiceClient) RetryTask(ctx context.Context, in *RetryTaskReq
 	return out, nil
 }
 
+func (c *ingestionServiceClient) ReindexTask(ctx context.Context, in *ReindexTaskRequest, opts ...grpc.CallOption) (*ReindexTaskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReindexTaskResponse)
+	err := c.cc.Invoke(ctx, IngestionService_ReindexTask_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // IngestionServiceServer is the server API for IngestionService service.
 // All implementations must embed UnimplementedIngestionServiceServer
 // for forward compatibility.
@@ -108,6 +120,7 @@ type IngestionServiceServer interface {
 	ListTasks(context.Context, *ListTasksRequest) (*ListTasksResponse, error)
 	DeleteTask(context.Context, *DeleteTaskRequest) (*DeleteTaskResponse, error)
 	RetryTask(context.Context, *RetryTaskRequest) (*RetryTaskResponse, error)
+	ReindexTask(context.Context, *ReindexTaskRequest) (*ReindexTaskResponse, error)
 	mustEmbedUnimplementedIngestionServiceServer()
 }
 
@@ -132,6 +145,9 @@ func (UnimplementedIngestionServiceServer) DeleteTask(context.Context, *DeleteTa
 }
 func (UnimplementedIngestionServiceServer) RetryTask(context.Context, *RetryTaskRequest) (*RetryTaskResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RetryTask not implemented")
+}
+func (UnimplementedIngestionServiceServer) ReindexTask(context.Context, *ReindexTaskRequest) (*ReindexTaskResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReindexTask not implemented")
 }
 func (UnimplementedIngestionServiceServer) mustEmbedUnimplementedIngestionServiceServer() {}
 func (UnimplementedIngestionServiceServer) testEmbeddedByValue()                          {}
@@ -244,6 +260,24 @@ func _IngestionService_RetryTask_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _IngestionService_ReindexTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReindexTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IngestionServiceServer).ReindexTask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IngestionService_ReindexTask_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IngestionServiceServer).ReindexTask(ctx, req.(*ReindexTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // IngestionService_ServiceDesc is the grpc.ServiceDesc for IngestionService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -270,6 +304,10 @@ var IngestionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RetryTask",
 			Handler:    _IngestionService_RetryTask_Handler,
+		},
+		{
+			MethodName: "ReindexTask",
+			Handler:    _IngestionService_ReindexTask_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/nexusflow/nexusflow/backend/internal/mineru"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/metrics"
 	"github.com/nexusflow/nexusflow/backend/internal/queue"
 	"github.com/nexusflow/nexusflow/backend/internal/state"
+	"github.com/nexusflow/nexusflow/backend/internal/store"
 )
 
 type uploadedEvent struct {
@@ -40,11 +42,23 @@ type Worker struct {
 	topicParsed  string
 	topicDLQ     string
 	serviceName  string
+	// objects persists parsed markdown so Reindex can rebuild the index without
+	// invoking MinerU again. Optional.
+	objects store.ObjectStore
+}
+
+// WorkerOption configures optional Worker collaborators.
+type WorkerOption func(*Worker)
+
+// WithObjectStore enables parsed-markdown persistence.
+func WithObjectStore(objects store.ObjectStore) WorkerOption {
+	return func(w *Worker) { w.objects = objects }
 }
 
 func NewWorker(client mineru.Client, machine state.Store, pub queue.Publisher, logger *slog.Logger,
-	pollInterval time.Duration, maxPolls, maxAttempts int, topicParsed, topicDLQ, serviceName string) *Worker {
-	return &Worker{
+	pollInterval time.Duration, maxPolls, maxAttempts int, topicParsed, topicDLQ, serviceName string,
+	opts ...WorkerOption) *Worker {
+	worker := &Worker{
 		client:       client,
 		machine:      machine,
 		pub:          pub,
@@ -56,6 +70,10 @@ func NewWorker(client mineru.Client, machine state.Store, pub queue.Publisher, l
 		topicDLQ:     topicDLQ,
 		serviceName:  serviceName,
 	}
+	for _, opt := range opts {
+		opt(worker)
+	}
+	return worker
 }
 
 func (w *Worker) Handle(ctx context.Context, msg queue.Message) error {
@@ -121,6 +139,17 @@ func (w *Worker) Handle(ctx context.Context, msg queue.Message) error {
 		return nil
 	}
 
+	// Persist the parsed markdown before publishing. Failure is non-fatal: the
+	// document still indexes from the in-memory event, it just cannot be
+	// re-indexed later without re-parsing.
+	if w.objects != nil {
+		if key, err := w.persistMarkdown(ctx, task, markdown); err != nil {
+			w.logger.Warn("persist parsed markdown failed", "task_id", task.ID, "error", err)
+		} else if err := w.machine.UpdateMetadata(ctx, task.ID, map[string]string{"markdown_key": key}); err != nil {
+			w.logger.Warn("record markdown key failed", "task_id", task.ID, "error", err)
+		}
+	}
+
 	// Publish before flipping state: if publishing fails we return an error and
 	// the message is redelivered. The reverse order would mark the task PARSED
 	// and then drop the event on redelivery (the state==PARSED short-circuit).
@@ -140,4 +169,17 @@ func (w *Worker) Handle(ctx context.Context, msg queue.Message) error {
 
 	w.logger.Info("parse completed", "task_id", task.ID, "markdown_bytes", len(markdown))
 	return nil
+}
+
+// persistMarkdown stores the parsed markdown under tenant/kb/parsed/<task>.md.
+func (w *Worker) persistMarkdown(ctx context.Context, task state.Task, markdown string) (string, error) {
+	kbID := task.Metadata["kb_id"]
+	if kbID == "" {
+		kbID = "default"
+	}
+	key := fmt.Sprintf("%s/%s/parsed/%s.md", task.TenantID, kbID, task.ID)
+	if err := w.objects.Put(ctx, key, strings.NewReader(markdown), int64(len(markdown)), "text/markdown"); err != nil {
+		return "", err
+	}
+	return key, nil
 }

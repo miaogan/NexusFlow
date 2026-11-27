@@ -181,6 +181,8 @@ func (g *Gateway) Router() *gin.Engine {
 	v1.POST("/files", RequirePermission("file:write"), g.uploadFile)
 	// Cascade delete: object storage + retrieval index + task record.
 	v1.DELETE("/files/:id", RequirePermission("file:delete"), g.deleteFile)
+	// In-place index rebuild from the persisted parsed markdown.
+	v1.POST("/files/:id/reindex", RequirePermission("task:write"), g.reindexFile)
 	v1.GET("/tasks", g.listTasks)
 	v1.GET("/tasks/:id", g.getTask)
 	v1.DELETE("/tasks/:id", g.deleteTask)
@@ -572,6 +574,30 @@ func (g *Gateway) deleteTask(c *gin.Context) {
 // is what the console uses when removing an uploaded document.
 func (g *Gateway) deleteFile(c *gin.Context) {
 	g.deleteTask(c)
+}
+
+// reindexFile rebuilds a completed document's index in place without
+// re-parsing the source file.
+func (g *Gateway) reindexFile(c *gin.Context) {
+	kbID, role, ok := g.resolveKnowledgeBase(c, c.Query("kb_id"))
+	if !ok {
+		return
+	}
+	if !requireKBRole(c, role, identity.KBRoleEditor) {
+		return
+	}
+	ctx, _ := g.callerContext(c)
+	resp, err := g.ingestion.ReindexTask(ctx, &pb.ReindexTaskRequest{TaskId: c.Param("id"), KbId: kbID})
+	if err != nil {
+		code, msg := grpcToHTTP(err)
+		c.JSON(code, gin.H{"error": msg})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{
+		"task_id": resp.GetTaskId(),
+		"status":  resp.GetStatus(),
+		"message": resp.GetMessage(),
+	})
 }
 
 func (g *Gateway) retryTask(c *gin.Context) {

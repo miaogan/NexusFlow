@@ -76,6 +76,7 @@ const stateColors: Record<string, string> = {
   CHUNKED: "bg-violet-500/15 text-violet-300",
   EMBEDDED: "bg-violet-500/15 text-violet-300",
   INDEXED: "bg-emerald-500/15 text-emerald-300",
+  REINDEXING: "bg-sky-500/15 text-sky-300",
   COMPLETED: "bg-emerald-500/15 text-emerald-300",
   FAILED: "bg-rose-500/15 text-rose-300",
 };

@@ -89,13 +89,22 @@ func TestGatewayKnowledgeBaseRoleMatrix(t *testing.T) {
 	if w := call(t, h, http.MethodDelete, "/v1/files/task-1?kb_id="+kbID, editor, nil); w.Code != http.StatusForbidden {
 		t.Errorf("viewer delete = %d, want 403", w.Code)
 	}
+	if w := call(t, h, http.MethodPost, "/v1/files/task-1/reindex?kb_id="+kbID, editor, nil); w.Code != http.StatusForbidden {
+		t.Errorf("viewer reindex = %d, want 403", w.Code)
+	}
 
-	// kb:editor: upload and delete allowed, namespace management still denied.
+	// kb:editor: upload, delete and reindex allowed; management still denied.
 	grant("kb:editor")
 	assertUpload(http.StatusAccepted)
 	w = call(t, h, http.MethodDelete, "/v1/files/task-1?kb_id="+kbID, editor, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("editor delete = %d %s", w.Code, w.Body.String())
+	}
+	if w := call(t, h, http.MethodPost, "/v1/files/task-1/reindex?kb_id="+kbID, editor, nil); w.Code != http.StatusAccepted {
+		t.Fatalf("editor reindex = %d %s", w.Code, w.Body.String())
+	}
+	if ingestion.reindexed.GetTaskId() != "task-1" || ingestion.reindexed.GetKbId() != kbID {
+		t.Fatalf("reindex request = %+v", ingestion.reindexed)
 	}
 	if w := call(t, h, http.MethodPatch, "/v1/knowledge-bases/"+kbID, editor, map[string]string{"name": "x"}); w.Code != http.StatusForbidden {
 		t.Errorf("editor rename = %d, want 403", w.Code)

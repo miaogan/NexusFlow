@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -36,6 +37,12 @@ func WithIndexCleaner(cleaner IndexCleaner) Option {
 	return func(s *Service) { s.cleaner = cleaner }
 }
 
+// WithParsedTopic configures the topic used to re-enqueue a persisted parsed
+// document for in-place reindexing.
+func WithParsedTopic(topic string) Option {
+	return func(s *Service) { s.parsedTopic = topic }
+}
+
 // Service implements the ingestion contract: register uploads, persist
 // metadata and hand the task to the queue.
 type Service struct {
@@ -46,6 +53,7 @@ type Service struct {
 	logger        *slog.Logger
 	presignBase   string
 	topicUploaded string
+	parsedTopic   string
 	cleaner       IndexCleaner
 }
 
@@ -322,6 +330,64 @@ func (s *Service) RetryTask(ctx context.Context, req *pb.RetryTaskRequest) (*pb.
 	}
 	s.logger.Info("task retry scheduled", "task_id", task.ID, "tenant", task.TenantID)
 	return &pb.RetryTaskResponse{TaskId: task.ID, Status: string(state.Pending), Message: "retry enqueued"}, nil
+}
+
+// ReindexTask rebuilds a completed document's index in place from the persisted
+// parsed markdown, without re-parsing the source file.
+func (s *Service) ReindexTask(ctx context.Context, req *pb.ReindexTaskRequest) (*pb.ReindexTaskResponse, error) {
+	task, err := s.loadOwnedTask(ctx, req.GetTaskId(), req.GetKbId())
+	if err != nil {
+		return nil, err
+	}
+	if task.State != state.Completed {
+		return nil, status.Error(codes.FailedPrecondition, "only COMPLETED tasks can be reindexed")
+	}
+	if s.parsedTopic == "" {
+		return nil, status.Error(codes.FailedPrecondition, "reindex is not configured (missing parsed topic)")
+	}
+	key := strings.TrimSpace(task.Metadata["markdown_key"])
+	if key == "" {
+		return nil, status.Error(codes.FailedPrecondition, "parsed markdown is unavailable; re-upload the file")
+	}
+	rc, err := s.objects.Get(ctx, key)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, "read parsed markdown: "+err.Error())
+	}
+	raw, readErr := io.ReadAll(rc)
+	_ = rc.Close()
+	if readErr != nil {
+		return nil, status.Error(codes.Unavailable, "read parsed markdown: "+readErr.Error())
+	}
+	if strings.TrimSpace(string(raw)) == "" {
+		return nil, status.Error(codes.FailedPrecondition, "parsed markdown is empty")
+	}
+
+	if _, err := s.machine.Transition(ctx, task.ID, state.Reindexing, ""); err != nil {
+		if errors.Is(err, state.ErrInvalidState) {
+			return nil, status.Error(codes.FailedPrecondition, "task is not reindexable")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	evt, _ := json.Marshal(map[string]string{
+		"task_id": task.ID, "tenant_id": task.TenantID, "markdown": string(raw),
+	})
+	if err := s.pub.Publish(ctx, queue.Message{
+		Topic:   s.parsedTopic,
+		Key:     task.ID,
+		Payload: evt,
+		Headers: map[string]string{"tenant_id": task.TenantID},
+	}); err != nil {
+		// Keep the document usable: roll back to COMPLETED so a later reindex
+		// attempt is still allowed.
+		if _, terr := s.machine.Transition(ctx, task.ID, state.Completed, ""); terr != nil {
+			s.logger.Warn("rollback reindex state failed", "task_id", task.ID, "error", terr)
+		}
+		return nil, status.Error(codes.Unavailable, "enqueue reindex: "+err.Error())
+	}
+	s.logger.Info("task reindex scheduled", "task_id", task.ID, "kb_id", taskKnowledgeBaseID(task))
+	return &pb.ReindexTaskResponse{
+		TaskId: task.ID, Status: string(state.Reindexing), Message: "reindex enqueued",
+	}, nil
 }
 
 func (s *Service) ListTasks(ctx context.Context, req *pb.ListTasksRequest) (*pb.ListTasksResponse, error) {

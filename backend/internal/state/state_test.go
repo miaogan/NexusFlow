@@ -15,6 +15,9 @@ func TestTransitions(t *testing.T) {
 		{Parsed, Chunked, true},
 		{Indexed, Completed, true},
 		{Failed, Pending, true},
+		{Completed, Reindexing, true},
+		{Reindexing, Chunked, true},
+		{Reindexing, Completed, true},
 		{SandboxRunning, SandboxDone, true},
 		{Completed, Parsed, false},
 	}
@@ -80,6 +83,56 @@ func TestMachineTransition(t *testing.T) {
 	}
 	if _, err := m.Transition(ctx, "t1", Completed, ""); err == nil {
 		t.Fatal("expected invalid transition error")
+	}
+}
+
+func TestMachineReindexTransitions(t *testing.T) {
+	m := NewMachine()
+	ctx := context.Background()
+	if _, _, err := m.Create(ctx, Task{ID: "t1", TenantID: "tenant"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, to := range []State{Fetched, Parsing, Parsed, Chunked, Embedded, Indexed, Completed} {
+		if _, err := m.Transition(ctx, "t1", to, ""); err != nil {
+			t.Fatalf("transition to %s: %v", to, err)
+		}
+	}
+	if _, err := m.Transition(ctx, "t1", Reindexing, ""); err != nil {
+		t.Fatalf("completed -> reindexing: %v", err)
+	}
+	// A rebuild advances straight into CHUNKED, keeping the document id.
+	if _, err := m.Transition(ctx, "t1", Chunked, ""); err != nil {
+		t.Fatalf("reindexing -> chunked: %v", err)
+	}
+	// Enqueue failure rolls the queued rebuild back to COMPLETED.
+	if _, _, err := m.Create(ctx, Task{ID: "t2", TenantID: "tenant"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, to := range []State{Fetched, Parsing, Parsed, Chunked, Embedded, Indexed, Completed, Reindexing, Completed} {
+		if _, err := m.Transition(ctx, "t2", to, ""); err != nil {
+			t.Fatalf("t2 transition to %s: %v", to, err)
+		}
+	}
+}
+
+func TestMachineUpdateMetadata(t *testing.T) {
+	m := NewMachine()
+	ctx := context.Background()
+	if _, _, err := m.Create(ctx, Task{ID: "t1", TenantID: "tenant", Metadata: map[string]string{"kb_id": "kb1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.UpdateMetadata(ctx, "t1", map[string]string{"markdown_key": "tenant/kb1/parsed/t1.md"}); err != nil {
+		t.Fatalf("update metadata: %v", err)
+	}
+	task, ok, err := m.Get(ctx, "t1")
+	if err != nil || !ok {
+		t.Fatalf("get: ok=%v err=%v", ok, err)
+	}
+	if task.Metadata["markdown_key"] != "tenant/kb1/parsed/t1.md" || task.Metadata["kb_id"] != "kb1" {
+		t.Fatalf("metadata = %v", task.Metadata)
+	}
+	if err := m.UpdateMetadata(ctx, "missing", map[string]string{"a": "b"}); err != ErrTaskNotFound {
+		t.Fatalf("missing task err = %v, want ErrTaskNotFound", err)
 	}
 }
 

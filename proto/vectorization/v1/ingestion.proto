@@ -11,6 +11,7 @@ service IngestionService {
   rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
   rpc DeleteTask(DeleteTaskRequest) returns (DeleteTaskResponse);
   rpc RetryTask(RetryTaskRequest) returns (RetryTaskResponse);
+  rpc ReindexTask(ReindexTaskRequest) returns (ReindexTaskResponse);
 }
 
 message UploadFileRequest {
@@ -97,6 +98,17 @@ message RetryTaskRequest {
 }
 
 message RetryTaskResponse {
+  string task_id = 1;
+  string status = 2;
+  string message = 3;
+}
+
+message ReindexTaskRequest {
+  string task_id = 1;
+  string kb_id = 2;
+}
+
+message ReindexTaskResponse {
   string task_id = 1;
   string status = 2;
   string message = 3;

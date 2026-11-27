@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
-import { deleteFile, listTasks, uploadFile } from "../api/client";
+import { deleteFile, listTasks, reindexFile, uploadFile } from "../api/client";
 import type { LayoutContext } from "../components/Layout";
 import type { TaskSummary, UploadResult } from "../types";
 import {
@@ -68,6 +68,22 @@ export default function Files() {
       setError(null);
       try {
         await deleteFile(id, kbID);
+        await refresh();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refresh, kbID],
+  );
+
+  const handleReindex = useCallback(
+    async (id: string) => {
+      setBusy(true);
+      setError(null);
+      try {
+        await reindexFile(id, kbID);
         await refresh();
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -168,15 +184,28 @@ export default function Files() {
                       <td className="px-3 py-2.5 text-slate-500">{t.created_at?.replace("T", " ").slice(0, 16)}</td>
                       <td className="px-3 py-2.5 text-right">
                         {canWrite && (
-                          <button
-                            type="button"
-                            title="删除文件"
-                            disabled={busy}
-                            onClick={() => void handleDelete(t.task_id)}
-                            className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] text-rose-300 transition hover:bg-rose-500/10 disabled:opacity-40"
-                          >
-                            <IconTrash /> 删除
-                          </button>
+                          <div className="inline-flex items-center gap-1">
+                            {t.status === "COMPLETED" && (
+                              <button
+                                type="button"
+                                title="从已解析内容重建索引"
+                                disabled={busy}
+                                onClick={() => void handleReindex(t.task_id)}
+                                className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] text-sky-300 transition hover:bg-sky-500/10 disabled:opacity-40"
+                              >
+                                重建索引
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              title="删除文件"
+                              disabled={busy}
+                              onClick={() => void handleDelete(t.task_id)}
+                              className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] text-rose-300 transition hover:bg-rose-500/10 disabled:opacity-40"
+                            >
+                              <IconTrash /> 删除
+                            </button>
+                          </div>
                         )}
                       </td>
                     </tr>

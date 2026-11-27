@@ -851,6 +851,118 @@ func (x *RetryTaskResponse) GetMessage() string {
 	return ""
 }
 
+type ReindexTaskRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	KbId          string                 `protobuf:"bytes,2,opt,name=kb_id,json=kbId,proto3" json:"kb_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReindexTaskRequest) Reset() {
+	*x = ReindexTaskRequest{}
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReindexTaskRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReindexTaskRequest) ProtoMessage() {}
+
+func (x *ReindexTaskRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReindexTaskRequest.ProtoReflect.Descriptor instead.
+func (*ReindexTaskRequest) Descriptor() ([]byte, []int) {
+	return file_vectorization_v1_ingestion_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ReindexTaskRequest) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *ReindexTaskRequest) GetKbId() string {
+	if x != nil {
+		return x.KbId
+	}
+	return ""
+}
+
+type ReindexTaskResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReindexTaskResponse) Reset() {
+	*x = ReindexTaskResponse{}
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReindexTaskResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReindexTaskResponse) ProtoMessage() {}
+
+func (x *ReindexTaskResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_vectorization_v1_ingestion_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReindexTaskResponse.ProtoReflect.Descriptor instead.
+func (*ReindexTaskResponse) Descriptor() ([]byte, []int) {
+	return file_vectorization_v1_ingestion_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ReindexTaskResponse) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *ReindexTaskResponse) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *ReindexTaskResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
 var File_vectorization_v1_ingestion_proto protoreflect.FileDescriptor
 
 const file_vectorization_v1_ingestion_proto_rawDesc = "" +
@@ -933,7 +1045,14 @@ const file_vectorization_v1_ingestion_proto_rawDesc = "" +
 	"\x11RetryTaskResponse\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage2\xd2\x03\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\"B\n" +
+	"\x12ReindexTaskRequest\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x13\n" +
+	"\x05kb_id\x18\x02 \x01(\tR\x04kbId\"`\n" +
+	"\x13ReindexTaskResponse\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\x12\x18\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage2\xae\x04\n" +
 	"\x10IngestionService\x12W\n" +
 	"\n" +
 	"UploadFile\x12#.vectorization.v1.UploadFileRequest\x1a$.vectorization.v1.UploadFileResponse\x12`\n" +
@@ -941,7 +1060,8 @@ const file_vectorization_v1_ingestion_proto_rawDesc = "" +
 	"\tListTasks\x12\".vectorization.v1.ListTasksRequest\x1a#.vectorization.v1.ListTasksResponse\x12W\n" +
 	"\n" +
 	"DeleteTask\x12#.vectorization.v1.DeleteTaskRequest\x1a$.vectorization.v1.DeleteTaskResponse\x12T\n" +
-	"\tRetryTask\x12\".vectorization.v1.RetryTaskRequest\x1a#.vectorization.v1.RetryTaskResponseBLZJgithub.com/nexusflow/nexusflow/backend/pb/vectorization/v1;vectorizationv1b\x06proto3"
+	"\tRetryTask\x12\".vectorization.v1.RetryTaskRequest\x1a#.vectorization.v1.RetryTaskResponse\x12Z\n" +
+	"\vReindexTask\x12$.vectorization.v1.ReindexTaskRequest\x1a%.vectorization.v1.ReindexTaskResponseBLZJgithub.com/nexusflow/nexusflow/backend/pb/vectorization/v1;vectorizationv1b\x06proto3"
 
 var (
 	file_vectorization_v1_ingestion_proto_rawDescOnce sync.Once
@@ -955,7 +1075,7 @@ func file_vectorization_v1_ingestion_proto_rawDescGZIP() []byte {
 	return file_vectorization_v1_ingestion_proto_rawDescData
 }
 
-var file_vectorization_v1_ingestion_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_vectorization_v1_ingestion_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_vectorization_v1_ingestion_proto_goTypes = []any{
 	(*UploadFileRequest)(nil),     // 0: vectorization.v1.UploadFileRequest
 	(*TaskSummary)(nil),           // 1: vectorization.v1.TaskSummary
@@ -968,25 +1088,29 @@ var file_vectorization_v1_ingestion_proto_goTypes = []any{
 	(*DeleteTaskResponse)(nil),    // 8: vectorization.v1.DeleteTaskResponse
 	(*RetryTaskRequest)(nil),      // 9: vectorization.v1.RetryTaskRequest
 	(*RetryTaskResponse)(nil),     // 10: vectorization.v1.RetryTaskResponse
-	nil,                           // 11: vectorization.v1.UploadFileRequest.MetadataEntry
-	nil,                           // 12: vectorization.v1.GetTaskStatusResponse.MetadataEntry
+	(*ReindexTaskRequest)(nil),    // 11: vectorization.v1.ReindexTaskRequest
+	(*ReindexTaskResponse)(nil),   // 12: vectorization.v1.ReindexTaskResponse
+	nil,                           // 13: vectorization.v1.UploadFileRequest.MetadataEntry
+	nil,                           // 14: vectorization.v1.GetTaskStatusResponse.MetadataEntry
 }
 var file_vectorization_v1_ingestion_proto_depIdxs = []int32{
-	11, // 0: vectorization.v1.UploadFileRequest.metadata:type_name -> vectorization.v1.UploadFileRequest.MetadataEntry
+	13, // 0: vectorization.v1.UploadFileRequest.metadata:type_name -> vectorization.v1.UploadFileRequest.MetadataEntry
 	1,  // 1: vectorization.v1.ListTasksResponse.tasks:type_name -> vectorization.v1.TaskSummary
-	12, // 2: vectorization.v1.GetTaskStatusResponse.metadata:type_name -> vectorization.v1.GetTaskStatusResponse.MetadataEntry
+	14, // 2: vectorization.v1.GetTaskStatusResponse.metadata:type_name -> vectorization.v1.GetTaskStatusResponse.MetadataEntry
 	0,  // 3: vectorization.v1.IngestionService.UploadFile:input_type -> vectorization.v1.UploadFileRequest
 	5,  // 4: vectorization.v1.IngestionService.GetTaskStatus:input_type -> vectorization.v1.GetTaskStatusRequest
 	2,  // 5: vectorization.v1.IngestionService.ListTasks:input_type -> vectorization.v1.ListTasksRequest
 	7,  // 6: vectorization.v1.IngestionService.DeleteTask:input_type -> vectorization.v1.DeleteTaskRequest
 	9,  // 7: vectorization.v1.IngestionService.RetryTask:input_type -> vectorization.v1.RetryTaskRequest
-	4,  // 8: vectorization.v1.IngestionService.UploadFile:output_type -> vectorization.v1.UploadFileResponse
-	6,  // 9: vectorization.v1.IngestionService.GetTaskStatus:output_type -> vectorization.v1.GetTaskStatusResponse
-	3,  // 10: vectorization.v1.IngestionService.ListTasks:output_type -> vectorization.v1.ListTasksResponse
-	8,  // 11: vectorization.v1.IngestionService.DeleteTask:output_type -> vectorization.v1.DeleteTaskResponse
-	10, // 12: vectorization.v1.IngestionService.RetryTask:output_type -> vectorization.v1.RetryTaskResponse
-	8,  // [8:13] is the sub-list for method output_type
-	3,  // [3:8] is the sub-list for method input_type
+	11, // 8: vectorization.v1.IngestionService.ReindexTask:input_type -> vectorization.v1.ReindexTaskRequest
+	4,  // 9: vectorization.v1.IngestionService.UploadFile:output_type -> vectorization.v1.UploadFileResponse
+	6,  // 10: vectorization.v1.IngestionService.GetTaskStatus:output_type -> vectorization.v1.GetTaskStatusResponse
+	3,  // 11: vectorization.v1.IngestionService.ListTasks:output_type -> vectorization.v1.ListTasksResponse
+	8,  // 12: vectorization.v1.IngestionService.DeleteTask:output_type -> vectorization.v1.DeleteTaskResponse
+	10, // 13: vectorization.v1.IngestionService.RetryTask:output_type -> vectorization.v1.RetryTaskResponse
+	12, // 14: vectorization.v1.IngestionService.ReindexTask:output_type -> vectorization.v1.ReindexTaskResponse
+	9,  // [9:15] is the sub-list for method output_type
+	3,  // [3:9] is the sub-list for method input_type
 	3,  // [3:3] is the sub-list for extension type_name
 	3,  // [3:3] is the sub-list for extension extendee
 	0,  // [0:3] is the sub-list for field type_name
@@ -1003,7 +1127,7 @@ func file_vectorization_v1_ingestion_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_vectorization_v1_ingestion_proto_rawDesc), len(file_vectorization_v1_ingestion_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   13,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

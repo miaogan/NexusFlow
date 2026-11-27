@@ -13,9 +13,10 @@ import (
 )
 
 type recordingIngestionClient struct {
-	upload   *pb.UploadFileRequest
-	deleted  *pb.DeleteTaskRequest
-	fileSize int64
+	upload    *pb.UploadFileRequest
+	deleted   *pb.DeleteTaskRequest
+	reindexed *pb.ReindexTaskRequest
+	fileSize  int64
 }
 
 func (r *recordingIngestionClient) UploadFile(_ context.Context, req *pb.UploadFileRequest, _ ...grpc.CallOption) (*pb.UploadFileResponse, error) {
@@ -32,8 +33,13 @@ func (r *recordingIngestionClient) DeleteTask(_ context.Context, req *pb.DeleteT
 	r.deleted = req
 	return &pb.DeleteTaskResponse{Success: true, KbId: req.GetKbId(), ObjectDeleted: true, IndexDeleted: 7}, nil
 }
-func (*recordingIngestionClient) RetryTask(context.Context, *pb.RetryTaskRequest, ...grpc.CallOption) (*pb.RetryTaskResponse, error) {
+func (r *recordingIngestionClient) RetryTask(context.Context, *pb.RetryTaskRequest, ...grpc.CallOption) (*pb.RetryTaskResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "unused")
+}
+
+func (r *recordingIngestionClient) ReindexTask(_ context.Context, req *pb.ReindexTaskRequest, _ ...grpc.CallOption) (*pb.ReindexTaskResponse, error) {
+	r.reindexed = req
+	return &pb.ReindexTaskResponse{TaskId: req.GetTaskId(), Status: "REINDEXING", Message: "reindex enqueued"}, nil
 }
 
 type recordingQueryClient struct{ search *pb.SearchRequest }

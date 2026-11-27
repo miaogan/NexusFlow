@@ -80,6 +80,10 @@ func (idx *Indexer) Handle(ctx context.Context, msg queue.Message) error {
 	switch task.State {
 	case state.Parsed:
 		start = 0
+	case state.Reindexing:
+		// In-place rebuild: the parsed markdown is re-indexed and chunking
+		// advances straight to CHUNKED.
+		start = 1
 	case state.Chunked:
 		start = 1
 	case state.Embedded:
@@ -105,7 +109,7 @@ func (idx *Indexer) Handle(ctx context.Context, msg queue.Message) error {
 	}
 
 	n := 0
-	if task.State == state.Parsed {
+	if task.State == state.Parsed || task.State == state.Reindexing {
 		// Indexing is idempotent (docstore replaces by docID), so re-running on
 		// redelivery is safe.
 		n, err = idx.indexer.IndexMarkdown(ctx, task.ID, evt.Markdown, meta)

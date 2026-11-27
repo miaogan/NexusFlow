@@ -52,6 +52,9 @@ func main() {
 		opts = append(opts, ingestion.WithIndexCleaner(indexing.NewLlamaIndexIndexer(cfg.LlamaIndexURL, 0)))
 		logger.Info("cascade index cleanup enabled", "url", cfg.LlamaIndexURL)
 	}
+	if cfg.QueueTopicParsed != "" {
+		opts = append(opts, ingestion.WithParsedTopic(cfg.QueueTopicParsed))
+	}
 	svc := ingestion.NewService(objects, st, b, logger, cfg.ObjectStoreBase, cfg.QueueTopicUploaded, opts...)
 
 	go func() {

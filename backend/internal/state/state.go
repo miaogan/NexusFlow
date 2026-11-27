@@ -20,7 +20,9 @@ const (
 	Embedded  State = "EMBEDDED"
 	Indexed   State = "INDEXED"
 	Completed State = "COMPLETED"
-	Failed    State = "FAILED"
+	// Reindexing marks an in-place index rebuild that keeps the document id.
+	Reindexing State = "REINDEXING"
+	Failed     State = "FAILED"
 
 	// Sandbox run-state used by custom code nodes.
 	SandboxCreating State = "SANDBOX_CREATING"
@@ -31,6 +33,7 @@ const (
 var progress = map[State]int32{
 	Pending: 5, Fetched: 10, Parsing: 30, Parsed: 45,
 	Chunked: 60, Embedded: 75, Indexed: 90, Completed: 100,
+	Reindexing:      10,
 	Failed:          0,
 	SandboxCreating: 20, SandboxRunning: 50, SandboxDone: 80,
 }
@@ -43,7 +46,11 @@ var transitions = map[State][]State{
 	Chunked:  {Embedded, Failed},
 	Embedded: {Indexed, Failed},
 	Indexed:  {Completed, Failed},
-	Failed:   {Pending},
+	// A completed document can be re-indexed in place; the rebuild reuses the
+	// persisted parsed markdown and never re-parses the source file.
+	Completed:  {Reindexing, Failed},
+	Reindexing: {Chunked, Completed, Failed},
+	Failed:     {Pending},
 
 	SandboxCreating: {SandboxRunning, Failed},
 	SandboxRunning:  {SandboxDone, Failed},
@@ -76,6 +83,9 @@ type Store interface {
 	Get(ctx context.Context, id string) (Task, bool, error)
 	List(ctx context.Context, tenantID, status string, limit, offset int) ([]Task, int, error)
 	Transition(ctx context.Context, id string, to State, errMsg string) (Task, error)
+	// UpdateMetadata merges keys into the task metadata (used to record the
+	// persisted parsed-markdown object key).
+	UpdateMetadata(ctx context.Context, id string, patch map[string]string) error
 	Delete(ctx context.Context, id string) error
 }
 
@@ -201,6 +211,24 @@ func (m *Machine) Transition(_ context.Context, id string, to State, errMsg stri
 	t.ErrorMsg = errMsg
 	t.UpdatedAt = time.Now()
 	return *t, nil
+}
+
+func (m *Machine) UpdateMetadata(_ context.Context, id string, patch map[string]string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	t, ok := m.tasks[id]
+	if !ok {
+		return ErrTaskNotFound
+	}
+	if t.Metadata == nil {
+		t.Metadata = make(map[string]string, len(patch))
+	}
+	for key, value := range patch {
+		t.Metadata[key] = value
+	}
+	t.UpdatedAt = time.Now()
+	return nil
 }
 
 // Delete removes a task and, when it carried a content hash, clears the

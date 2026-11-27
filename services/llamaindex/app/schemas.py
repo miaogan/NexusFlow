@@ -16,6 +16,7 @@ class IndexResponse(BaseModel):
     success: bool
     chunk_count: int = 0
     indexed_count: int = 0
+    deleted_count: int = 0
     collection: str = ""
     error_msg: str = ""
 

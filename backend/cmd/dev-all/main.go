@@ -111,6 +111,7 @@ func main() {
 		client, st, bus, logger,
 		cfg.ParsePollInterval, 10, cfg.ParseMaxAttempts,
 		cfg.QueueTopicParsed, cfg.QueueTopicDLQ, "dev-all",
+		processing.WithObjectStore(objects),
 	)
 	bus.Subscribe(cfg.QueueTopicUploaded, worker.Handle)
 
@@ -133,7 +134,7 @@ func main() {
 	idxr := indexing.New(engine, st, logger)
 	bus.Subscribe(cfg.QueueTopicParsed, idxr.Handle)
 
-	ingestOpts := []ingestion.Option{}
+	ingestOpts := []ingestion.Option{ingestion.WithParsedTopic(cfg.QueueTopicParsed)}
 	if cfg.LlamaIndexURL != "" {
 		ingestOpts = append(ingestOpts, ingestion.WithIndexCleaner(indexing.NewLlamaIndexIndexer(cfg.LlamaIndexURL, 0)))
 	}

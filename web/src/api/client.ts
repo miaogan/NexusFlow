@@ -254,6 +254,16 @@ export async function deleteFile(
   });
 }
 
+/** Rebuild the retrieval index in place from the persisted parsed markdown. */
+export async function reindexFile(
+  id: string,
+  kbID = getActiveKB(),
+): Promise<{ task_id: string; status: string; message: string }> {
+  return request(`${GATEWAY_BASE}/v1/files/${encodeURIComponent(id)}/reindex${kbQuery(kbID)}`, {
+    method: "POST",
+  });
+}
+
 export async function retryTask(
   id: string,
   kbID = getActiveKB(),
