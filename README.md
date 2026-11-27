@@ -384,11 +384,13 @@ flowchart LR
 - **MCP**（`AGENT_HUB_MCP_ENABLED`）：`POST /mcp` 提供 `initialize` / `tools/list` / `tools/call`；`AGENT_HUB_MCP_SERVERS=name=url,...` 接入外部 MCP，工具注册为 `mcp.<server>.<tool>`。外部工具默认需审批，sandbox 默认不对外暴露。
 - **人机协同**（`AGENT_HUB_HITL_ENABLED` / `HITL_ENABLED`）：高风险工具不执行，返回 202 + `approval_id`，由 `POST /v1/approvals/{id}/decide` 批准/拒绝后重试；DAG 的 `human_approval` 节点使 run 进入 `WAITING_APPROVAL` 并落盘检查点，经 `/v1/workflows/runs/{id}/approve|resume` 恢复，重复审批返回 409。`WORKFLOW_RUN_STORE_DRIVER=postgres` 时运行与审批写入 `workflow_executions` / `workflow_approvals`，跨副本共享且审批只生效一次。
 - **安全护栏**：工具风险分级（`read/write/execute/external`）、入参 JSON Schema、输出截断、预算超限 429、工具与审批审计（`GET /v1/audit`），工具结果以不可信数据包裹以防提示注入；网关侧 `/v1/sandbox/execute` 要求 `sandbox:execute`。
+- **图文多模态**：MinerU 结果 ZIP 中的图片由 Worker 提取并落盘到 `<tenant>/<kb>/parsed/<task>/images/`，Markdown 图片链接改写为 `/v1/media`；切块把 `image_urls` 写入节点 metadata，检索结果与问答引用返回配图，控制台展示缩略图并支持点击放大。
 
 新增 / 变更接口：
 
 | 方法与路径 | 权限 / 开关 | 说明 |
 | --- | --- | --- |
+| `GET /v1/media?key=` | `search:use` | 读取解析图片（仅本租户 `parsed/*/images` 下的图片） |
 | `POST /v1/workflows/{validate,run}` | `workflow:run` | DAG 校验与执行（经 Gateway 代理） |
 | `GET /v1/workflows/runs`、`/v1/workflows/runs/{id}` | `workflow:run` | 运行列表 / 详情 |
 | `POST /v1/workflows/runs/{id}/{approve,resume}` | `workflow:run` | 审批并恢复挂起的 run，重复审批 409 |

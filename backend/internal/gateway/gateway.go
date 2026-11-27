@@ -193,6 +193,8 @@ func (g *Gateway) Router() *gin.Engine {
 	v1.POST("/files/:id/reindex", RequirePermission("task:write"), g.reindexFile)
 	v1.GET("/tasks", g.listTasks)
 	v1.GET("/tasks/:id", g.getTask)
+	// Parsed images extracted by the processing worker (tenant-scoped key).
+	v1.GET("/media", RequirePermission("search:use"), g.getMedia)
 	v1.DELETE("/tasks/:id", g.deleteTask)
 	v1.POST("/tasks/:id/retry", g.retryTask)
 	v1.POST("/search", RequirePermission("search:use"), g.search)

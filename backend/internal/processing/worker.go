@@ -1,10 +1,16 @@
 package processing
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"mime"
+	"net/url"
+	"path"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -103,10 +109,10 @@ func (w *Worker) Handle(ctx context.Context, msg queue.Message) error {
 	}
 
 	start := time.Now()
-	var markdown string
+	var doc mineru.Document
 	var parseErr error
 	for attempt := 1; attempt <= w.maxAttempts; attempt++ {
-		markdown, parseErr = mineru.Parse(ctx, w.client, evt.TaskID, evt.FileURL, evt.FileType, w.pollInterval, w.maxPolls)
+		doc, parseErr = mineru.ParseDocument(ctx, w.client, evt.TaskID, evt.FileURL, evt.FileType, w.pollInterval, w.maxPolls)
 		if parseErr == nil {
 			break
 		}
@@ -137,6 +143,23 @@ func (w *Worker) Handle(ctx context.Context, msg queue.Message) error {
 		_ = w.pub.Publish(ctx, queue.Message{Topic: w.topicDLQ, Key: task.ID, Payload: dead})
 		w.logger.Error("task moved to DLQ", "task_id", task.ID, "error", parseErr)
 		return nil
+	}
+
+	// Persist extracted images first, then point Markdown links at the media
+	// endpoint so chunks and citations carry browser-usable image URLs.
+	imageKeys := w.persistImages(ctx, task, doc.Images)
+	markdown := rewriteImageLinks(doc.Markdown, imageKeys)
+	if len(imageKeys) > 0 {
+		keys := make([]string, 0, len(imageKeys))
+		for _, key := range imageKeys {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		if err := w.machine.UpdateMetadata(ctx, task.ID, map[string]string{
+			"media_keys": strings.Join(keys, ","),
+		}); err != nil {
+			w.logger.Warn("record media keys failed", "task_id", task.ID, "error", err)
+		}
 	}
 
 	// Persist the parsed markdown before publishing. Failure is non-fatal: the
@@ -182,4 +205,60 @@ func (w *Worker) persistMarkdown(ctx context.Context, task state.Task, markdown 
 		return "", err
 	}
 	return key, nil
+}
+
+var markdownImageLink = regexp.MustCompile(`!\[([^\]]*)\]\(\s*([^)\s]+)\s*\)`)
+
+// persistImages stores extracted images under tenant/kb/parsed/<task>/images/
+// and returns archive path -> object key for Markdown rewriting.
+func (w *Worker) persistImages(ctx context.Context, task state.Task, images map[string][]byte) map[string]string {
+	if w.objects == nil || len(images) == 0 {
+		return nil
+	}
+	kbID := task.Metadata["kb_id"]
+	if kbID == "" {
+		kbID = "default"
+	}
+	keys := make(map[string]string, len(images))
+	for name, data := range images {
+		clean := strings.TrimPrefix(path.Clean("/"+strings.ReplaceAll(name, "\\", "/")), "/")
+		base := path.Base(clean)
+		if base == "" || base == "." || base == ".." || strings.ContainsAny(base, ":\\") {
+			continue
+		}
+		key := fmt.Sprintf("%s/%s/parsed/%s/images/%s", task.TenantID, kbID, task.ID, base)
+		contentType := mime.TypeByExtension(path.Ext(base))
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		if err := w.objects.Put(ctx, key, bytes.NewReader(data), int64(len(data)), contentType); err != nil {
+			w.logger.Warn("persist parsed image failed", "task_id", task.ID, "image", base, "error", err)
+			continue
+		}
+		keys[clean] = key
+	}
+	return keys
+}
+
+// rewriteImageLinks points Markdown image references at the gateway media
+// endpoint, so indexed chunks and chat citations carry fetchable URLs.
+func rewriteImageLinks(markdown string, keys map[string]string) string {
+	if len(keys) == 0 {
+		return markdown
+	}
+	return markdownImageLink.ReplaceAllStringFunc(markdown, func(match string) string {
+		parts := markdownImageLink.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return match
+		}
+		target := strings.TrimPrefix(parts[2], "./")
+		key, ok := keys[target]
+		if !ok {
+			key, ok = keys["images/"+target]
+		}
+		if !ok {
+			return match
+		}
+		return "![" + parts[1] + "](/v1/media?key=" + url.QueryEscape(key) + ")"
+	})
 }

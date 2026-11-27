@@ -1,7 +1,12 @@
 import hashlib
+import json
+import re
 import uuid
 
 from app.services.embedding import build_embedding
+
+# Markdown image links emitted by MinerU, already rewritten to /v1/media URLs.
+IMAGE_LINK = re.compile(r"!\[[^\]]*\]\(\s*([^)\s]+)\s*\)")
 
 
 def stable_node_id(task_id: str, index: int, content: str) -> str:
@@ -40,6 +45,19 @@ def build_nodes(markdown: str, strategy: str, metadata: dict[str, str]):
     for index, node in enumerate(nodes):
         node.metadata.update(metadata)
         node.metadata.setdefault("tenant_id", metadata.get("tenant_id", "default"))
+        image_urls = _image_urls(node.get_content())
+        if image_urls:
+            # Stored as a JSON string because Qdrant payload values are strings.
+            node.metadata["image_urls"] = json.dumps(image_urls, ensure_ascii=False)
         if task_id:
             node.id_ = stable_node_id(task_id, index, node.get_content())
     return nodes
+
+
+def _image_urls(content: str) -> list[str]:
+    """Images referenced by one chunk, de-duplicated and in reading order."""
+    urls: list[str] = []
+    for url in IMAGE_LINK.findall(content):
+        if url not in urls:
+            urls.append(url)
+    return urls

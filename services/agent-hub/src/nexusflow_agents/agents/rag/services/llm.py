@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -32,6 +33,21 @@ CHITCHAT_ANSWER = (
 CLARIFY_ANSWER = (
     "我需要更明确的信息才能继续。请补充具体问题，或指明要查询的文档范围。"
 )
+
+
+def chunk_images(chunk: dict[str, Any]) -> list[str]:
+    """Image URLs attached to one retrieved chunk (at most three)."""
+    meta = chunk.get("meta") or {}
+    raw = meta.get("image_urls")
+    if not raw:
+        return []
+    try:
+        values = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        values = str(raw).split(",")
+    if not isinstance(values, list):
+        return []
+    return [str(item).strip() for item in values if str(item).strip()][:3]
 
 
 class AnswerGenerator:
@@ -209,7 +225,12 @@ class AnswerGenerator:
                 break
             content = content[:remaining]
             used += len(content)
-            blocks.append(f"[{idx}] {content}")
+            block = f"[{idx}] {content}"
+            images = chunk_images(chunk)
+            if images:
+                # Let the model know the chunk carries figures it can cite.
+                block += "\n（本段配图：" + "；".join(images) + "）"
+            blocks.append(block)
         return "\n\n".join(blocks)
 
     def _extractive(

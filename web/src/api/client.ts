@@ -53,6 +53,20 @@ function kbQuery(kbID: string): string {
   return `?kb_id=${encodeURIComponent(kbID)}`;
 }
 
+/**
+ * Fetch a parsed image with the bearer token (an <img> tag cannot send it)
+ * and return a blob URL. Callers must revoke the URL when unmounting.
+ */
+export async function fetchMediaObjectURL(path: string): Promise<string> {
+  const url = path.startsWith("http") ? path : `${GATEWAY_BASE}${path}`;
+  const token = getToken();
+  const res = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+  if (!res.ok) throw new Error(`media request failed: ${res.status}`);
+  return URL.createObjectURL(await res.blob());
+}
+
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }

@@ -35,4 +35,4 @@
 * **Task 4.2 模型治理**：统一 LLM 路由网关（主备故障转移、熔断）与租户级 token/调用量配额前置拦截。
 * **Task 5.1 对外服务**：租户级 API Key 签发/吊销/作用域，以及 OpenAI 兼容 `/v1/openai/chat/completions`。
 * **Task 5.2 生态集成**：Webhook 订阅（HMAC 签名、指数退避、投递日志）；MCP Server 已交付，Webhook 未开始。
-* **原 v1.2.0 顺延项**：MinerU 图文多模态检索、统一 Connector 框架（web_crawler / s3_bucket / db_query）。
+* **原 v1.2.0 顺延项**：统一 Connector 框架（web_crawler / s3_bucket / db_query）；MinerU 图文多模态检索已作为 Task 2.1 交付。

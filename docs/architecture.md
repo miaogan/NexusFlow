@@ -199,7 +199,8 @@ Agent Hub 是 intent / summary / memory 的中心节点，Hub 与 Agent 构成�
 LlamaIndex Service 由 FastAPI 封装为一组 RESTful / gRPC 接口，接收 Go 侧 Processing Worker 通过消息队列或同步调用下发的解析结果，负责以下能力：
 
 - 高级切块：使用 SemanticSplitterNodeParser（语义切块）或 MarkdownNodeParser（按标题层级切块），基于 MinerU 输出的结构化 Markdown 进行智能切分，取代 Go 侧简单的滑动窗口切块。
-- 多索引构建：针对 MinerU 输出的版面信息，同时构建稠密向量与稀疏（Qdrant sparse，IDF）索引，为 Hybrid Search 混合检索打基础；表格、公式、图片作为独立节点携带元数据。
+- 多索引构建：针对 MinerU 输出的版面信息，同时构建稠密向量与稀疏（Qdrant sparse，IDF）索引，为 Hybrid Search 混合检索打基础；表格、公式作为文本节点携带元数据。
+- 图文关联：切块时从 Markdown 图片链接提取 `image_urls` 写入节点 metadata，检索结果随 chunk 返回；前端引用卡片展示缩略图并可点击放大，问答上下文按 chunk 附带配图摘要。
 - Embedding 编排：内部通过 LlamaIndex 的 Embedding Client 调用外部 Embedding API（如 OpenAI），完成向量化后批量写入 Milvus / Qdrant，Go 侧不再直接处理向量化。
 
 ### 4.2 与 Go 侧的协同关系
@@ -243,13 +244,13 @@ PENDING -> FETCHED -> PARSING -> PARSED
 
 ### 6.1 MinerU 异步解析
 
-当前实现对接 MinerU 4.x 官方 V1 Tasks 协议：`POST /v1/tasks` 创建单文件任务，按响应中的 `files[].upload` 流式 PUT 原始字节，轮询 `GET /v1/tasks/{task_id}`，完成后从 `files[].result_url` 下载 ZIP 并提取 Markdown。Processing Worker 实现有界轮询与最大重试次数，防止 Goroutine 泄漏；父任务失败时优先透传逐文件错误详情。
+当前实现对接 MinerU 4.x 官方 V1 Tasks 协议：`POST /v1/tasks` 创建单文件任务，按响应中的 `files[].upload` 流式 PUT 原始字节，轮询 `GET /v1/tasks/{task_id}`，完成后从 `files[].result_url` 下载 ZIP 并提取 Markdown 与 `images/*` 图片。Processing Worker 实现有界轮询与最大重试次数，防止 Goroutine 泄漏；父任务失败时优先透传逐文件错误详情。图片落盘到 `<tenant>/<kb>/parsed/<task>/images/`（单图 8MB、总量 32MB、最多 64 张），Markdown 中的相对图片链接改写为 `/v1/media?key=...`，经 Gateway 鉴权读取。
 
 上传事件中的对象 URL 仅允许映射到 `OBJECT_STORE_BASE` 下的 key，再从共享 `OBJECT_STORE_DIR` 读取，包含来源与目录穿越校验，因此解析服务不依赖 MinIO 可达性。PDF/DOCX/HTML 由 MinerU 原生解析；MinerU 4.x 不接收的 TXT/Markdown 直接保留原文，避免真实解析模式下破坏既有文本上传能力。最终 Markdown 统一作为 LlamaIndex 切块的输入。
 
 ### 6.2 切块与索引（下沉至 LlamaIndex）
 
-V2.0 将切块从 Go 迁移至 LlamaIndex 服务。LlamaIndex 按标题层级与语义边界进行结构化切分，并对表格、公式、图片等特殊块单独抽取为独立节点与元数据，使 RAG 检索时可精准命中表格或公式，而非返回混乱文本。
+V2.0 将切块从 Go 迁移至 LlamaIndex 服务。LlamaIndex 按标题层级与语义边界进行结构化切分，表格与公式保留在文本块中，图片以 `image_urls` 元数据随所在块返回，使 RAG 检索时可精准命中表格或公式，并在引用中展示对应图表。
 
 ### 6.3 限流与背压
 

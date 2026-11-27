@@ -3,6 +3,7 @@ import { useOutletContext } from "react-router-dom";
 import { chatStream, getConversation, listConversations, submitFeedback } from "../api/client";
 import type { LayoutContext } from "../components/Layout";
 import type { ChatMessage, Citation, ConversationSummary, IntentInfo } from "../types";
+import MediaGallery, { parseImageUrls } from "../components/MediaGallery";
 import { Button, EmptyState, PageHeader, Spinner } from "../components/ui";
 
 type Phase = "idle" | "intent" | "retrieve" | "generate" | "done";
@@ -447,6 +448,7 @@ export default function Chat() {
                           </p>
                           {msg.citations?.map((c, idx) => {
                             const anchor = citationAnchor(msg.id, idx);
+                            const images = parseImageUrls(c.meta);
                             return (
                               <div
                                 key={`${c.chunk_id}-${idx}`}
@@ -476,6 +478,7 @@ export default function Chat() {
                                 <p className="mt-1 whitespace-pre-wrap text-[10px] leading-relaxed text-slate-400">
                                   {c.content}
                                 </p>
+                                {images.length > 0 && <MediaGallery urls={images} />}
                               </div>
                             );
                           })}

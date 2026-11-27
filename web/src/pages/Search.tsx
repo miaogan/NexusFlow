@@ -4,6 +4,7 @@ import { getTrace, runSearch, submitFeedback } from "../api/client";
 import type { LayoutContext } from "../components/Layout";
 import type { SearchResponse, Trace, TraceSpan } from "../types";
 import { Button, Card, EmptyState, PageHeader, Spinner } from "../components/ui";
+import MediaGallery, { parseImageUrls } from "../components/MediaGallery";
 
 function durationMs(s: TraceSpan): number {
   return new Date(s.end_time).getTime() - new Date(s.start_time).getTime();
@@ -242,11 +243,16 @@ export default function Search() {
                         </div>
                       </div>
                       <p className="text-xs leading-relaxed text-slate-300">{chunk.content}</p>
+                      {parseImageUrls(chunk.meta).length > 0 && (
+                        <MediaGallery urls={parseImageUrls(chunk.meta)} />
+                      )}
                       {chunk.meta &&
-                        Object.keys(chunk.meta).filter((k) => k !== "file_name" && k !== "source").length > 0 && (
+                        Object.keys(chunk.meta)
+                          .filter((k) => k !== "file_name" && k !== "source" && k !== "image_urls")
+                          .length > 0 && (
                           <div className="mt-2 flex flex-wrap gap-1">
                             {Object.entries(chunk.meta)
-                              .filter(([k]) => k !== "file_name" && k !== "source")
+                              .filter(([k]) => k !== "file_name" && k !== "source" && k !== "image_urls")
                               .map(([k, v]) => (
                                 <span key={k} className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] text-slate-500">
                                   {k}: {v}

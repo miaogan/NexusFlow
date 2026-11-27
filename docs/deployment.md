@@ -33,7 +33,7 @@
 
 | PVC | 挂载点 | 使用方 | 说明 |
 | --- | --- | --- | --- |
-| `object-store` | `/data/objects` | gateway / ingestion / processing-worker | 上传落地、级联删除、解析回读与重建索引需共享同一份数据；解析产物落盘为 `tenant/kb/parsed/<task>.md` |
+| `object-store` | `/data/objects` | gateway / ingestion / processing-worker | 上传落地、级联删除、解析回读与重建索引需共享同一份数据；解析产物落盘为 `tenant/kb/parsed/<task>.md`，图片落盘为 `tenant/kb/parsed/<task>/images/` 并由 Gateway `GET /v1/media` 鉴权读取 |
 | `sandbox-work` | `/data/sandboxes` | sandbox-execution | 沙箱工作目录 |
 
 ```bash
@@ -116,7 +116,7 @@ kubectl -n nexusflow describe hpa processing-worker
 3. 新向量点全部写入成功后再删除旧点，检索侧无空窗；
 4. 成功后回到 `COMPLETED`。
 
-失败时状态回滚为 `COMPLETED`，旧索引保持可用，可直接重试，无需重新上传。级联删除会同时清理 `parsed/` 下的解析产物，请勿单独清理该目录，否则重建将不可用。
+失败时状态回滚为 `COMPLETED`，旧索引保持可用，可直接重试，无需重新上传。级联删除会同时清理 `parsed/` 下的解析 Markdown 与抽取图片（`media_keys`），请勿单独清理该目录，否则重建将不可用且引用图片会 404。
 
 重建会同时刷新稠密索引与 sparse 伴生集合。启用 `LLAMAINDEX_SPARSE_ENABLED` 后，建议对升级前的历史文档执行一次 Reindex 补齐 sparse 向量；未补齐时 `bm25` 在 sparse 命中不足 `top_k` 时会混合旧 BM25 兜底，但旧文档的纯词法召回会弱于已补齐文档。
 

@@ -385,6 +385,46 @@ func TestDeleteTaskCascadesIndexCleanup(t *testing.T) {
 	}
 }
 
+// Derived parse artifacts (markdown + extracted images) must not outlive the
+// document that produced them.
+func TestDeleteTaskRemovesParsedArtifacts(t *testing.T) {
+	m := state.NewMachine()
+	objects := newFakeObjectStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc := NewService(objects, m, &fakePublisher{}, logger, "http://objects", "file.uploaded")
+
+	meta := map[string]string{
+		"file_name": "a.pdf", "object_key": "default/kb1/upload/x/a.pdf",
+		"kb_id": "kb1", "markdown_key": "default/kb1/parsed/t1.md",
+		"media_keys": "default/kb1/parsed/t1/images/a.png,default/kb1/parsed/t1/images/b.png",
+	}
+	seedTask(t, m, "t1", "default", meta)
+	for _, key := range []string{
+		meta["object_key"], meta["markdown_key"],
+		"default/kb1/parsed/t1/images/a.png", "default/kb1/parsed/t1/images/b.png",
+	} {
+		if err := objects.Put(context.Background(), key, bytes.NewReader([]byte("x")), 1, "application/octet-stream"); err != nil {
+			t.Fatalf("seed %s: %v", key, err)
+		}
+	}
+
+	if _, err := svc.DeleteTask(context.Background(), &pb.DeleteTaskRequest{TaskId: "t1", KbId: "kb1"}); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	got := map[string]bool{}
+	for _, key := range objects.deletedKeys() {
+		got[key] = true
+	}
+	for _, key := range []string{
+		meta["object_key"], meta["markdown_key"],
+		"default/kb1/parsed/t1/images/a.png", "default/kb1/parsed/t1/images/b.png",
+	} {
+		if !got[key] {
+			t.Fatalf("expected %s to be deleted, got %v", key, got)
+		}
+	}
+}
+
 // A failed index cleanup must abort the delete so vectors never outlive their
 // task record; the caller can retry once the index service recovers.
 func TestDeleteTaskKeepsTaskWhenIndexCleanupFails(t *testing.T) {

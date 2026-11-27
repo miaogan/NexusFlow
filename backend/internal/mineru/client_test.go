@@ -34,6 +34,13 @@ func TestHTTPClientV1Tasks(t *testing.T) {
 	if _, err := entry.Write([]byte("# parsed markdown\n")); err != nil {
 		t.Fatal(err)
 	}
+	figure, err := zw.Create("result/images/fig1.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := figure.Write([]byte("PNG-BYTES")); err != nil {
+		t.Fatal(err)
+	}
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -118,9 +125,12 @@ func TestHTTPClientV1Tasks(t *testing.T) {
 	if _, done, err := client.Poll(context.Background(), jobID); err != nil || done {
 		t.Fatalf("first poll: done=%v err=%v", done, err)
 	}
-	markdown, done, err := client.Poll(context.Background(), jobID)
-	if err != nil || !done || markdown != "# parsed markdown\n" {
-		t.Fatalf("second poll: markdown=%q done=%v err=%v", markdown, done, err)
+	doc, done, err := client.PollDocument(context.Background(), jobID)
+	if err != nil || !done || doc.Markdown != "# parsed markdown\n" {
+		t.Fatalf("second poll: doc=%+v done=%v err=%v", doc, done, err)
+	}
+	if got := string(doc.Images["images/fig1.png"]); got != "PNG-BYTES" {
+		t.Fatalf("extracted image = %q, want PNG-BYTES (all=%v)", got, doc.Images)
 	}
 }
 

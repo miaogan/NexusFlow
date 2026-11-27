@@ -275,6 +275,13 @@ func (s *Service) DeleteTask(ctx context.Context, req *pb.DeleteTaskRequest) (*p
 			objectDeleted = true
 		}
 	}
+	// Derived parse artifacts (markdown + extracted images) belong to the
+	// document and must not outlive it.
+	for _, key := range parsedArtifactKeys(task.Metadata) {
+		if err := s.objects.Delete(ctx, key); err != nil {
+			s.logger.Warn("delete parsed artifact failed", "task_id", task.ID, "key", key, "error", err)
+		}
+	}
 	s.logger.Info("task deleted", "task_id", task.ID, "tenant", task.TenantID,
 		"kb_id", kbID, "index_deleted", indexDeleted, "object_deleted", objectDeleted)
 	return &pb.DeleteTaskResponse{
@@ -455,4 +462,19 @@ func toTaskSummary(t state.Task) *pb.TaskSummary {
 		UpdatedAt:   t.UpdatedAt.Format(time.RFC3339),
 		KbId:        taskKnowledgeBaseID(t),
 	}
+}
+
+// parsedArtifactKeys lists derived files created by the parser for one task:
+// the persisted markdown plus every extracted image.
+func parsedArtifactKeys(meta map[string]string) []string {
+	var keys []string
+	if key := strings.TrimSpace(meta["markdown_key"]); key != "" {
+		keys = append(keys, key)
+	}
+	for _, key := range strings.Split(meta["media_keys"], ",") {
+		if key = strings.TrimSpace(key); key != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
 }

@@ -1,6 +1,6 @@
 # NexusFlow v1.1.0 – v1.5.0 企业级能力演进方案（ROADMAP_V1_1_V1_5）
 
-> **定位**：本文件是面向 v1.1.0 至 v1.5.0 的能力演进方案，共 5 个 Milestone、11 个结构化任务；已交付 4 个，其余 7 个为当前待做项。
+> **定位**：本文件是面向 v1.1.0 至 v1.5.0 的能力演进方案，共 5 个 Milestone、11 个结构化任务；已交付 5 个，其余 6 个为当前待做项。
 > **2026-11-27 增补**：Agent Hub × Workflow × MCP × HITL 已按规划文档 `.trae/documents/agent-hub-workflow-mcp-hitl.md` 交付；Task 3.2 完成（运行状态持久化由 Task 3.3 补齐），Task 5.2 的 MCP Server 部分提前落地，其余任务状态不变。
 > **v1.2.0 已交付**：自定义 SubAgent（存储 + 多租户注册表 + SandboxAgentExecutor + 动态技能路由 + `/subagents` 控制台）已按 [ROADMAP_V1_2.md](ROADMAP_V1_2.md) Milestone 1–3 完成。本文件 Milestone 2（多模态、Connector）未能进入该版本，顺延为待做项，其原 v1.2.0 版本标签不再使用。
 > **与 `ROADMAP_V1_1.md` 的关系**：`ROADMAP_V1_1.md` 是上一轮已执行完毕的交付清单（知识库实体、级联删除、配额计量、K8s HPA，对应提交 c880e64 / 44b9284 / 9bc2c01 / a244bd7）。本文件在此基础上重新规划更完整的企业级能力，Milestone 1 为增量升级。
@@ -11,7 +11,6 @@
 
 | 任务 | 内容 | 状态 | 现状与前置 |
 | --- | --- | --- | --- |
-| Task 2.1 | MinerU 图文多模态检索与缩略图渲染 | 未开始 | 顺延；解析层图片/版面信息尚未保留 |
 | Task 2.2 | 统一 Connector 框架（web_crawler / s3_bucket / db_query） | 未开始 | 顺延；无代码基础 |
 | Task 3.1 | DAG 条件分支（condition）与并发迭代（loop）节点 | 未开始 | 现有拓扑校验与调度可直接扩展 |
 | Task 4.1 | PII 双向脱敏 + 合规审计检索 | 未开始 | 工具/审批审计已持久化到 `audit_logs`；PII 识别脱敏与按时间检索/保留策略待实现 |
@@ -33,10 +32,12 @@
 
 ---
 
-## Milestone 2: 多模态与外部数据源连接器（原计划 v1.2.0，已顺延）
+## Milestone 2: 多模态与外部数据源连接器（Task 2.1 已交付，2.2 待做）
 
-* **[ ] Task 2.1: 释放 MinerU 图文多模态解析能力，在 RAG 问答中支持图文联合检索、图表缩略图渲染与点击放大**
+* **[x] Task 2.1: 释放 MinerU 图文多模态解析能力，在 RAG 问答中支持图文联合检索、图表缩略图渲染与点击放大**
   * 解析层保留 MinerU 输出的图片与版面信息，切块时建立图-文关联；检索结果返回图表资源引用，问答链路注入图片摘要；前端支持缩略图展示与点击放大。
+  * 交付情况：MinerU 结果 ZIP 中的图片由 `mineru.ParseDocument` 提取（单图 8MB、总量 32MB、最多 64 张），Worker 落盘到 `<tenant>/<kb>/parsed/<task>/images/` 并把 Markdown 图片链接改写为 `/v1/media?key=...`；Gateway 新增 `GET /v1/media`（`search:use`，仅允许本租户 `parsed/*/images` 下的图片扩展名）；LlamaIndex 切块把 `image_urls` 写入节点 metadata 并随检索结果返回；Chat 上下文按 chunk 注入“本段配图”摘要；控制台检索结果与问答引用展示缩略图，点击全屏放大。
+  * 边界：本期只复用 MinerU 的 Markdown 版面结构，未接入独立 layout JSON；图片以鉴权接口读取（前端 fetch 带 Bearer 转 blob），不走公开对象存储。
 
 * **[ ] Task 2.2: 内置统一 Connector 框架与开箱即用连接器，支持 web_crawler、s3_bucket 及 db_query 的增量同步与去重**
   * 抽象统一的 Connector 接口（发现 → 拉取 → 解析 → 入库 → 游标持久化），内置网页抓取、S3 桶与数据库查询三类连接器；以内容哈希与外部主键去重，按游标增量同步，失败可断点续传。

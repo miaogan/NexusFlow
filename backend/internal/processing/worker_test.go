@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -129,3 +130,68 @@ func (*failingObjects) URL(string) string                    { return "" }
 
 var _ store.ObjectStore = (*failingObjects)(nil)
 var _ store.ObjectStore = (*fakeObjects)(nil)
+
+// imageClient returns one extracted figure alongside the Markdown.
+type imageClient struct {
+	mineru.MockClient
+}
+
+func (c *imageClient) PollDocument(
+	ctx context.Context, jobID string,
+) (mineru.Document, bool, error) {
+	markdown, done, err := c.Poll(ctx, jobID)
+	doc := mineru.Document{
+		Markdown: markdown,
+		Images:   map[string][]byte{"images/fig1.png": []byte("PNG-BYTES")},
+	}
+	return doc, done, err
+}
+
+var _ mineru.DocumentClient = (*imageClient)(nil)
+
+func TestWorkerPersistsImagesAndRewritesLinks(t *testing.T) {
+	machine := state.NewMachine()
+	objects := newFakeObjects()
+	pub := &fakePublisher{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	client := &imageClient{MockClient: mineru.MockClient{
+		Markdown: "# figure\n\n![arch](images/fig1.png)\n",
+	}}
+	worker := NewWorker(client, machine, pub, logger,
+		10*time.Millisecond, 1, 1, "file.parsed", "task.dlq", "test", WithObjectStore(objects))
+
+	ctx := context.Background()
+	if _, _, err := machine.Create(ctx, state.Task{
+		ID: "t1", TenantID: "default",
+		Metadata: map[string]string{"file_name": "a.pdf", "file_type": "pdf", "kb_id": "kb1"},
+	}); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	msg := queue.Message{
+		Topic: "file.uploaded", Key: "t1",
+		Payload: []byte(`{"task_id":"t1","tenant_id":"default","file_url":"http://objects/x","file_type":"pdf"}`),
+	}
+	if err := worker.Handle(ctx, msg); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+
+	imageKey := "default/kb1/parsed/t1/images/fig1.png"
+	if string(objects.data[imageKey]) != "PNG-BYTES" {
+		t.Fatalf("image not persisted, keys=%v", keysOf(objects.data))
+	}
+	markdown := string(objects.data["default/kb1/parsed/t1.md"])
+	if !strings.Contains(markdown, "/v1/media?key=default%2Fkb1%2Fparsed%2Ft1%2Fimages%2Ffig1.png") {
+		t.Fatalf("markdown image link not rewritten: %q", markdown)
+	}
+	if len(pub.messages) != 1 || !strings.Contains(string(pub.messages[0].Payload), "/v1/media?key=") {
+		t.Fatalf("published markdown missing media link: %+v", pub.messages)
+	}
+}
+
+func keysOf(data map[string][]byte) []string {
+	out := make([]string, 0, len(data))
+	for key := range data {
+		out = append(out, key)
+	}
+	return out
+}
