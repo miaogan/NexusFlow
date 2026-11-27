@@ -34,8 +34,8 @@
   * **目标**：在检索重排流程中引入 `FeedbackPenalty` 阶段，对累计负反馈超阈值的 Chunk 乘以惩罚系数。
   * **验证命令**：`make vet && go test ./backend/internal/query/...`
 * **[x] Task 2.2: 打通纠正答案（Corrected Answer）灰度回灌能力**
-  * **目标**：在 `rag-agent` 检索前置步骤中匹配高优 `corrected_answer` 历史记录并注入 Prompt。
-  * **验证命令**：`cd services/rag-agent && pytest`
+  * **目标**：在 agent hub 的检索前置步骤中匹配高优 `corrected_answer` 历史记录并注入 Prompt。
+  * **验证命令**：`cd services/agent-hub && pytest`
 * **[x] Task 2.3: 配置 GitHub Actions CI 自动化测试与离线评测卡点**
   * **目标**：新建 `.github/workflows/ci.yml`，配置前后端构建、单元测试及离线 RAG 评测工作流。
   * **验证命令**：`make test && make web-build`

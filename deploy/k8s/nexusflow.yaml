@@ -41,6 +41,18 @@ data:
   LLAMAINDEX_URL: "http://llamaindex:8000"
   RAG_AGENT_URL: "http://rag-agent:8001"
   RAG_GATEWAY_URL: "http://gateway:8080"
+  RAG_DATABASE_URL: "postgresql://nexusflow:change-me@postgres.nexusflow.svc:5432/nexusflow"
+  # Single-container star hub: RAG chat plus in-process intent/summary/memory.
+  AGENT_HUB_ROLE: "all"
+  AGENT_HUB_MODE: "local"
+  AGENT_HUB_PORT: "8001"
+  AGENT_HUB_PREFER: "local"
+  AGENT_HUB_DYNAMIC_REGISTRATION: "false"
+  # Memory content lives in Postgres; vectors live in Qdrant.
+  MEMORY_DRIVER: "qdrant"
+  MEMORY_DATABASE_URL: "postgresql://nexusflow:change-me@postgres.nexusflow.svc:5432/nexusflow"
+  MEMORY_QDRANT_URL: "http://qdrant.nexusflow.svc:6333"
+  MEMORY_QDRANT_COLLECTION: "nexusflow_memories"
   # Tenant quotas. 0 means unlimited; sizes are in bytes.
   QUOTA_MAX_STORAGE_BYTES: "10737418240"
   QUOTA_MAX_FILES: "5000"
@@ -698,24 +710,24 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: rag-agent
+  name: agent-hub
   namespace: nexusflow
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: rag-agent
+      app: agent-hub
   template:
     metadata:
       labels:
-        app: rag-agent
+        app: agent-hub
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8001"
     spec:
       containers:
-        - name: rag-agent
-          image: ghcr.io/nexusflow/rag-agent:4.0.0
+        - name: agent-hub
+          image: ghcr.io/nexusflow/agent-hub:1.0.0
           ports:
             - containerPort: 8001
           envFrom:
@@ -723,20 +735,58 @@ spec:
                 name: app-config
             - secretRef:
                 name: app-secret
+          env:
+            # Reuse the RAG model credentials for the in-process agents.
+            - name: INTENT_LLM_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: RAG_LLM_BASE_URL
+            - name: INTENT_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: RAG_LLM_API_KEY
+            - name: SUMMARY_LLM_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: RAG_LLM_BASE_URL
+            - name: SUMMARY_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: RAG_LLM_API_KEY
+            - name: MEMORY_LLM_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: RAG_LLM_BASE_URL
+            - name: MEMORY_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: RAG_LLM_API_KEY
+            - name: MEMORY_EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: LLAMAINDEX_EMBEDDING_API_KEY
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /readyz
               port: 8001
             initialDelaySeconds: 10
             periodSeconds: 15
           resources:
             requests:
-              cpu: 100m
-              memory: 256Mi
-            limits:
-              cpu: 500m
+              cpu: 250m
               memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
 ---
+# Keep the old service name so gateway RAG_AGENT_URL keeps working.
 apiVersion: v1
 kind: Service
 metadata:
@@ -744,7 +794,7 @@ metadata:
   namespace: nexusflow
 spec:
   selector:
-    app: rag-agent
+    app: agent-hub
   ports:
     - port: 8001
       targetPort: 8001

@@ -1,6 +1,6 @@
 # NexusFlow
 
-分布式文件向量化工作流：**Go 编排调度 + MinerU 解析 + LlamaIndex 数据加工 + OpenSandbox 执行**。
+分布式文件向量化工作流：**Go 编排调度 + MinerU 解析 + LlamaIndex 数据加工 + Agent Hub 多智能体 + OpenSandbox 执行**。
 
 将 PDF / Word / TXT 等异构文件加工为可检索的向量与索引，提供多路召回、RRF 融合、Cross-Encoder 重排与自定义代码节点能力，服务下游 RAG 与语义检索场景。
 
@@ -32,7 +32,10 @@ flowchart TB
 
     subgraph D[检索问答层]
         QS[Query Service<br/>多路召回 · RRF · Rerank]
-        RAG[RAG Agent + intent / summary / memory<br/>问答 · 压缩 · 长期记忆]
+        AGH[Agent Hub<br/>星型调度 · 能力路由 · 故障转移]
+        INT[Intent Agent]
+        SUM[Summary Agent]
+        MEM[Memory Agent]
     end
 
     subgraph E[存储层]
@@ -49,7 +52,10 @@ flowchart TB
     GW --> WF
     GW --> ING
     GW --> QS
-    GW --> RAG
+    GW --> AGH
+    AGH -->|intent.classify| INT
+    AGH -->|summary.compact| SUM
+    AGH -->|memory.recall/extract| MEM
     AUTH --> RD
     AUTH -->|身份/角色| PG
     MET --> RD
@@ -65,9 +71,9 @@ flowchart TB
     LIDX -->|dense+sparse| VS
     QS -->|多路召回| LIDX
     QS -->|负反馈计数| PG
-    RAG -. 复用 /v1/search .-> GW
-    RAG -->|会话/记忆正文| PG
-    RAG -. 记忆向量 .-> VS
+    AGH -. 复用 /v1/search .-> GW
+    AGH -->|会话/记忆正文| PG
+    AGH -. 记忆向量 .-> VS
 ```
 
 分层职责：
@@ -75,7 +81,7 @@ flowchart TB
 - **接入层**：Gateway 统一鉴权（JWT → tenant_id + 权限点）、租户级限流、trace 透传；Auth / User 服务负责签发令牌、管理账号与全局角色，并按知识库解析 `kb:admin` / `kb:editor` / `kb:viewer` 权限；Metering 负责租户用量与配额。
 - **编排调度层**：Workflow Engine 解析 DAG、按依赖并发调度；Ingestion 接收上传、级联删除并投递任务，Reindex 复用已持久化的解析产物。
 - **执行加工层**：Processing Worker 调用 MinerU 解析并把 Markdown 持久化为 `tenant/kb/parsed/<task>.md`；LlamaIndex Service 负责语义/层级切块、索引与 Embedding；Sandbox Execution 经 OpenSandbox 执行自定义代码。
-- **检索问答层**：Query Service 并行多路召回，RRF 融合，Cross-Encoder 重排，任一非核心路失败 Fail-open；RAG Agent 编排 intent / summary / memory，经 Gateway 复用统一检索链路。
+- **检索问答层**：Query Service 并行多路召回，RRF 融合，Cross-Encoder 重排，任一非核心路失败 Fail-open；Agent Hub 作为星型调度中心，按 capability 路由到 intent / summary / memory，经 Gateway 复用统一检索链路。
 - **存储层**：RabbitMQ/Kafka 消息与 DLQ、MinIO 原文件与解析产物、Qdrant 文档向量（dense/sparse）与记忆向量（dense）、PostgreSQL 身份/反馈/会话/记忆正文、Redis 任务状态、计量与令牌吊销。
 
 ## 服务与目录
@@ -91,10 +97,7 @@ flowchart TB
 | Sandbox Execution | Go | `backend/cmd/sandbox-execution` | 9093 | 自定义代码节点强隔离执行 |
 | Query Service | Go | `backend/cmd/query-service` | 9094 | 多路召回、RRF、重排、流式回答 |
 | LlamaIndex Service | Python | `services/llamaindex` | 8000 | 切块、索引、Embedding、检索策略 |
-| RAG Agent | Python | `services/rag-agent` | 8001 | LangGraph 多轮问答、意图路由、引用、会话持久化 |
-| Intent Agent | Python | `services/intent-agent` | 8002 | 独立意图识别服务（Supervisor 第一步），LLM + 规则降级 |
-| Summary Agent | Python | `services/summary-agent` | 8003 | 上下文总结 / 自动压缩（滚动摘要 + 预算裁剪），LLM + 抽取式降级 |
-| Memory Agent | Python | `services/memory-agent` | 8004 | 长期记忆抽取、去重合并、召回；Postgres 正文 + Qdrant 向量，规则/词面降级 |
+| Agent Hub | Python | `services/agent-hub` | 8001（拆分 8002–8004） | 星型调度 + RAG 多轮问答；默认单容器内置 intent / summary / memory，可用 `ROLE` 拆分 |
 | Web Console | React | `web` | 5173 / 8088 | 控制台：知识库切换与授权 / 文件 / 任务 / 检索 / 问答 / 沙箱 / DAG |
 
 ```text
@@ -116,10 +119,8 @@ flowchart TB
 │   │   └── platform/              # 日志、指标、HTTP/gRPC 服务封装
 │   └── pb/                        # protoc 生成代码
 ├── services/llamaindex/           # FastAPI + LlamaIndex 数据加工服务
-├── services/rag-agent/            # FastAPI + LangGraph 多轮 RAG 问答服务
-├── services/intent-agent/         # FastAPI + LangGraph 意图识别服务（独立部署）
-├── services/summary-agent/        # FastAPI + LangGraph 上下文总结 / 压缩服务（独立部署）
-├── services/memory-agent/         # FastAPI + LangGraph 长期记忆抽取 / 召回服务（独立部署）
+├── services/agent-hub/            # 单容器多 Agent：RAG + intent/summary/memory + 星型调度
+│   └── src/nexusflow_agents/      # agents/*（业务）、core/{registry,hub,executor}（调度）
 ├── web/                           # React + TS 控制台（路由 + 多页面 + React Flow）
 ├── deploy/
 │   ├── docker-compose.yml         # 完整本地编排
@@ -217,11 +218,11 @@ make up
 | Workflow Engine | http://localhost:8081 |
 | LlamaIndex Service | http://localhost:8000 |
 | MinerU API（独立容器） | http://localhost:18000 |
-| RAG Agent | http://localhost:8001 |
+| Agent Hub | http://localhost:8001 |
 | RabbitMQ 控制台 | http://localhost:15672 |
 | Prometheus / Grafana | http://localhost:9090 / http://localhost:3000 |
 
-容器编排使用 `STATE_DRIVER=redis`、`QUEUE_DRIVER=rabbitmq`，服务间通过 gRPC 与消息队列解耦。每个业务容器均提供 `/healthz`（Go 服务在 `METRICS_ADDR=:9100` 上同时暴露 `/metrics`，gateway/workflow/web 用各自 HTTP 端口），`docker compose` 依据健康检查状态控制启动顺序（如 gateway 等待 auth/user/ingestion/query/sandbox/rag-agent 健康后再启动）。
+容器编排使用 `STATE_DRIVER=redis`、`QUEUE_DRIVER=rabbitmq`，服务间通过 gRPC 与消息队列解耦。每个业务容器均提供 `/healthz`（Go 服务在 `METRICS_ADDR=:9100` 上同时暴露 `/metrics`，gateway/workflow/web 用各自 HTTP 端口），`docker compose` 依据健康检查状态控制启动顺序（如 gateway 等待 auth/user/ingestion/query/sandbox/agent-hub 健康后再启动）。
 
 生产集群部署（PVC、HPA 自定义指标与配额）见 [docs/deployment.md](docs/deployment.md)。
 
@@ -337,51 +338,62 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 
 首次启动会自动种子管理员：`admin / admin123`（可用 `SEED_ADMIN_*` 覆盖）。控制台 `/login` 登录后，`admin` 可在"用户管理"页创建账号、分配角色、启停用户，并新建自定义角色。未登录可点"以匿名身份浏览"（需 `ALLOW_ANONYMOUS=true`），匿名身份仅有 `search:use`，可使用检索与智能问答，但无任何管理权限。
 
-## RAG 对话服务（LangGraph）
+## Agent Hub（RAG + 多 Agent 星型调度）
 
-`services/rag-agent` 打通「用户身份」与「检索」，提供多轮问答、答案引用与会话历史；意图识别拆分为独立的 `services/intent-agent`，通过 HTTP 通信：
+`services/agent-hub` 默认单容器运行：中心 Hub 以星型拓扑连接 intent、summary、memory 三个 Agent，对外仍提供原 `/v1/chat` 与 `/v1/conversations` 契约。
 
-- **身份联动**：网关校验 JWT 后将 `x-tenant-id` / `x-user-id` / `Authorization` 透传给 rag-agent；会话与消息按「租户 + 用户」隔离，匿名调用者落在 `default/anonymous`。
-- **意图路由（multi-agent 第一步）**：rag-agent 调用独立 intent-agent（`RAG_INTENT_URL`）做 `knowledge_qa | chitchat | clarify` 分类；`chitchat` / `clarify` 跳过检索直接回答，服务不可用时降级为知识问答。
-- **上下文压缩（multi-agent 第二步）**：会话超出 `RAG_MAX_HISTORY` 时，rag-agent 把已摘要前缀与待压缩轮次送独立 summary-agent（`RAG_SUMMARY_URL`）生成滚动摘要并写入 `rag_conversations.summary`，prompt 使用「摘要 + 最近 `RAG_SUMMARY_RECENT_MESSAGES` 条原文」；摘要服务不可用时改回原文窗口，仅损失上下文、不影响正确性。全文与引用仍完整持久化，压缩只影响 prompt。
-- **长期记忆（multi-agent 第三步）**：rag-agent 回答前调用 memory-agent（`RAG_MEMORY_URL`）按「租户 + 用户」召回 top-k 记忆注入 prompt；回答落库后异步提交本轮对话做抽取与去重（daemon 线程，不阻塞响应）。记忆服务不可用或未配置时召回为空、抽取跳过，主链路不受影响。
-- **检索复用**：rag-agent 通过 `RAG_GATEWAY_URL` 调用网关 `/v1/search`，复用统一的多路召回 + RRF + 重排链路与 trace，而不是自建第二套检索。
-- **LangGraph 生成**：`retrieve → generate` 两节点状态图；配置 `RAG_LLM_BASE_URL` + `RAG_LLM_API_KEY`（OpenAI 兼容）时调用大模型，未配置时降级为抽取式片段摘要，保证无 Key 也能演示。
-- **流式过程事件**：`/v1/chat/stream` 以 SSE 依次推送 `stage(intent) → intent → stage(retrieve) → sources → stage(generate) → token* → done`；控制台据此渲染「意图 → 检索 → 生成 → 回答」节点、检索知识面板，并支持正文 `[n]` 标记点击跳转到对应来源。非检索意图的「检索」节点显示为跳过。
-- **会话存储**：`RAG_DATABASE_URL` 指向 Postgres 时持久化到 `rag_conversations` / `rag_messages`；为空则使用进程内存储（仅开发）。
+```mermaid
+flowchart LR
+    GW[API Gateway] --> HUB[Agent Hub<br/>capability router]
+    HUB -. registry · priority · health · TTL .-> REG[(Agent Registry)]
 
-本地运行（先启动 dev-all 提供网关与检索，再分别启动四个 Python 服务）：
+    HUB -->|intent.classify| INT[Intent Agent<br/>local :8001 / remote :8002]
+    HUB -->|summary.compact| SUM[Summary Agent<br/>local :8001 / remote :8003]
+    HUB -->|memory.recall / extract| MEM[Memory Agent<br/>local :8001 / remote :8004]
+
+    HUB -->|/v1/search| GW
+    HUB -->|会话 / 记忆正文| PG[(PostgreSQL)]
+    HUB -. 记忆向量 .-> QD[(Qdrant)]
+```
+
+- **星型调度**：Hub 按 capability（`intent.classify` / `summary.compact` / `memory.recall` / `memory.extract`）从注册表选择 Agent；支持 `local` 进程内执行与 `http` 远程 worker、优先级、超时、健康摘除、故障转移和运行时注册。`AGENT_HUB_MODE=local|remote|hybrid` 控制拓扑。
+- **身份联动**：网关校验 JWT 后将 `x-tenant-id` / `x-user-id` / `Authorization` 透传给 agent-hub；会话与消息按「租户 + 用户」隔离，匿名调用者落在 `default/anonymous`。
+- **意图路由**：Hub 调用 `intent.classify` 做 `knowledge_qa | chitchat | clarify` 分类；`chitchat` / `clarify` 跳过检索直接回答，Agent 不可用时降级为知识问答。
+- **上下文压缩**：会话超出 `RAG_MAX_HISTORY` 时，Hub 调用 `summary.compact` 生成滚动摘要并写入 `rag_conversations.summary`；失败时改回原文窗口，仅损失上下文、不影响正确性。
+- **长期记忆**：Hub 调用 `memory.recall` 按「租户 + 用户」召回 top-k 注入 prompt；回答落库后通过 Hub 有界后台池提交 `memory.extract`。记忆正文在 Postgres，向量在 Qdrant。
+- **检索复用**：agent-hub 通过 `RAG_GATEWAY_URL` 调用网关 `/v1/search`，复用统一的多路召回 + RRF + 重排链路与 trace。
+- **LangGraph 生成**：`retrieve → generate` 两节点状态图；配置 `RAG_LLM_BASE_URL` + `RAG_LLM_API_KEY` 时调用大模型，未配置时降级为抽取式片段摘要。
+- **SSE 契约不变**：`/v1/chat/stream` 依次推送 `stage(intent) → intent → stage(retrieve) → sources → stage(generate) → token* → done`，Web 端无需改动。
+- **会话存储**：`RAG_DATABASE_URL` 指向 Postgres 时持久化到 `rag_conversations` / `rag_messages`；为空则使用进程内存储。
+
+本地运行（单容器，先启动 dev-all 提供网关与检索）：
 
 ```bash
-# 终端 1：Go 全链路（含 Gateway :8080 与查询服务）
 make run-dev-all
 
-# 终端 2：意图识别服务（无 Key 时走规则）
-cd services/intent-agent
-pip install -e ".[test]"
-uvicorn app.main:app --port 8002
-
-# 终端 3：摘要服务（无 Key 时走抽取式摘要）
-cd services/summary-agent
-pip install -e ".[test]"
-uvicorn app.main:app --port 8003
-
-# 终端 4：长期记忆服务（无 Key 时走规则抽取 + 词面召回，内存存储）
-cd services/memory-agent
-pip install -e ".[test]"
-uvicorn app.main:app --port 8004
-
-# 终端 5：RAG agent（内存会话 + 抽取式回答）
-cd services/rag-agent
+cd services/agent-hub
 pip install -e ".[dev]"
-RAG_GATEWAY_URL=http://127.0.0.1:8080 \
+uvicorn nexusflow_agents.main:app --port 8001
+```
+
+可选拆分部署（同一镜像，通过 `ROLE` 启动独立 worker）：
+
+```bash
+AGENT_HUB_ROLE=intent  AGENT_HUB_PORT=8002 uvicorn nexusflow_agents.main:app --port 8002
+AGENT_HUB_ROLE=summary AGENT_HUB_PORT=8003 uvicorn nexusflow_agents.main:app --port 8003
+AGENT_HUB_ROLE=memory  AGENT_HUB_PORT=8004 uvicorn nexusflow_agents.main:app --port 8004
+
+# 主入口改为远程/混合模式
+AGENT_HUB_MODE=remote \
 RAG_INTENT_URL=http://127.0.0.1:8002 \
 RAG_SUMMARY_URL=http://127.0.0.1:8003 \
 RAG_MEMORY_URL=http://127.0.0.1:8004 \
-uvicorn app.main:app --port 8001
+uvicorn nexusflow_agents.main:app --port 8001
 ```
 
-接入 DeepSeek（OpenAI 兼容，各 agent 分别配置）：
+也可用 `docker compose --profile split up` 启动拆分拓扑。
+
+接入 DeepSeek（OpenAI 兼容，各类 Agent 可用同一套 Key）：
 
 ```bash
 RAG_LLM_BASE_URL=https://api.deepseek.com/v1
@@ -413,20 +425,21 @@ MEMORY_EMBEDDING_MODEL=text-embedding-3-small
 
 ### 多智能体路线
 
-| 阶段 | 服务 | 内容 | 状态 |
+| 阶段 | Agent | 内容 | 状态 |
 | --- | --- | --- | --- |
-| P1 | `intent-agent` :8002 | 意图识别与路由（`knowledge_qa / chitchat / clarify`），LLM + 规则降级 | 已完成 |
-| P2 | `summary-agent` :8003 | 上下文总结、自动压缩（滚动摘要 + 最近 N 轮），按字符预算裁剪 | 已完成 |
-| P3 | `memory-agent` :8004 | 长期记忆抽取、去重合并、召回注入；Postgres 正文 + Qdrant 向量 | 已完成 |
+| P1 | `intent`（默认 in-process；拆分 :8002） | 意图识别与路由（`knowledge_qa / chitchat / clarify`），LLM + 规则降级 | 已完成 |
+| P2 | `summary`（默认 in-process；拆分 :8003） | 上下文总结、自动压缩（滚动摘要 + 最近 N 轮），按字符预算裁剪 | 已完成 |
+| P3 | `memory`（默认 in-process；拆分 :8004） | 长期记忆抽取、去重合并、召回注入；Postgres 正文 + Qdrant 向量 | 已完成 |
 
-P2/P3 约定：
+约定：
 
-- 各 agent 独立部署、通过 HTTP 通信；rag-agent 保留 Supervisor 编排职责，新增 `RAG_SUMMARY_URL` / `RAG_MEMORY_URL` 接入。
+- 默认 `AGENT_HUB_ROLE=all`、`AGENT_HUB_MODE=local`，三个 Agent 在进程内执行；`MODE=remote|hybrid` 时通过 `RAG_INTENT_URL` / `RAG_SUMMARY_URL` / `RAG_MEMORY_URL` 调用拆分 worker，失败自动降级。
 - 摘要写入 `rag_conversations.summary`（`summary_count` 记录已折叠消息数），prompt 使用「摘要 + 最近 N 条原文」；引用与全文不因压缩丢失。
 - 记忆正文存 `rag_memories`（Postgres，事实源），向量存 Qdrant `nexusflow_memories`；召回先按 `tenant_id + user_id` 过滤取 top-k ID，再回 Postgres 取正文，Qdrant 不可用或未命中时自动退回词面召回。`MEMORY_DRIVER=memory|postgres|qdrant`，为空时自动选择（DB + Qdrant → qdrant，仅 DB → postgres，否则 memory）。
-- 记忆抽取在有 `MEMORY_LLM_*` 时用 LLM，否则走规则（偏好/画像/明确要求记住的事实）；去重按归一化文本 + 词面相似度合并，更新而非新增。
-- 历史 pgvector 向量可用 `cd services/memory-agent && python -m app.backfill` 一次性回填到 Qdrant；`MEMORY_DRIVER=postgres` 保留旧 pgvector 实现作为回滚路径，`MEMORY_VECTOR_INDEX` / `MEMORY_HNSW_*` / `MEMORY_IVFFLAT_*` 仅对旧驱动生效。注意回滚到 postgres 后，qdrant 模式期间新增的记忆没有 pgvector 向量，需要重新抽取才能恢复语义召回。
-- 所有 agent 统一使用 OpenAI 兼容配置（`RAG_LLM_*` / `INTENT_LLM_*`），DeepSeek 可直接接入。
+- 记忆抽取在有 `MEMORY_LLM_*` 时用 LLM，否则走规则；去重按归一化文本 + 词面相似度合并，更新而非新增。
+- 历史 pgvector 向量可用 `cd services/agent-hub && python -m nexusflow_agents.agents.memory.backfill` 一次性回填到 Qdrant；`MEMORY_DRIVER=postgres` 保留旧 pgvector 实现作为回滚路径。
+- 运行时注册接口 `POST /v1/agents` 默认关闭；开启需 `AGENT_HUB_DYNAMIC_REGISTRATION=true` 与 `AGENT_HUB_ADMIN_TOKEN`。
+- 所有 Agent 统一使用 OpenAI 兼容配置，DeepSeek 可直接接入。
 
 ## 反馈与评审
 
@@ -435,7 +448,7 @@ P2/P3 约定：
 - **持久化**：`FEEDBACK_DRIVER=memory|postgres`。Postgres 启动时自动建 `rag_feedback` 表，按 `tenant_id + user_id + subject_id + name` 覆盖更新，同一消息只保留最新评分；生产 compose 默认 `postgres`，即使 tracing 为 Noop 也不会丢数据。
 - **评审查询**：`GET /v1/feedback?rating=-1&limit=20`（需 `user:read`，按租户隔离），返回 query/answer/引用/纠正答案等字段。
 - **低分归因**：`eval/analyze_feedback.py` 拉取负反馈，按 `generation_wrong / retrieval_miss / citation_missing / citation_out_of_range / unclassified` 归因，输出 `eval/feedback_report.json` 与可回放的 `eval/regressions.jsonl`。
-- **闭环回灌**：`GET /v1/corrected-answers?query=...`（需 `search:use`）按问题相似度返回高分历史纠正答案；rag-agent 在检索前置步骤调用该接口，把命中的纠正答案注入 Prompt（`RAG_CORRECTED_TOP_K`，失败自动降级为普通 RAG）。检索侧的负反馈在线降权见上文 `FeedbackPenalty`。
+- **闭环回灌**：`GET /v1/corrected-answers?query=...`（需 `search:use`）按问题相似度返回高分历史纠正答案；agent-hub 在检索前置步骤调用该接口，把命中的纠正答案注入 Prompt（`RAG_CORRECTED_TOP_K`，失败自动降级为普通 RAG）。检索侧的负反馈在线降权见上文 `FeedbackPenalty`。
 
 ## RAG 离线评测
 
@@ -454,7 +467,7 @@ P2/P3 约定：
 # 先启动 dev-all；基于 3 条种子文档的示例集默认 k=2
 make eval-rag
 
-# 追加问答引用指标（需同时启动 rag-agent 与 intent-agent）
+# 追加问答引用指标（需启动 agent-hub）
 make eval-rag-chat
 ```
 
@@ -556,7 +569,7 @@ make up / down     # 容器编排启停
 | Job | 内容 |
 | --- | --- |
 | Backend | `go vet ./...` + `go test ./...`（Go 版本取自 `backend/go.mod`） |
-| RAG agent / LlamaIndex | 各自安装依赖后执行 `pytest` |
+| Agent hub / LlamaIndex | 各自安装依赖后执行 `pytest`；agent-hub 额外构建镜像 |
 | Offline eval scripts | `python -m unittest discover -s eval`（离线评测脚本单测，纯标准库） |
 | Offline RAG gate | 编译并启动 `dev-all`，等待 `:8080/healthz` 后执行 `eval/rag_eval.py`；任一指标低于 `eval/thresholds.json` 即失败（日志作为 artifact 上传） |
 | Web | `npm ci && npm run build`（tsc 类型检查 + Vite 产物） |
@@ -567,6 +580,6 @@ make up / down     # 容器编排启停
 - 单进程 dev-all 模式下，上传文件经解析、切块后写入共享内存索引（DocStore），检索可命中真实上传内容，任务状态推进至 COMPLETED。独立部署时 `processing-worker` 调 LlamaIndex `/v1/index` 写入 Qdrant，`query-service` 的 vector/bm25/graph 三路召回均走 LlamaIndex（`LLAMAINDEX_URL`）；`dev-all` 仍保留内存实现以便零依赖演示。
 - LlamaIndex Service 的切块、索引与检索依赖 Qdrant 与 Embedding API Key；未配置时相关接口返回 503。
 - K8s HPA 使用自定义指标 `nexusflow_queue_length`，需部署 prometheus-adapter 将指标转换为 Custom Metrics API。
-- 设计文档中的 NL2SQL 章节已落地为 `nl2sql` 工作流节点（只读 SQL 护栏 + 可选 LLM 生成）；LightRAG 图谱检索已落地为 `graph` 召回路由：LlamaIndex 提供 `/v1/graph/extract` 抽取接口与 `/v1/search` 的 graph 子路由（配置 `LLAMAINDEX_LLM_*` 时用 LLM 抽取实体/关系，否则或调用失败时自动退化为共现词图），Go 侧 `LlamaIndexRetriever` 将三路结果统一接入 RRF。长期记忆已由 `memory-agent` 落地（抽取/去重/召回/注入）：正文在 Postgres，向量在 Qdrant，两者职责分离。（可观测性 / Langfuse 导出与 dev trace viewer 已实现，见上节。）
+- 设计文档中的 NL2SQL 章节已落地为 `nl2sql` 工作流节点（只读 SQL 护栏 + 可选 LLM 生成）；LightRAG 图谱检索已落地为 `graph` 召回路由：LlamaIndex 提供 `/v1/graph/extract` 抽取接口与 `/v1/search` 的 graph 子路由（配置 `LLAMAINDEX_LLM_*` 时用 LLM 抽取实体/关系，否则或调用失败时自动退化为共现词图），Go 侧 `LlamaIndexRetriever` 将三路结果统一接入 RRF。长期记忆与 intent / summary 已合并到 `agent-hub`（默认 in-process，可用 `ROLE` 拆分）：记忆正文在 Postgres，向量在 Qdrant，两者职责分离。（可观测性 / Langfuse 导出与 dev trace viewer 已实现，见上节。）
 - 用户与角色支持三种存储：`memory`（dev-all 单进程默认）、`redis`（`IDENTITY_DRIVER=redis`）与 `postgres`（`IDENTITY_DRIVER=postgres` + `IDENTITY_DATABASE_URL`），后两者供独立部署的 Auth / User 服务跨进程共享；postgres 启动时自动建表并复用内置角色种子。Compose 真机冒烟已验证自动建表、种子管理员登录及 Gateway 身份读取。
 - 登出通过令牌吊销名单即时生效：JWT 携带 `jti`，登出时将该 id 写入 `TOKEN_BLACKLIST_DRIVER`（`memory` 单进程 / `redis` 供 gateway 与 auth-service 共享）并设置剩余有效期 TTL；网关在每次鉴权时拦截已吊销的 access token，auth-service 在 validate/refresh 时拒绝已吊销的 refresh token。Redis 不可用时自动降级为内存名单并告警。

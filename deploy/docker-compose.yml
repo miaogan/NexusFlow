@@ -90,7 +90,7 @@ services:
       SANDBOX_TARGET: "sandbox-execution:9093"
       AUTH_TARGET: "auth-service:9096"
       USER_TARGET: "user-service:9097"
-      RAG_AGENT_URL: "http://rag-agent:8001"
+      RAG_AGENT_URL: "http://agent-hub:8001"
       # Persist ratings/implicit feedback even when tracing is a no-op.
       FEEDBACK_DRIVER: postgres
       FEEDBACK_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
@@ -109,7 +109,7 @@ services:
         condition: service_healthy
       user-service:
         condition: service_healthy
-      rag-agent:
+      agent-hub:
         condition: service_healthy
       postgres:
         condition: service_healthy
@@ -299,12 +299,75 @@ services:
     depends_on: [qdrant]
     ports: ["8000:8000"]
 
-  intent-agent:
+  agent-hub:
+    image: nexusflow/agent-hub:local
     build:
-      context: ../services/intent-agent
+      context: ../services/agent-hub
     environment:
+      AGENT_HUB_ROLE: all
+      AGENT_HUB_MODE: ${AGENT_HUB_MODE:-local}
+      AGENT_HUB_PORT: "8001"
+      AGENT_HUB_PREFER: ${AGENT_HUB_PREFER:-local}
+      AGENT_HUB_DYNAMIC_REGISTRATION: ${AGENT_HUB_DYNAMIC_REGISTRATION:-false}
+      AGENT_HUB_ADMIN_TOKEN: ${AGENT_HUB_ADMIN_TOKEN:-}
+      # Retrieval goes through the gateway so chat reuses the unified
+      # multi-route recall + rerank pipeline.
+      RAG_APP_ENV: prod
+      RAG_GATEWAY_URL: http://gateway:8080
+      RAG_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
+      # Only used in AGENT_HUB_MODE=remote|hybrid; local mode calls in-process.
+      RAG_INTENT_URL: ${RAG_INTENT_URL:-http://agent-hub-intent:8002}
+      RAG_SUMMARY_URL: ${RAG_SUMMARY_URL:-http://agent-hub-summary:8003}
+      RAG_MEMORY_URL: ${RAG_MEMORY_URL:-http://agent-hub-memory:8004}
+      RAG_LLM_BASE_URL: ${RAG_LLM_BASE_URL:-}
+      RAG_LLM_API_KEY: ${RAG_LLM_API_KEY:-}
+      RAG_LLM_MODEL: ${RAG_LLM_MODEL:-gpt-4o-mini}
+      RAG_DEFAULT_TOP_K: "5"
+      INTENT_LLM_BASE_URL: ${INTENT_LLM_BASE_URL:-}
+      INTENT_LLM_API_KEY: ${INTENT_LLM_API_KEY:-}
+      INTENT_LLM_MODEL: ${INTENT_LLM_MODEL:-deepseek-chat}
+      SUMMARY_LLM_BASE_URL: ${SUMMARY_LLM_BASE_URL:-}
+      SUMMARY_LLM_API_KEY: ${SUMMARY_LLM_API_KEY:-}
+      SUMMARY_LLM_MODEL: ${SUMMARY_LLM_MODEL:-deepseek-chat}
+      SUMMARY_BUDGET_CHARS: ${SUMMARY_BUDGET_CHARS:-1200}
+      MEMORY_DRIVER: ${MEMORY_DRIVER:-qdrant}
+      MEMORY_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
+      MEMORY_QDRANT_URL: ${MEMORY_QDRANT_URL:-http://qdrant:6333}
+      MEMORY_QDRANT_COLLECTION: ${MEMORY_QDRANT_COLLECTION:-nexusflow_memories}
+      MEMORY_LLM_BASE_URL: ${MEMORY_LLM_BASE_URL:-}
+      MEMORY_LLM_API_KEY: ${MEMORY_LLM_API_KEY:-}
+      MEMORY_LLM_MODEL: ${MEMORY_LLM_MODEL:-deepseek-chat}
+      MEMORY_EMBEDDING_BASE_URL: ${MEMORY_EMBEDDING_BASE_URL:-}
+      MEMORY_EMBEDDING_API_KEY: ${MEMORY_EMBEDDING_API_KEY:-}
+      MEMORY_EMBEDDING_MODEL: ${MEMORY_EMBEDDING_MODEL:-text-embedding-3-small}
+      MEMORY_EMBEDDING_DIM: ${MEMORY_EMBEDDING_DIM:-1536}
+      MEMORY_VECTOR_INDEX: ${MEMORY_VECTOR_INDEX:-hnsw}
+      MEMORY_VECTOR_INDEX_RECREATE: ${MEMORY_VECTOR_INDEX_RECREATE:-false}
+      MEMORY_HNSW_M: ${MEMORY_HNSW_M:-16}
+      MEMORY_HNSW_EF_CONSTRUCTION: ${MEMORY_HNSW_EF_CONSTRUCTION:-64}
+      MEMORY_HNSW_EF_SEARCH: ${MEMORY_HNSW_EF_SEARCH:-40}
+      MEMORY_IVFFLAT_LISTS: ${MEMORY_IVFFLAT_LISTS:-100}
+      MEMORY_IVFFLAT_PROBES: ${MEMORY_IVFFLAT_PROBES:-10}
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/readyz', timeout=2)"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    ports: ["8001:8001"]
+
+  agent-hub-intent:
+    profiles: ["split"]
+    image: nexusflow/agent-hub:local
+    build:
+      context: ../services/agent-hub
+    environment:
+      AGENT_HUB_ROLE: intent
+      AGENT_HUB_MODE: local
+      AGENT_HUB_PORT: "8002"
       INTENT_APP_ENV: prod
-      # OpenAI-compatible endpoint; DeepSeek works with https://api.deepseek.com/v1.
       INTENT_LLM_BASE_URL: ${INTENT_LLM_BASE_URL:-}
       INTENT_LLM_API_KEY: ${INTENT_LLM_API_KEY:-}
       INTENT_LLM_MODEL: ${INTENT_LLM_MODEL:-deepseek-chat}
@@ -313,12 +376,16 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/healthz', timeout=2)"]
     ports: ["8002:8002"]
 
-  summary-agent:
+  agent-hub-summary:
+    profiles: ["split"]
+    image: nexusflow/agent-hub:local
     build:
-      context: ../services/summary-agent
+      context: ../services/agent-hub
     environment:
+      AGENT_HUB_ROLE: summary
+      AGENT_HUB_MODE: local
+      AGENT_HUB_PORT: "8003"
       SUMMARY_APP_ENV: prod
-      # Empty key -> deterministic extractive summaries (offline safe).
       SUMMARY_LLM_BASE_URL: ${SUMMARY_LLM_BASE_URL:-}
       SUMMARY_LLM_API_KEY: ${SUMMARY_LLM_API_KEY:-}
       SUMMARY_LLM_MODEL: ${SUMMARY_LLM_MODEL:-deepseek-chat}
@@ -328,17 +395,20 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/healthz', timeout=2)"]
     ports: ["8003:8003"]
 
-  memory-agent:
+  agent-hub-memory:
+    profiles: ["split"]
+    image: nexusflow/agent-hub:local
     build:
-      context: ../services/memory-agent
+      context: ../services/agent-hub
     environment:
+      AGENT_HUB_ROLE: memory
+      AGENT_HUB_MODE: local
+      AGENT_HUB_PORT: "8004"
       MEMORY_APP_ENV: prod
-      # Postgres holds memory content; Qdrant holds memory vectors.
       MEMORY_DRIVER: ${MEMORY_DRIVER:-qdrant}
       MEMORY_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
       MEMORY_QDRANT_URL: ${MEMORY_QDRANT_URL:-http://qdrant:6333}
       MEMORY_QDRANT_COLLECTION: ${MEMORY_QDRANT_COLLECTION:-nexusflow_memories}
-      # Empty LLM key -> rule-based extraction; empty embedding key -> lexical recall.
       MEMORY_LLM_BASE_URL: ${MEMORY_LLM_BASE_URL:-}
       MEMORY_LLM_API_KEY: ${MEMORY_LLM_API_KEY:-}
       MEMORY_LLM_MODEL: ${MEMORY_LLM_MODEL:-deepseek-chat}
@@ -346,7 +416,6 @@ services:
       MEMORY_EMBEDDING_API_KEY: ${MEMORY_EMBEDDING_API_KEY:-}
       MEMORY_EMBEDDING_MODEL: ${MEMORY_EMBEDDING_MODEL:-text-embedding-3-small}
       MEMORY_EMBEDDING_DIM: ${MEMORY_EMBEDDING_DIM:-1536}
-      # pgvector index tuning (only used when embeddings are configured).
       MEMORY_VECTOR_INDEX: ${MEMORY_VECTOR_INDEX:-hnsw}
       MEMORY_VECTOR_INDEX_RECREATE: ${MEMORY_VECTOR_INDEX_RECREATE:-false}
       MEMORY_HNSW_M: ${MEMORY_HNSW_M:-16}
@@ -363,40 +432,6 @@ services:
       qdrant:
         condition: service_started
     ports: ["8004:8004"]
-
-  rag-agent:
-    build:
-      context: ../services/rag-agent
-    environment:
-      RAG_APP_ENV: prod
-      # Retrieval goes through the gateway so chat reuses the unified
-      # multi-route recall + rerank pipeline.
-      RAG_GATEWAY_URL: http://gateway:8080
-      # Empty RAG_DATABASE_URL -> in-memory conversations (dev only).
-      RAG_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
-      # Independent intent agent (supervisor step); falls back to knowledge QA.
-      RAG_INTENT_URL: http://intent-agent:8002
-      # Independent summary agent for context compaction; empty -> no compaction.
-      RAG_SUMMARY_URL: http://summary-agent:8003
-      # Independent memory agent for long-term recall/extraction.
-      RAG_MEMORY_URL: http://memory-agent:8004
-      RAG_LLM_BASE_URL: ${RAG_LLM_BASE_URL:-}
-      RAG_LLM_API_KEY: ${RAG_LLM_API_KEY:-}
-      RAG_LLM_MODEL: ${RAG_LLM_MODEL:-gpt-4o-mini}
-      RAG_DEFAULT_TOP_K: "5"
-    healthcheck:
-      <<: *healthcheck
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=2)"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      intent-agent:
-        condition: service_healthy
-      summary-agent:
-        condition: service_healthy
-      memory-agent:
-        condition: service_healthy
-    ports: ["8001:8001"]
 
   web:
     build:

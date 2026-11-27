@@ -11,8 +11,8 @@
 
 - Kubernetes 1.25+，已安装 Metrics Server（HPA 的 CPU/内存指标来源）。
 - 可用的 **ReadWriteMany** StorageClass（NFS / CephFS / EFS 等）。清单默认 `nfs-client`，请按集群实际修改两个 PVC 的 `storageClassName`。
-- 外部依赖已就绪并可通过 DNS 访问：Redis、RabbitMQ、MinIO（或 S3 兼容存储）、Qdrant、MinerU API、OpenSandbox。
-- 已构建并推送 `gateway` / `ingestion` / `processing-worker` / `sandbox-execution` / `query-service` / `workflow-engine` / `auth-service` / `user-service` / `llamaindex` / `rag-agent` / `web` 镜像，并按需替换清单中的 `image` 标签。
+- 外部依赖已就绪并可通过 DNS 访问：PostgreSQL、Redis、RabbitMQ、MinIO（或 S3 兼容存储）、Qdrant、MinerU API、OpenSandbox。
+- 已构建并推送 `gateway` / `ingestion` / `processing-worker` / `sandbox-execution` / `query-service` / `workflow-engine` / `auth-service` / `user-service` / `llamaindex` / `agent-hub` / `web` 镜像，并按需替换清单中的 `image` 标签。
 
 ## 2. 配置
 
@@ -22,7 +22,8 @@
    - 若改用 `IDENTITY_DRIVER=postgres`（`IDENTITY_DATABASE_URL`），服务启动时会在 advisory lock 下自动创建 `identity_users` / `identity_roles` / `knowledge_bases` / `kb_permissions`，并把旧 `identity_knowledge_bases` 幂等迁入；多副本并发启动安全。表结构与 `docs/schema_enterprise_v1_1_to_1_5.sql` 对齐。
    - `LLAMAINDEX_URL`：开启切块/索引与删除级联清理；未配置时删除只清理对象与任务记录。
    - `LLAMAINDEX_SPARSE_ENABLED=true`：`bm25` 路由使用 Qdrant 原生 sparse（每 KB 伴生集合 `<collection>__sparse`，IDF 权重）；关闭、集合缺失或调用失败时回退到 scroll + BM25。
-   - 若独立部署 `memory-agent`：`MEMORY_DRIVER=qdrant`、`MEMORY_DATABASE_URL`、`MEMORY_QDRANT_URL`、`MEMORY_QDRANT_COLLECTION`；正文写 Postgres，向量写 Qdrant，历史 pgvector 数据用 `python -m app.backfill` 回填。
+   - `AGENT_HUB_ROLE=all`、`AGENT_HUB_MODE=local`：单容器内置 intent / summary / memory；拆分时同镜像用 `ROLE=intent|summary|memory` 启动 worker，并把主入口切到 `AGENT_HUB_MODE=remote|hybrid`。
+   - `MEMORY_DRIVER=qdrant`、`MEMORY_DATABASE_URL`、`MEMORY_QDRANT_URL`、`MEMORY_QDRANT_COLLECTION`：记忆正文写 Postgres，向量写 Qdrant；历史 pgvector 数据用 `python -m nexusflow_agents.agents.memory.backfill` 回填。
    - `QUOTA_MAX_STORAGE_BYTES` / `QUOTA_MAX_FILES` / `QUOTA_MAX_QUERIES`：租户配额，`0` 表示不限。
 2. 修改 Secret `app-secret`：`JWT_SECRET`、`OPENSANDBOX_TOKEN`、`LLAMAINDEX_EMBEDDING_API_KEY`、`RAG_LLM_BASE_URL`、`RAG_LLM_API_KEY`。生产环境建议改用 SealedSecret / ExternalSecret 管理。
 
@@ -215,5 +216,6 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 - 滚动升级：逐个更新 `image` 标签后 `kubectl apply`，Deployment 默认使用 RollingUpdate。
 - 数据库/模式：身份表（含 `knowledge_bases` / `kb_permissions` 与旧表迁移）在服务启动时以 advisory lock 自动迁移；多副本并发启动是安全的。
 - 从 v1.1.0 之前升级：历史任务没有 `markdown_key`，重建索引会返回 `400`，需重新上传文件；既有向量与检索不受影响。
-- 长期记忆存储迁移：先设置 `MEMORY_DRIVER=qdrant` + `MEMORY_QDRANT_URL` 并运行 `python -m app.backfill` 回填旧 pgvector 向量，再切换流量；回滚 `MEMORY_DRIVER=postgres` 后，qdrant 模式期间新增的记忆需要重新抽取才能恢复语义召回。
+- 长期记忆存储迁移：先设置 `MEMORY_DRIVER=qdrant` + `MEMORY_QDRANT_URL` 并运行 `python -m nexusflow_agents.agents.memory.backfill` 回填旧 pgvector 向量，再切换流量；回滚 `MEMORY_DRIVER=postgres` 后，qdrant 模式期间新增的记忆需要重新抽取才能恢复语义召回。
+- Agent Hub 迁移：K8s Deployment 已改为 `agent-hub`，旧 `rag-agent` Service 仍指向同一 selector，Gateway 的 `RAG_AGENT_URL` 无需修改；回滚可把镜像切回旧 `rag-agent` 版本。
 - 回滚：`kubectl -n nexusflow rollout undo deploy/<name>`。PVC 中的数据不会随回滚删除。

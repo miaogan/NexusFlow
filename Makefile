@@ -3,7 +3,7 @@ SHELL := /bin/bash
 # Load the root .env for compose interpolation when present (it is gitignored).
 COMPOSE_ENV := $(if $(wildcard .env),--env-file .env,)
 
-.PHONY: proto build test test-go test-py test-rag test-eval vet fmt web-install web-dev web-build \
+.PHONY: proto build test test-go test-py test-agents test-rag test-eval vet fmt web-install web-dev web-build \
 	run-dev-all run-gateway run-workflow run-auth-service run-user-service up down \
 	eval-rag eval-rag-chat judge-rag analyze-feedback
 
@@ -16,7 +16,7 @@ proto:
 build:
 	cd backend && go build ./...
 
-test: test-go test-py test-rag test-eval
+test: test-go test-py test-agents test-eval
 
 test-go:
 	cd backend && go test ./...
@@ -24,8 +24,11 @@ test-go:
 test-py:
 	cd services/llamaindex && python3 -m pytest -q
 
-test-rag:
-	cd services/rag-agent && python3 -m pytest -q
+test-agents:
+	cd services/agent-hub && python3 -m pytest -q
+
+# Backwards-compatible alias for the old RAG-only test target.
+test-rag: test-agents
 
 vet:
 	cd backend && go vet ./...

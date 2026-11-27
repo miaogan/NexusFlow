@@ -3,7 +3,7 @@ title: 分布式文件向量化工作流 · 系统架构设计文档
 version: V4.0
 type: 技术架构设计
 classification: 内部
-stack: Go 调度 + MinerU 解析 + LlamaIndex 数据加工 + OpenSandbox 执行
+stack: Go 调度 + MinerU 解析 + LlamaIndex 数据加工 + Agent Hub 星型调度 + OpenSandbox 执行
 ---
 
 # 分布式文件向量化工作流
@@ -84,8 +84,10 @@ V2.0 技术选型的核心考量如下：
 | 检索问答层                                                                       |
 |  Query Service（多路召回 · RRF · Cross-Encoder · 负反馈降权） --召回--> Qdrant      |
 |    └─ 负反馈计数（rag_feedback，降权用） --> PostgreSQL                            |
-|  RAG Agent + intent/summary/memory --/v1/search--> Gateway / Query Service        |
-|    ├─ 记忆正文 --> PostgreSQL      └─ 记忆向量 --> Qdrant                          |
+|  Agent Hub（星型调度 · capability 路由 · 超时/故障转移/健康摘除）                  |
+|    ├─ intent / summary / memory（in-process，或拆分 remote worker）                 |
+|    ├─ 复用 /v1/search --> Gateway / Query Service                                 |
+|    ├─ 会话/记忆正文 --> PostgreSQL      └─ 记忆向量 --> Qdrant                      |
 +----------------------------------------------------------------------------------+
         |
         v
@@ -100,7 +102,7 @@ V2.0 技术选型的核心考量如下：
 
 架构的核心特征是“计算特征与生态优势互补”：Go 负责高并发编排与解析调度，Python 的 LlamaIndex 负责复杂的数据加工，不可信代码被隔离到独立沙箱资源池，三者分别投放到独立服务中，配合 Kubernetes 的弹性调度实现精准扩缩容。
 
-V4.0 在接入层进一步拆出 Auth Service 与 User Service：JWT 的签发与校验、用户账号与角色权限管理从网关剥离为独立服务，网关仅负责令牌校验、路由级权限判定与限流，降低接入层耦合、便于独立伸缩。检索问答层由 Query Service 承担多路召回、RRF 融合与重排（第 13 章），RAG Agent 及其 intent / summary / memory 子服务负责多轮问答与记忆（README「RAG 对话服务」），二者均经 Gateway 暴露给客户端。
+V4.0 在接入层进一步拆出 Auth Service 与 User Service：JWT 的签发与校验、用户账号与角色权限管理从网关剥离为独立服务，网关仅负责令牌校验、路由级权限判定与限流，降低接入层耦合、便于独立伸缩。检索问答层由 Query Service 承担多路召回、RRF 融合与重排（第 13 章）；Agent Hub 作为中心节点，以星型拓扑调度 intent / summary / memory，默认单容器进程内执行，也可用同一镜像按 `ROLE` 拆分为远程 worker（README「Agent Hub」）。二者均经 Gateway 暴露给客户端。
 
 ## 3. 核心微服务拆分
 
@@ -116,9 +118,37 @@ V4.0 在接入层进一步拆出 Auth Service 与 User Service：JWT 的签发�
 | Processing Worker | Go | 消费任务，调用 MinerU 解析，产出 Markdown | I/O+等待，异步解析 |
 | LlamaIndex Service | Python | 语义/层级切块、索引构建、调用 Embedding API 并写向量库 | CPU+网络，可水平扩展 |
 | Query Service | Go | 多路召回并行编排、RRF 融合、Cross-Encoder 重排与问答入口 | I/O+网络，无状态，可水平扩展 |
+| Agent Hub | Python | 星型调度 RAG 对话与 intent / summary / memory；默认单容器，可 `ROLE` 拆分 | CPU+网络，可水平扩展 |
 | Sandbox Execution Service | Go | 经 OpenSandbox 执行自定义代码节点 | 隔离执行，短时生命周期 |
 
 说明：将切块与向量化下沉到 LlamaIndex（Python）服务，是 V2.0 最重要的架构调整。它避免了用 Go 从零复刻语义切块与高级索引策略，直接复用 LlamaIndex 成熟的 Node Parser、Ingestion Pipeline 与向量库集成，同时保持了 Go 侧的轻量与高并发。
+
+### 3.1 Agent Hub 星型调度
+
+Agent Hub 是 intent / summary / memory 的中心节点，Hub 与 Agent 构成星型拓扑：
+
+```text
+                        +---------------- Agent Hub ----------------+
+                        | Registry: capability · priority ·        |
+                        |           healthy · TTL                  |
+                        | Router:   local | http · timeout ·        |
+                        |           max_attempts · failover        |
+                        +----+-------------+-------------+-----------+
+                             |             |             |
+                    intent.classify  summary.compact  memory.recall/extract
+                             |             |             |
+                             v             v             v
+                       +-----------+  +-----------+  +-----------+
+                       |  Intent   |  |  Summary  |  |  Memory   |
+                       | local/http|  | local/http|  | local/http|
+                       +-----------+  +-----------+  +-----------+
+```
+
+- **能力路由**：Agent 注册 `intent.classify` / `summary.compact` / `memory.recall` / `memory.extract`，Hub 按 capability 解析可用 Agent。
+- **双执行器**：`local` 直接调用进程内实现；`http` 调用拆分 worker 的 `/v1/intent`、`/v1/summarize`、`/v1/memories/*`。
+- **动态调度**：按优先级尝试，失败/超时切换到下一个；可选能力全部失败时返回降级结果（知识问答 / 不压缩 / 空记忆），不阻断主链路。
+- **健康与注册**：后台任务探活 HTTP Agent，连续失败摘除、恢复后回归；动态注册默认关闭，开启时需 Admin Token 与 TTL 心跳。
+- **部署形态**：默认 `ROLE=all`、`MODE=local` 单容器；`ROLE=intent|summary|memory` + `MODE=remote|hybrid` 支持拆分与回滚。
 
 ## 4. LlamaIndex 数据处理服务设计
 
@@ -636,7 +666,7 @@ message FeedbackEvent {
 | 阈值门禁 | 已实现 | `eval/thresholds.json` + `make eval-rag`，低于阈值退出码 1 |
 | 低分归因 / 回归集导出 | 已实现 | `eval/analyze_feedback.py`：五类归因 + `eval/regressions.jsonl` |
 | RAGAS / LLM-as-judge | 已接入（需 LLM Key） | `eval/judge.py`：faithfulness / relevancy / completeness |
-| 在线降权 / 灰度回灌 | 已实现 | 检索 `FeedbackPenalty`（累计负反馈降权）；`GET /v1/corrected-answers` 供 rag-agent 检索前置回灌 |
+| 在线降权 / 灰度回灌 | 已实现 | 检索 `FeedbackPenalty`（累计负反馈降权）；`GET /v1/corrected-answers` 供 agent-hub 检索前置回灌 |
 
 ## 15. 多租户与权限治理
 
