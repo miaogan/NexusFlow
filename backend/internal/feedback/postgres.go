@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -74,6 +75,11 @@ func NewPostgresStore(ctx context.Context, dsn string) (*PostgresStore, error) {
 
 func (s *PostgresStore) Upsert(ctx context.Context, e Entry) (Entry, error) {
 	now := time.Now().UTC()
+	// The primary key has no database default, so assign it here; concurrent
+	// inserts of different subjects must not all claim the empty string.
+	if e.ID == "" {
+		e.ID = uuid.NewString()
+	}
 	if e.CreatedAt.IsZero() {
 		e.CreatedAt = now
 	}

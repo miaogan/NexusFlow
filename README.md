@@ -162,6 +162,8 @@ cp .env.example .env
 make up
 ```
 
+`make up` 会自动加载根目录 `.env`（gitignored）。端口冲突时可在 `.env` 覆盖 `GATEWAY_PUBLISH_PORT`（默认 8080）与 `POSTGRES_PUBLISH_PORT`（默认 5432）；MinIO / Prometheus / Grafana 属于可选 `extras` profile，需要时用 `docker compose --profile extras ...` 启用。
+
 | 入口 | 地址 |
 | --- | --- |
 | Web 画布 | http://localhost:8088 |

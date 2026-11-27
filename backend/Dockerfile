@@ -9,7 +9,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/service
 FROM alpine:3.21
 ARG INSTALL_RUNTIMES=false
 RUN if [ "$INSTALL_RUNTIMES" = "true" ]; then apk add --no-cache python3 nodejs; fi \
-    && adduser -D -u 10001 app
+    && adduser -D -u 10001 app \
+    && mkdir -p /data/objects \
+    && chown -R app:app /data
 USER app
 COPY --from=builder /out/service /service
 ENTRYPOINT ["/service"]
