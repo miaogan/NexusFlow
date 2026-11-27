@@ -9,6 +9,7 @@ import Workflow from "./pages/Workflow";
 import Sandbox from "./pages/Sandbox";
 import Login from "./pages/Login";
 import Users from "./pages/Users";
+import SubAgents from "./pages/SubAgents";
 
 export default function App() {
   return (
@@ -22,6 +23,7 @@ export default function App() {
         <Route path="/chat" element={<Chat />} />
         <Route path="/workflow" element={<Workflow />} />
         <Route path="/sandbox" element={<Sandbox />} />
+        <Route path="/subagents" element={<SubAgents />} />
         <Route path="/users" element={<Users />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

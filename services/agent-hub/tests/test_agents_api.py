@@ -136,6 +136,42 @@ def test_sandbox_agent_is_stored_with_redacted_listing(
     assert "code" not in item["sandbox"]
 
 
+def test_sandbox_metadata_update_keeps_existing_code(
+    client: tuple[TestClient, AgentRegistry, InMemoryAgentStore],
+) -> None:
+    http, registry, _ = client
+    created = {
+        "name": "sandbox.agent",
+        "capabilities": ["agent.call"],
+        "kind": "sandbox",
+        "sandbox": {"code": "print('keep me')", "runtime": "python"},
+    }
+    assert (
+        http.post(
+            "/v1/agents", json=created, headers={"x-tenant-id": "t1"}
+        ).status_code
+        == 201
+    )
+
+    updated = {
+        "name": "sandbox.agent",
+        "capabilities": ["agent.call"],
+        "kind": "sandbox",
+        "skills": ["translate"],
+        "sandbox": {"runtime": "python", "timeout_seconds": 7},
+    }
+    response = http.post(
+        "/v1/agents", json=updated, headers={"x-tenant-id": "t1"}
+    )
+
+    assert response.status_code == 201
+    spec = registry.get("sandbox.agent", "t1")
+    assert spec is not None
+    assert spec.sandbox["code"] == "print('keep me')"
+    assert spec.sandbox["timeout_seconds"] == 7
+    assert spec.skills == frozenset({"translate"})
+
+
 def test_sandbox_agent_rejects_missing_code(
     client: tuple[TestClient, AgentRegistry, InMemoryAgentStore],
 ) -> None:

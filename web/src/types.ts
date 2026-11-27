@@ -330,4 +330,72 @@ export interface JwtClaims {
   exp?: number;
 }
 
+// ---------- Custom SubAgents / skills ----------
+
+export interface SubAgentSandboxSummary {
+  runtime: string;
+  timeout_seconds: number;
+  packages: string[];
+  code_bytes: number;
+  configured: boolean;
+}
+
+export interface SubAgentRecord {
+  name: string;
+  tenant_id: string;
+  kind: "http" | "sandbox";
+  capabilities: string[];
+  endpoint: string;
+  priority: number;
+  healthy: boolean;
+  failures?: number;
+  ttl_seconds: number;
+  version: string;
+  risk: string;
+  model: string;
+  tools: string[];
+  skills: string[];
+  sandbox?: SubAgentSandboxSummary;
+  permissions?: string[];
+  input_schema?: Record<string, unknown>;
+  output_schema?: Record<string, unknown>;
+  expires_in?: number | null;
+}
+
+export interface SubAgentSandboxInput {
+  code?: string;
+  runtime?: string;
+  timeout_seconds?: number;
+  packages?: string[];
+}
+
+export interface SubAgentInput {
+  name: string;
+  kind: "http" | "sandbox";
+  capabilities: string[];
+  endpoint?: string;
+  skills?: string[];
+  priority?: number;
+  timeout_ms?: number;
+  risk?: string;
+  sandbox?: SubAgentSandboxInput;
+}
+
+export interface SkillInfo {
+  skill: string;
+  agent: string;
+  tenant_id: string;
+  capabilities: string[];
+  priority: number;
+}
+
+export interface SubAgentCallResult {
+  ok: boolean;
+  agent?: string;
+  data?: Record<string, unknown>;
+  error?: string;
+  latency_ms?: number;
+  attempts?: number;
+}
+
 export type { Edge };

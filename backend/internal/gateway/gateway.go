@@ -209,6 +209,14 @@ func (g *Gateway) Router() *gin.Engine {
 	v1.GET("/corrected-answers", RequirePermission("search:use"), g.listCorrectedAnswers)
 	v1.GET("/traces", g.listTraces)
 	v1.GET("/traces/:id", g.getTrace)
+	// Custom SubAgent management (proxied to the hub). Writes need user:write;
+	// with AGENT_HUB_DYNAMIC_REGISTRATION=false the hub returns 403.
+	v1.GET("/agents", RequirePermission("user:read"), g.listAgents)
+	v1.GET("/agents/:name", RequirePermission("user:read"), g.getAgent)
+	v1.POST("/agents", RequirePermission("user:write"), g.createAgent)
+	v1.DELETE("/agents/:name", RequirePermission("user:write"), g.deleteAgent)
+	v1.POST("/agents/:name/heartbeat", RequirePermission("user:write"), g.heartbeatAgent)
+	v1.GET("/skills", RequirePermission("user:read"), g.listSkills)
 	// Custom SubAgent invocation (proxied to the hub /v1/call). Sandbox agents
 	// additionally require sandbox:execute on their own execution request.
 	v1.POST("/agents/:name/call", RequirePermission("search:use"), g.callAgent)

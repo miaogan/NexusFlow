@@ -52,6 +52,7 @@ GATEWAY = os.environ.get(
 )
 LLAMAINDEX = os.environ.get("SMOKE_LLAMAINDEX_URL", "http://127.0.0.1:8000")
 QDRANT = os.environ.get("SMOKE_QDRANT_URL", "http://127.0.0.1:6333")
+AGENT_HUB = os.environ.get("SMOKE_AGENT_HUB_URL", "http://127.0.0.1:8001")
 TENANT = os.environ.get("SMOKE_TENANT_ID", env_value("SEED_TENANT_ID", "default"))
 ADMIN = os.environ.get("SMOKE_ADMIN_USERNAME", env_value("SEED_ADMIN_USERNAME", "admin"))
 PASSWORD = os.environ.get("SMOKE_ADMIN_PASSWORD", env_value("SEED_ADMIN_PASSWORD", "admin123"))
@@ -409,6 +410,28 @@ def qdrant_checks(require_mineru: bool) -> None:
     check("Gateway hybrid search reads the real retrieval service", status == 200 and bool(gateway_chunks), f"status={status} chunks={len(gateway_chunks)}")
 
 
+def agent_hub_checks() -> None:
+    """Read-only checks for the custom SubAgent registry and skill routing."""
+    status, _ = request("GET", AGENT_HUB + "/readyz", timeout=15)
+    check("Agent hub readyz", status == 200, f"status={status}")
+
+    status, body = request("GET", AGENT_HUB + "/v1/agents", timeout=15)
+    agents = body.get("agents", []) if isinstance(body, dict) else []
+    check(
+        "Agent hub registry endpoint",
+        status == 200 and isinstance(agents, list),
+        f"status={status} agents={len(agents)}",
+    )
+
+    status, body = request("GET", AGENT_HUB + "/v1/skills", timeout=15)
+    skills = body.get("skills", []) if isinstance(body, dict) else []
+    check(
+        "Agent hub skills endpoint",
+        status == 200 and isinstance(skills, list),
+        f"status={status} skills={len(skills)}",
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--require-mineru", action="store_true", help="fail instead of skipping when MINERU_TARGET is empty")
@@ -416,6 +439,7 @@ def main() -> int:
 
     sections = (
         ("Compose health", health_checks),
+        ("Agent hub registry", agent_hub_checks),
         ("Postgres identity", postgres_checks),
         ("Redis revocation", redis_checks),
         ("Parsing and Qdrant", lambda: qdrant_checks(args.require_mineru)),

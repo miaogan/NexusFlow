@@ -16,6 +16,10 @@ import type {
   SandboxExecuteRequest,
   SandboxResult,
   SearchResponse,
+  SkillInfo,
+  SubAgentCallResult,
+  SubAgentInput,
+  SubAgentRecord,
   TaskDetail,
   TaskListResponse,
   Trace,
@@ -670,6 +674,53 @@ export async function revokeKnowledgeBasePermission(
   return request<{ success: boolean }>(
     `${GATEWAY_BASE}/v1/knowledge-bases/${encodeURIComponent(id)}/permissions?${params.toString()}`,
     { method: "DELETE" },
+  );
+}
+
+// ---------- Custom SubAgent APIs ----------
+
+export async function listSubAgents(): Promise<{ agents: SubAgentRecord[] }> {
+  return request<{ agents: SubAgentRecord[] }>(`${GATEWAY_BASE}/v1/agents`);
+}
+
+export async function getSubAgent(name: string): Promise<SubAgentRecord> {
+  return request<SubAgentRecord>(
+    `${GATEWAY_BASE}/v1/agents/${encodeURIComponent(name)}`,
+  );
+}
+
+export async function createSubAgent(
+  input: SubAgentInput,
+): Promise<{ registered: string; tenant_id: string; kind: string; ttl_seconds: number }> {
+  return request(`${GATEWAY_BASE}/v1/agents`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteSubAgent(name: string): Promise<{ removed: string; found: boolean }> {
+  return request(`${GATEWAY_BASE}/v1/agents/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listSkills(): Promise<{ tenant_id: string; skills: SkillInfo[] }> {
+  return request<{ tenant_id: string; skills: SkillInfo[] }>(`${GATEWAY_BASE}/v1/skills`);
+}
+
+export async function callSubAgent(
+  name: string,
+  capability: string,
+  input: Record<string, unknown>,
+): Promise<SubAgentCallResult> {
+  return request<SubAgentCallResult>(
+    `${GATEWAY_BASE}/v1/agents/${encodeURIComponent(name)}/call`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ capability, input }),
+    },
   );
 }
 

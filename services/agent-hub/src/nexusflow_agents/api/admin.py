@@ -122,8 +122,15 @@ def register_agent(request: Request, body: AgentRegistration) -> dict[str, objec
 
     sandbox_config: dict[str, Any] = {}
     if body.kind == "sandbox":
+        sandbox_input = dict(body.sandbox)
+        # The code is never returned by list/get, so an update that changes
+        # only skills/priority can omit it and reuse the stored payload.
+        if not sandbox_input.get("code"):
+            existing = get_registry().get(body.name, tenant_id)
+            if existing is not None and existing.kind == "sandbox":
+                sandbox_input = {**existing.sandbox, **sandbox_input}
         try:
-            sandbox_config = validate_sandbox_config(body.sandbox)
+            sandbox_config = validate_sandbox_config(sandbox_input)
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     elif not body.endpoint.startswith(("http://", "https://")):

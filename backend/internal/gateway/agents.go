@@ -37,6 +37,13 @@ func (g *Gateway) hubPost(c *gin.Context, path string) {
 	g.proxyRAG(c, http.MethodPost, path, body)
 }
 
+func (g *Gateway) hubDelete(c *gin.Context, path string) {
+	if !g.requireRAG(c) {
+		return
+	}
+	g.proxyRAG(c, http.MethodDelete, path, nil)
+}
+
 func (g *Gateway) listApprovals(c *gin.Context) {
 	g.hubGet(c, "/v1/approvals")
 }
@@ -51,6 +58,30 @@ func (g *Gateway) decideApproval(c *gin.Context) {
 
 func (g *Gateway) listAudit(c *gin.Context) {
 	g.hubGet(c, "/v1/audit")
+}
+
+func (g *Gateway) listAgents(c *gin.Context) {
+	g.hubGet(c, "/v1/agents")
+}
+
+func (g *Gateway) getAgent(c *gin.Context) {
+	g.hubGet(c, "/v1/agents/"+url.PathEscape(c.Param("name")))
+}
+
+func (g *Gateway) createAgent(c *gin.Context) {
+	g.hubPost(c, "/v1/agents")
+}
+
+func (g *Gateway) deleteAgent(c *gin.Context) {
+	g.hubDelete(c, "/v1/agents/"+url.PathEscape(c.Param("name")))
+}
+
+func (g *Gateway) heartbeatAgent(c *gin.Context) {
+	g.hubPost(c, "/v1/agents/"+url.PathEscape(c.Param("name"))+"/heartbeat")
+}
+
+func (g *Gateway) listSkills(c *gin.Context) {
+	g.hubGet(c, "/v1/skills")
 }
 
 type agentCallRequest struct {

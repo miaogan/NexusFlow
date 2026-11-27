@@ -115,7 +115,13 @@ export default function Layout() {
 
   if (!ready) return null;
 
-  const nav = hasPermission("user:read") ? [...NAV, { to: "/users", label: "用户管理" }] : NAV;
+  const nav = hasPermission("user:read")
+    ? [
+        ...NAV,
+        { to: "/subagents", label: "SubAgent 管理" },
+        { to: "/users", label: "用户管理" },
+      ]
+    : NAV;
 
   const handleLogout = () => {
     clearAuth();
