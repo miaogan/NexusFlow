@@ -12,30 +12,70 @@
 
 ```mermaid
 flowchart TB
-    UI[可视化画布 / 客户端] -->|HTTP / gRPC| GW[API Gateway<br/>鉴权 · 限流 · 路由]
-    GW --> WF[Workflow Engine<br/>DAG 解析 · 节点调度]
-    GW --> ING[Ingestion Service<br/>元数据 · 任务]
-    WF --> SBX[Sandbox Execution<br/>OpenSandbox]
-    WF --> PRC[Processing Worker<br/>MinerU 解析]
-    ING --> MQ[(RabbitMQ / Kafka)]
+    subgraph A[接入层]
+        GW[API Gateway<br/>JWT 校验 · 限流 · 权限路由 · trace 透传]
+        AUTH[Auth / User Service<br/>JWT 签发 · 用户/角色 · kb RBAC]
+        MET[Metering<br/>用量计量与配额]
+    end
+
+    subgraph B[编排调度层]
+        WF[Workflow Engine<br/>DAG 校验 · 节点调度]
+        ING[Ingestion Service<br/>元数据 · 任务 · 删除 · Reindex]
+    end
+
+    subgraph C[执行加工层]
+        PRC[Processing Worker]
+        MINERU[MinerU<br/>结构化 Markdown]
+        LIDX[LlamaIndex Service<br/>切块 · Embedding · 索引]
+        SBX[Sandbox Execution]
+    end
+
+    subgraph D[检索问答层]
+        QS[Query Service<br/>多路召回 · RRF · Rerank]
+        RAG[RAG Agent<br/>intent / summary / memory]
+    end
+
+    subgraph E[存储层]
+        MQ[(RabbitMQ / Kafka)]
+        OBJ[(MinIO / S3)]
+        VS[(Qdrant)]
+        PG[(PostgreSQL + pgvector)]
+        RD[(Redis)]
+    end
+
+    UI[可视化画布 / 客户端] -->|HTTP / gRPC| GW
+    GW --> AUTH
+    GW --> MET
+    GW --> WF
+    GW --> ING
+    GW --> QS
+    GW --> RAG
+    AUTH --> RD
+    AUTH --> PG
+    MET --> RD
+    WF --> PRC
+    WF --> SBX
+    ING --> MQ
+    ING --> OBJ
+    ING --> RD
     MQ --> PRC
-    PRC --> MD[MinerU<br/>结构化 Markdown]
-    PRC --> LIDX[LlamaIndex Service<br/>切块 · 索引 · Embedding]
-    LIDX --> VS[(Milvus / Qdrant)]
-    LIDX --> PG[(PostgreSQL + pgvector)]
-    ING --> OBJ[(MinIO / S3)]
-    GW --> QS[Query Service<br/>向量 + BM25 + 图谱]
+    PRC --> MINERU
+    PRC -->|parsed/*.md| OBJ
+    PRC --> LIDX
+    LIDX --> VS
     QS --> LIDX
-    LIDX --> RR[RRF 融合 + Rerank]
+    QS --> PG
+    RAG -. 复用 /v1/search .-> GW
+    RAG --> PG
 ```
 
 分层职责：
 
-- **接入层**：Gateway 统一鉴权（JWT → tenant_id + 权限点）、租户级限流、trace 透传；Auth / User 服务负责签发令牌、管理账号与 RBAC。
-- **编排调度层**：Workflow Engine 解析 DAG、按依赖并发调度；Ingestion 接收上传并投递任务。
-- **执行加工层**：Processing Worker 调用 MinerU；LlamaIndex Service 负责语义/层级切块、索引与 Embedding；Sandbox Execution 经 OpenSandbox 执行自定义代码。
-- **检索层**：Query Service 并行多路召回，RRF 融合，Cross-Encoder 重排，任一非核心路失败 Fail-open。
-- **存储层**：MinIO 对象存储、Qdrant/Milvus 向量库、Redis 任务状态、PostgreSQL(+pgvector) 长期记忆。
+- **接入层**：Gateway 统一鉴权（JWT → tenant_id + 权限点）、租户级限流、trace 透传；Auth / User 服务负责签发令牌、管理账号与全局角色，并按知识库解析 `kb:admin` / `kb:editor` / `kb:viewer` 权限；Metering 负责租户用量与配额。
+- **编排调度层**：Workflow Engine 解析 DAG、按依赖并发调度；Ingestion 接收上传、级联删除并投递任务，Reindex 复用已持久化的解析产物。
+- **执行加工层**：Processing Worker 调用 MinerU 解析并把 Markdown 持久化为 `tenant/kb/parsed/<task>.md`；LlamaIndex Service 负责语义/层级切块、索引与 Embedding；Sandbox Execution 经 OpenSandbox 执行自定义代码。
+- **检索问答层**：Query Service 并行多路召回，RRF 融合，Cross-Encoder 重排，任一非核心路失败 Fail-open；RAG Agent 编排 intent / summary / memory，经 Gateway 复用统一检索链路。
+- **存储层**：RabbitMQ/Kafka 消息与 DLQ、MinIO 原文件与解析产物、Qdrant 向量与关键词索引、PostgreSQL(+pgvector) 身份/反馈/会话/记忆、Redis 任务状态、计量与令牌吊销。
 
 ## 服务与目录
 
