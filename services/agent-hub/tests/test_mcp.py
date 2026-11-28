@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import io
 import json
 from typing import Any
 
@@ -10,6 +12,7 @@ from fastapi.testclient import TestClient
 from nexusflow_agents.core.config import HubSettings
 from nexusflow_agents.core.tooling import ToolRegistry, ToolService, ToolSpec
 from nexusflow_agents.mcp import server as mcp_server
+from nexusflow_agents.mcp import stdio as mcp_stdio
 from nexusflow_agents.mcp.client import parse_servers
 
 
@@ -101,6 +104,80 @@ def test_mcp_disabled(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> No
         lambda: HubSettings(_env_file=None, mcp_enabled=False),
     )
     assert _rpc(client, "initialize").status_code == 404
+
+
+def test_notifications_return_no_response(client: TestClient) -> None:
+    resp = client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+    )
+    assert resp.status_code == 202
+    assert resp.content == b""
+
+
+def test_sse_messages_require_known_session(client: TestClient) -> None:
+    resp = client.post(
+        "/mcp/messages?session_id=missing",
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+    )
+    assert resp.status_code == 404
+
+
+def test_sse_messages_queue_response(client: TestClient) -> None:
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    mcp_server._sse_sessions["test-session"] = queue
+    try:
+        resp = client.post(
+            "/mcp/messages?session_id=test-session",
+            json={"jsonrpc": "2.0", "id": 7, "method": "initialize"},
+        )
+        assert resp.status_code == 202
+        message = queue.get_nowait()
+        assert message["id"] == 7
+        assert message["result"]["serverInfo"]["name"] == "nexusflow-agent-hub"
+
+        client.post(
+            "/mcp/messages?session_id=test-session",
+            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+        )
+        assert queue.empty()
+    finally:
+        mcp_server._sse_sessions.pop("test-session", None)
+
+
+def test_stdio_transport_processes_lines(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = _service()
+    monkeypatch.setattr(
+        mcp_server,
+        "get_hub_settings",
+        lambda: HubSettings(_env_file=None, mcp_enabled=True),
+    )
+    monkeypatch.setattr(mcp_server, "get_tools", lambda: service)
+
+    lines = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"}),
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "search.query", "arguments": {"query": "nexus"}},
+            }
+        ),
+        json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        '{"jsonrpc": "2.0", "id": 3,',
+    ]
+    reader = io.BytesIO(("\n".join(lines) + "\n").encode())
+    writer = io.StringIO()
+
+    code = mcp_stdio.process_stream(reader, writer, 1 << 20)
+
+    assert code == 0
+    responses = [json.loads(line) for line in writer.getvalue().splitlines()]
+    assert len(responses) == 3
+    assert responses[0]["id"] == 1
+    assert responses[1]["id"] == 2
+    assert responses[2]["error"]["code"] == -32700
 
 
 def test_parse_servers_skips_invalid_urls() -> None:
