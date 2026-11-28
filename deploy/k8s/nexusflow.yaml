@@ -39,6 +39,12 @@ data:
   # Tenant API keys for the OpenAI-compatible endpoint.
   API_KEY_DRIVER: "postgres"
   API_KEY_DATABASE_URL: "postgresql://nexusflow:change-me@postgres.nexusflow.svc:5432/nexusflow"
+  # Tenant event webhooks (subscriptions + delivery logs).
+  WEBHOOK_DRIVER: "postgres"
+  WEBHOOK_DATABASE_URL: "postgresql://nexusflow:change-me@postgres.nexusflow.svc:5432/nexusflow"
+  WEBHOOK_MAX_ATTEMPTS: "5"
+  WEBHOOK_RETRY_BASE: "1s"
+  GATEWAY_URL: "http://gateway:8080"
   QUERY_TARGET: "query-service:9094"
   SANDBOX_TARGET: "sandbox-execution:9093"
   AUTH_TARGET: "auth-service:9096"
@@ -127,6 +133,10 @@ stringData:
   AGENT_HUB_ADMIN_TOKEN: ""
   # AES-GCM key for connector configs at rest; empty stores plaintext (dev only).
   CONNECTOR_ENCRYPTION_KEY: ""
+  # Shared token for POST /v1/internal/events; empty disables webhook ingest.
+  WEBHOOK_EVENTS_TOKEN: ""
+  # Optional dedicated encryption key for webhook signing secrets.
+  WEBHOOK_ENCRYPTION_KEY: ""
   # LLM router upstream credentials (empty disables the corresponding route).
   LLM_PRIMARY_API_KEY: ""
   LLM_BACKUP_API_KEY: ""

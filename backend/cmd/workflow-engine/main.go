@@ -12,6 +12,7 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/config"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/httpserver"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/log"
+	"github.com/nexusflow/nexusflow/backend/internal/webhook"
 	"github.com/nexusflow/nexusflow/backend/internal/workflow"
 )
 
@@ -39,6 +40,9 @@ func main() {
 	registry.Register(workflow.ConditionNode{})
 	registry.Register(workflow.NewLoopNode(registry, logger))
 	engine := workflow.NewEngine(registry, logger)
+	if publisher := webhook.NewHTTPPublisher(cfg.GatewayURL, cfg.WebhookEventsToken, logger); publisher != nil {
+		engine.WithEventPublisher(publisher)
+	}
 	runStore, closeRunStore := workflow.NewRunStore(
 		ctx, cfg.WorkflowRunStoreDriver, cfg.WorkflowRunDatabaseURL,
 	)

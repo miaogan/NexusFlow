@@ -31,6 +31,7 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/sandbox"
 	"github.com/nexusflow/nexusflow/backend/internal/state"
 	"github.com/nexusflow/nexusflow/backend/internal/store"
+	"github.com/nexusflow/nexusflow/backend/internal/webhook"
 	"github.com/nexusflow/nexusflow/backend/internal/workflow"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 	"google.golang.org/grpc"
@@ -74,6 +75,20 @@ func main() {
 		os.Exit(1)
 	}
 	defer apiKeyStore.Close()
+
+	webhookStore, err := webhook.NewStore(cfg.WebhookDriver, cfg.WebhookDatabaseURL)
+	if err != nil {
+		logger.Error("init webhook store", "error", err)
+		os.Exit(1)
+	}
+	defer webhookStore.Close()
+	webhooks := webhook.NewDispatcher(
+		webhookStore,
+		connector.NewCipher(cfg.WebhookEncryptionKey),
+		logger,
+		cfg.WebhookMaxAttempts,
+		cfg.WebhookRetryBase,
+	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -121,6 +136,7 @@ func main() {
 		cfg.ParsePollInterval, 10, cfg.ParseMaxAttempts,
 		cfg.QueueTopicParsed, cfg.QueueTopicDLQ, "dev-all",
 		processing.WithObjectStore(objects),
+		processing.WithEventPublisher(webhooks),
 	)
 	bus.Subscribe(cfg.QueueTopicUploaded, worker.Handle)
 
@@ -140,7 +156,7 @@ func main() {
 
 	// Indexer turns parsed markdown into searchable chunks and advances the
 	// task from PARSED through CHUNKED/EMBEDDED/INDEXED to COMPLETED.
-	idxr := indexing.New(engine, st, logger)
+	idxr := indexing.New(engine, st, logger, indexing.WithEventPublisher(webhooks))
 	bus.Subscribe(cfg.QueueTopicParsed, idxr.Handle)
 
 	ingestOpts := []ingestion.Option{ingestion.WithParsedTopic(cfg.QueueTopicParsed)}
@@ -219,7 +235,7 @@ func main() {
 	// Control flow: condition branches and bounded concurrent loops.
 	wfRegistry.Register(workflow.ConditionNode{})
 	wfRegistry.Register(workflow.NewLoopNode(wfRegistry, logger))
-	wfEngine := workflow.NewEngine(wfRegistry, logger)
+	wfEngine := workflow.NewEngine(wfRegistry, logger).WithEventPublisher(webhooks)
 	wfRunStore, closeRunStore := workflow.NewRunStore(
 		ctx, cfg.WorkflowRunStoreDriver, cfg.WorkflowRunDatabaseURL,
 	)
@@ -309,6 +325,7 @@ func main() {
 		gateway.WithConnectors(cfg.ConnectorTarget),
 		gateway.WithFeedbackStore(feedbackStore),
 		gateway.WithAPIKeys(apiKeyStore),
+		gateway.WithWebhooks(webhooks, cfg.WebhookEventsToken),
 		gateway.WithMetering(meterStore, metering.Quota{
 			MaxStorageBytes: cfg.QuotaMaxStorageBytes,
 			MaxFiles:        cfg.QuotaMaxFiles,

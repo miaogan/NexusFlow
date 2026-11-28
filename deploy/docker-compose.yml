@@ -107,6 +107,11 @@ services:
       # Tenant API keys for the OpenAI-compatible endpoint.
       API_KEY_DRIVER: postgres
       API_KEY_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
+      # Tenant event webhooks (subscriptions + delivery logs).
+      WEBHOOK_DRIVER: postgres
+      WEBHOOK_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
+      WEBHOOK_EVENTS_TOKEN: ${WEBHOOK_EVENTS_TOKEN:-}
+      WEBHOOK_ENCRYPTION_KEY: ${WEBHOOK_ENCRYPTION_KEY:-}
       METRICS_ADDR: ""
     healthcheck:
       <<: *healthcheck
@@ -241,6 +246,9 @@ services:
       PARSE_MAX_ATTEMPTS: "3"
       # Parsed Markdown is indexed into Qdrant through the LlamaIndex service.
       LLAMAINDEX_URL: "http://llamaindex:8000"
+      # Publish task/index events to the gateway webhook ingest endpoint.
+      GATEWAY_URL: "http://gateway:8080"
+      WEBHOOK_EVENTS_TOKEN: ${WEBHOOK_EVENTS_TOKEN:-}
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9100/healthz"]
@@ -327,6 +335,9 @@ services:
       NL2SQL_LLM_BASE_URL: ${NL2SQL_LLM_BASE_URL:-}
       NL2SQL_LLM_API_KEY: ${NL2SQL_LLM_API_KEY:-}
       NL2SQL_LLM_MODEL: ${NL2SQL_LLM_MODEL:-gpt-4o-mini}
+      # Publish workflow lifecycle events to the gateway webhook endpoint.
+      GATEWAY_URL: "http://gateway:8080"
+      WEBHOOK_EVENTS_TOKEN: ${WEBHOOK_EVENTS_TOKEN:-}
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/healthz"]

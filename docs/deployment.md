@@ -280,6 +280,24 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 - 流式响应为标准 SSE（`chat.completion.chunk` + `data: [DONE]`）；引用位于最终 chunk 的 `citations` 字段，非流式同时在 `choices[0].message.citations` 与顶层 `citations`。
 - 每个 Key 按 `rate_limit_rpm` 独立限流，超限返回 429（`rate_limit_exceeded`）；Key 的使用量为只读作用域，不会获得 `kb:write` / `user:write` 等管理权限。`chat:completions` 会隐含 `search:use`，因为 RAG 问答需要回调网关检索。
 
+**事件 Webhook**
+
+- 存储：`WEBHOOK_DRIVER=memory|postgres`；Postgres 需 `WEBHOOK_DATABASE_URL`，启动幂等创建 `webhooks` / `webhook_deliveries`。多副本必须使用 Postgres。
+- 密钥加密：`WEBHOOK_ENCRYPTION_KEY`（未设置时回退 `CONNECTOR_ENCRYPTION_KEY`）用于 AES-256-GCM 加密签名密钥；为空时以 `plain:` 前缀存明文，仅限本地开发。
+- 订阅：`POST /v1/webhooks`（需 `webhook:write`），body 支持 `name`、`target_url`、`events`（默认 `task.completed` / `task.failed`，可用 `*`）、`secret`（≥16 位，未提供则自动生成）、`is_active`。响应中的 `secret` 只返回一次；列表与详情不会回显。
+- 事件类型：`task.completed`、`task.failed`、`index.completed`、`workflow.completed`、`workflow.failed`、`approval.decided`。
+- 签名：请求头 `X-NexusFlow-Signature: sha256=<hex>`，对原始 body 计算 HMAC-SHA256；同时携带 `X-NexusFlow-Event`、`X-NexusFlow-Delivery`、`X-NexusFlow-Timestamp`。校验示例：
+
+```python
+expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+if not hmac.compare_digest(expected, request.headers["X-NexusFlow-Signature"]):
+    return 401
+```
+
+- 重试：非 2xx 或网络错误按指数退避（`WEBHOOK_MAX_ATTEMPTS` 默认 5，`WEBHOOK_RETRY_BASE` 默认 1s，上限 60s）；每次尝试更新 `webhook_deliveries`，`GET /v1/webhooks/{id}/deliveries` 查看状态、HTTP 码与响应体（截断 2KB）。
+- 事件接入：processing-worker / workflow-engine 使用 `GATEWAY_URL` + `WEBHOOK_EVENTS_TOKEN` 调用 `POST /v1/internal/events`；`WEBHOOK_EVENTS_TOKEN` 为空时该端点禁用（返回 503），审批事件仍由网关本地产生。
+- 边界：目标 URL 仅校验 `http(s)` 与主机名，未做私网地址黑名单，生产环境需在出口侧限制可达网段。
+
 **审批**
 
 - 工具审批（Hub）：`GET /v1/approvals?status=pending` 查看待办，`POST /v1/approvals/{id}/decide` 提交 `{"decision":"approve|reject","reason":"..."}`；两条路径经 Gateway 时均要求 `workflow:run`。

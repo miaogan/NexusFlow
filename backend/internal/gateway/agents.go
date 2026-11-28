@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nexusflow/nexusflow/backend/internal/webhook"
 )
 
 const maxAgentBodyBytes = 1 << 20 // 1 MiB
@@ -28,13 +29,22 @@ func (g *Gateway) hubPost(c *gin.Context, path string) {
 	if !g.requireRAG(c) {
 		return
 	}
+	body, ok := g.readAgentBody(c)
+	if !ok {
+		return
+	}
+	g.proxyRAG(c, http.MethodPost, path, body)
+}
+
+// readAgentBody reads a size-limited Agent Hub request body.
+func (g *Gateway) readAgentBody(c *gin.Context) ([]byte, bool) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAgentBodyBytes)
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "read body: " + err.Error()})
-		return
+		return nil, false
 	}
-	g.proxyRAG(c, http.MethodPost, path, body)
+	return body, true
 }
 
 func (g *Gateway) hubDelete(c *gin.Context, path string) {
@@ -53,7 +63,43 @@ func (g *Gateway) getApproval(c *gin.Context) {
 }
 
 func (g *Gateway) decideApproval(c *gin.Context) {
-	g.hubPost(c, "/v1/approvals/"+url.PathEscape(c.Param("id"))+"/decide")
+	if !g.requireRAG(c) {
+		return
+	}
+	body, ok := g.readAgentBody(c)
+	if !ok {
+		return
+	}
+	path := "/v1/approvals/" + url.PathEscape(c.Param("id")) + "/decide"
+	resp, err := g.rag.do(c, http.MethodPost, path, body)
+	if err != nil {
+		g.logger.Error("rag agent request failed", "path", path, "error", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "rag agent unavailable: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	payload, _ := io.ReadAll(io.LimitReader(resp.Body, maxAgentBodyBytes))
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		c.Header("Content-Type", ct)
+	}
+	c.Status(resp.StatusCode)
+	_, _ = c.Writer.Write(payload)
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		decision := "approve"
+		var req struct {
+			Decision string `json:"decision"`
+		}
+		if json.Unmarshal(body, &req) == nil && strings.TrimSpace(req.Decision) != "" {
+			decision = strings.TrimSpace(req.Decision)
+		}
+		g.emitEvent(c, webhook.EventApprovalDecided, map[string]any{
+			"source":      "agent_hub",
+			"approval_id": c.Param("id"),
+			"decision":    decision,
+		})
+	}
 }
 
 func (g *Gateway) listAudit(c *gin.Context) {

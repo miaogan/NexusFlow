@@ -90,6 +90,7 @@ var Permissions = []Permission{
 	{"workflow:run", "运行工作流"},
 	{"trace:read", "查看链路追踪"},
 	{"apikey:write", "签发与吊销 API Key"},
+	{"webhook:write", "管理事件 Webhook 订阅"},
 	{Wildcard, "全量权限"},
 }
 

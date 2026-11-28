@@ -10,6 +10,7 @@ import (
 
 	"github.com/nexusflow/nexusflow/backend/internal/apikey"
 	"github.com/nexusflow/nexusflow/backend/internal/config"
+	"github.com/nexusflow/nexusflow/backend/internal/connector"
 	"github.com/nexusflow/nexusflow/backend/internal/feedback"
 	"github.com/nexusflow/nexusflow/backend/internal/gateway"
 	"github.com/nexusflow/nexusflow/backend/internal/metering"
@@ -17,6 +18,7 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/platform/log"
 	"github.com/nexusflow/nexusflow/backend/internal/revocation"
 	"github.com/nexusflow/nexusflow/backend/internal/store"
+	"github.com/nexusflow/nexusflow/backend/internal/webhook"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -48,6 +50,20 @@ func main() {
 		os.Exit(1)
 	}
 	defer apiKeyStore.Close()
+
+	webhookStore, err := webhook.NewStore(cfg.WebhookDriver, cfg.WebhookDatabaseURL)
+	if err != nil {
+		logger.Error("init webhook store", "error", err)
+		os.Exit(1)
+	}
+	defer webhookStore.Close()
+	webhooks := webhook.NewDispatcher(
+		webhookStore,
+		connector.NewCipher(cfg.WebhookEncryptionKey),
+		logger,
+		cfg.WebhookMaxAttempts,
+		cfg.WebhookRetryBase,
+	)
 
 	meterStore, err := metering.NewStore(cfg.MeteringDriver, cfg.RedisAddr)
 	if err != nil {
@@ -112,6 +128,7 @@ func main() {
 		gateway.WithConnectors(cfg.ConnectorTarget),
 		gateway.WithFeedbackStore(feedbackStore),
 		gateway.WithAPIKeys(apiKeyStore),
+		gateway.WithWebhooks(webhooks, cfg.WebhookEventsToken),
 		gateway.WithMetering(meterStore, metering.Quota{
 			MaxStorageBytes: cfg.QuotaMaxStorageBytes,
 			MaxFiles:        cfg.QuotaMaxFiles,

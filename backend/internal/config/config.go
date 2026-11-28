@@ -85,6 +85,17 @@ type Config struct {
 	APIKeyDriver      string
 	APIKeyDatabaseURL string
 
+	// Webhook subscriptions: memory | postgres, HMAC secrets encrypted at rest.
+	WebhookDriver        string
+	WebhookDatabaseURL   string
+	WebhookEncryptionKey string
+	// WebhookEventsToken authenticates the internal event ingest endpoint.
+	WebhookEventsToken string
+	WebhookMaxAttempts int
+	WebhookRetryBase   time.Duration
+	// GatewayURL is used by workers to publish events back to the gateway.
+	GatewayURL string
+
 	ObjectStoreDir  string
 	ObjectStoreBase string
 	// ObjectStoreAllowedHosts restricts presigned upload URLs to trusted hosts
@@ -164,6 +175,10 @@ type Config struct {
 }
 
 func Load() Config {
+	webhookKey := env("WEBHOOK_ENCRYPTION_KEY", "")
+	if webhookKey == "" {
+		webhookKey = env("CONNECTOR_ENCRYPTION_KEY", "")
+	}
 	return Config{
 		Env: env("APP_ENV", "dev"),
 
@@ -218,6 +233,14 @@ func Load() Config {
 
 		APIKeyDriver:      env("API_KEY_DRIVER", "memory"),
 		APIKeyDatabaseURL: env("API_KEY_DATABASE_URL", ""),
+
+		GatewayURL:           env("GATEWAY_URL", "http://127.0.0.1:8080"),
+		WebhookDriver:        env("WEBHOOK_DRIVER", "memory"),
+		WebhookDatabaseURL:   env("WEBHOOK_DATABASE_URL", ""),
+		WebhookEncryptionKey: webhookKey,
+		WebhookEventsToken:   env("WEBHOOK_EVENTS_TOKEN", ""),
+		WebhookMaxAttempts:   envInt("WEBHOOK_MAX_ATTEMPTS", 5),
+		WebhookRetryBase:     envDuration("WEBHOOK_RETRY_BASE", time.Second),
 
 		ObjectStoreDir:          env("OBJECT_STORE_DIR", "/tmp/nexusflow-objects"),
 		ObjectStoreBase:         env("OBJECT_STORE_BASE", "http://127.0.0.1:9000/nexusflow"),

@@ -16,6 +16,7 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/processing"
 	"github.com/nexusflow/nexusflow/backend/internal/state"
 	"github.com/nexusflow/nexusflow/backend/internal/store"
+	"github.com/nexusflow/nexusflow/backend/internal/webhook"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 	"google.golang.org/grpc"
 )
@@ -72,6 +73,10 @@ func main() {
 	if objErr == nil {
 		workerOpts = append(workerOpts, processing.WithObjectStore(objects))
 	}
+	publisher := webhook.NewHTTPPublisher(cfg.GatewayURL, cfg.WebhookEventsToken, logger)
+	if publisher != nil {
+		workerOpts = append(workerOpts, processing.WithEventPublisher(publisher))
+	}
 	worker := processing.NewWorker(
 		client, st, b, logger,
 		cfg.ParsePollInterval, 60, cfg.ParseMaxAttempts,
@@ -83,7 +88,11 @@ func main() {
 	// Production indexing: parsed Markdown is written to the real vector store
 	// through the LlamaIndex service (chunk + embed + Qdrant upsert).
 	if cfg.LlamaIndexURL != "" {
-		idxr := indexing.New(indexing.NewLlamaIndexIndexer(cfg.LlamaIndexURL, 0), st, logger)
+		idxOpts := []indexing.Option{}
+		if publisher != nil {
+			idxOpts = append(idxOpts, indexing.WithEventPublisher(publisher))
+		}
+		idxr := indexing.New(indexing.NewLlamaIndexIndexer(cfg.LlamaIndexURL, 0), st, logger, idxOpts...)
 		b.Subscribe(cfg.QueueTopicParsed, idxr.Handle)
 		logger.Info("llamaindex indexing enabled", "url", cfg.LlamaIndexURL)
 	} else {

@@ -15,6 +15,7 @@ import (
 
 	"github.com/nexusflow/nexusflow/backend/internal/queue"
 	"github.com/nexusflow/nexusflow/backend/internal/state"
+	"github.com/nexusflow/nexusflow/backend/internal/webhook"
 )
 
 // parsedWaitTimeout bounds how long an indexing event waits for the parser to
@@ -41,10 +42,28 @@ type Indexer struct {
 	indexer DocumentIndexer
 	machine state.Store
 	logger  *slog.Logger
+	// events publishes index/task lifecycle webhooks. Optional.
+	events webhook.Publisher
 }
 
-func New(indexer DocumentIndexer, machine state.Store, logger *slog.Logger) *Indexer {
-	return &Indexer{indexer: indexer, machine: machine, logger: logger}
+// Option configures optional Indexer collaborators.
+type Option func(*Indexer)
+
+// WithEventPublisher emits index.completed and task lifecycle events.
+func WithEventPublisher(publisher webhook.Publisher) Option {
+	return func(idx *Indexer) {
+		if publisher != nil {
+			idx.events = publisher
+		}
+	}
+}
+
+func New(indexer DocumentIndexer, machine state.Store, logger *slog.Logger, opts ...Option) *Indexer {
+	idx := &Indexer{indexer: indexer, machine: machine, logger: logger}
+	for _, opt := range opts {
+		opt(idx)
+	}
+	return idx
 }
 
 // Handle is a queue.Handler compatible entry point.
@@ -117,6 +136,13 @@ func (idx *Indexer) Handle(ctx context.Context, msg queue.Message) error {
 			if _, terr := idx.machine.Transition(ctx, task.ID, state.Failed, err.Error()); terr != nil {
 				idx.logger.Warn("transition to FAILED failed", "task_id", task.ID, "error", terr)
 			}
+			idx.emit(task, webhook.EventTaskFailed, map[string]any{
+				"task_id":   task.ID,
+				"kb_id":     task.Metadata["kb_id"],
+				"file_name": task.Metadata["file_name"],
+				"stage":     "index",
+				"error":     err.Error(),
+			})
 			return fmt.Errorf("index markdown: %w", err)
 		}
 	}
@@ -130,7 +156,25 @@ func (idx *Indexer) Handle(ctx context.Context, msg queue.Message) error {
 		}
 	}
 	idx.logger.Info("index completed", "task_id", task.ID, "chunks", n)
+	payload := map[string]any{
+		"task_id":   task.ID,
+		"kb_id":     task.Metadata["kb_id"],
+		"file_name": task.Metadata["file_name"],
+		"chunks":    n,
+	}
+	idx.emit(task, webhook.EventIndexCompleted, payload)
+	idx.emit(task, webhook.EventTaskCompleted, payload)
 	return nil
+}
+
+// emit publishes a task lifecycle event without blocking indexing.
+func (idx *Indexer) emit(task state.Task, eventType string, payload map[string]any) {
+	if idx.events == nil {
+		return
+	}
+	idx.events.Publish(context.Background(), webhook.Event{
+		Type: eventType, TenantID: task.TenantID, Payload: payload,
+	})
 }
 
 // waitForParsed polls until the task leaves PARSING (normally PARSED) or the

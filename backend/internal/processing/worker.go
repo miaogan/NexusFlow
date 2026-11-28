@@ -19,6 +19,7 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/queue"
 	"github.com/nexusflow/nexusflow/backend/internal/state"
 	"github.com/nexusflow/nexusflow/backend/internal/store"
+	"github.com/nexusflow/nexusflow/backend/internal/webhook"
 )
 
 type uploadedEvent struct {
@@ -51,6 +52,8 @@ type Worker struct {
 	// objects persists parsed markdown so Reindex can rebuild the index without
 	// invoking MinerU again. Optional.
 	objects store.ObjectStore
+	// events publishes task lifecycle webhooks. Optional.
+	events webhook.Publisher
 }
 
 // WorkerOption configures optional Worker collaborators.
@@ -59,6 +62,15 @@ type WorkerOption func(*Worker)
 // WithObjectStore enables parsed-markdown persistence.
 func WithObjectStore(objects store.ObjectStore) WorkerOption {
 	return func(w *Worker) { w.objects = objects }
+}
+
+// WithEventPublisher emits task.completed / task.failed webhook events.
+func WithEventPublisher(publisher webhook.Publisher) WorkerOption {
+	return func(w *Worker) {
+		if publisher != nil {
+			w.events = publisher
+		}
+	}
 }
 
 func NewWorker(client mineru.Client, machine state.Store, pub queue.Publisher, logger *slog.Logger,
@@ -141,6 +153,13 @@ func (w *Worker) Handle(ctx context.Context, msg queue.Message) error {
 			"error":   parseErr.Error(),
 		})
 		_ = w.pub.Publish(ctx, queue.Message{Topic: w.topicDLQ, Key: task.ID, Payload: dead})
+		w.emit(task, webhook.EventTaskFailed, map[string]any{
+			"task_id":   task.ID,
+			"kb_id":     task.Metadata["kb_id"],
+			"file_name": task.Metadata["file_name"],
+			"stage":     "parse",
+			"error":     parseErr.Error(),
+		})
 		w.logger.Error("task moved to DLQ", "task_id", task.ID, "error", parseErr)
 		return nil
 	}
@@ -192,6 +211,16 @@ func (w *Worker) Handle(ctx context.Context, msg queue.Message) error {
 
 	w.logger.Info("parse completed", "task_id", task.ID, "markdown_bytes", len(markdown))
 	return nil
+}
+
+// emit publishes a task lifecycle event without blocking the pipeline.
+func (w *Worker) emit(task state.Task, eventType string, payload map[string]any) {
+	if w.events == nil {
+		return
+	}
+	w.events.Publish(context.Background(), webhook.Event{
+		Type: eventType, TenantID: task.TenantID, Payload: payload,
+	})
 }
 
 // persistMarkdown stores the parsed markdown under tenant/kb/parsed/<task>.md.

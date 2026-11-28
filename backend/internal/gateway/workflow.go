@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/nexusflow/nexusflow/backend/internal/tenant"
+	"github.com/nexusflow/nexusflow/backend/internal/webhook"
 )
 
 const maxWorkflowBodyBytes = 4 << 20 // 4 MiB
@@ -101,17 +103,65 @@ func (g *Gateway) workflowRunDetail(c *gin.Context) {
 }
 
 func (g *Gateway) workflowApprove(c *gin.Context) {
-	g.proxyWorkflow(
-		c, http.MethodPost,
+	g.proxyWorkflowDecision(
+		c,
 		"/v1/workflows/runs/"+url.PathEscape(c.Param("id"))+"/approve",
+		"approve",
 	)
 }
 
 func (g *Gateway) workflowResume(c *gin.Context) {
-	g.proxyWorkflow(
-		c, http.MethodPost,
+	g.proxyWorkflowDecision(
+		c,
 		"/v1/workflows/runs/"+url.PathEscape(c.Param("id"))+"/resume",
+		"resume",
 	)
+}
+
+// proxyWorkflowDecision relays an approval decision and, on success, emits an
+// approval.decided webhook event for the tenant.
+func (g *Gateway) proxyWorkflowDecision(c *gin.Context, path, defaultDecision string) {
+	if !g.requireWorkflow(c) {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxWorkflowBodyBytes)
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "read body: " + err.Error()})
+		return
+	}
+	resp, err := g.workflow.do(c, http.MethodPost, path, body)
+	if err != nil {
+		g.logger.Error("workflow request failed", "path", path, "error", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "workflow engine unavailable: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	payload, _ := io.ReadAll(io.LimitReader(resp.Body, maxWorkflowBodyBytes))
+	if trace := resp.Header.Get("x-trace-id"); trace != "" {
+		c.Header("x-trace-id", trace)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		c.Header("Content-Type", ct)
+	}
+	c.Status(resp.StatusCode)
+	_, _ = c.Writer.Write(payload)
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		decision := defaultDecision
+		var req struct {
+			Decision string `json:"decision"`
+		}
+		if json.Unmarshal(body, &req) == nil && strings.TrimSpace(req.Decision) != "" {
+			decision = strings.TrimSpace(req.Decision)
+		}
+		g.emitEvent(c, webhook.EventApprovalDecided, map[string]any{
+			"source":   "workflow",
+			"run_id":   c.Param("id"),
+			"decision": decision,
+		})
+	}
 }
 
 func (g *Gateway) proxyWorkflow(c *gin.Context, method, path string) {

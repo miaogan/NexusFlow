@@ -25,6 +25,7 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/revocation"
 	"github.com/nexusflow/nexusflow/backend/internal/store"
 	"github.com/nexusflow/nexusflow/backend/internal/tenant"
+	"github.com/nexusflow/nexusflow/backend/internal/webhook"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -67,6 +68,9 @@ type Gateway struct {
 	quota    metering.Quota
 	// apiKeys authenticates external OpenAI-compatible callers.
 	apiKeys apikey.Store
+	// webhooks owns tenant subscriptions, delivery logs and event fan-out.
+	webhooks     *webhook.Dispatcher
+	webhookToken string
 }
 
 // Option configures a Gateway at construction time.
@@ -155,6 +159,17 @@ func WithAPIKeys(store apikey.Store) Option {
 	}
 }
 
+// WithWebhooks enables event subscriptions and the internal event ingest
+// endpoint. An empty token disables ingest.
+func WithWebhooks(dispatcher *webhook.Dispatcher, eventsToken string) Option {
+	return func(g *Gateway) {
+		if dispatcher != nil {
+			g.webhooks = dispatcher
+			g.webhookToken = eventsToken
+		}
+	}
+}
+
 func New(
 	ingestion pb.IngestionServiceClient,
 	query pb.QueryServiceClient,
@@ -198,6 +213,10 @@ func (g *Gateway) Router() *gin.Engine {
 	pub.POST("/login", g.login)
 	pub.POST("/register", g.register)
 	pub.POST("/refresh", g.refresh)
+
+	// Internal event ingest used by the processing worker / workflow engine.
+	// Authenticated with WEBHOOK_EVENTS_TOKEN instead of a user credential.
+	r.POST("/v1/internal/events", g.ingestWebhookEvent)
 
 	v1 := r.Group("/v1", Auth(g.secret, g.allowAnon, g.blacklist, g.apiKeys), APIKeyRateLimit(), RateLimit(50, 100))
 	v1.POST("/auth/logout", g.logout)
@@ -269,6 +288,12 @@ func (g *Gateway) Router() *gin.Engine {
 	// OpenAI-compatible facade: API keys (chat:completions) or console JWTs
 	// (search:use) may call it; citations are relayed on the response.
 	v1.POST("/openai/chat/completions", RequireAnyPermission(apikey.ScopeChatCompletions, "search:use"), g.openAIChat)
+
+	// Tenant event webhooks: subscription CRUD and delivery logs.
+	v1.GET("/webhooks", RequirePermission("webhook:write"), g.listWebhooks)
+	v1.POST("/webhooks", RequirePermission("webhook:write"), g.createWebhook)
+	v1.DELETE("/webhooks/:id", RequirePermission("webhook:write"), g.deleteWebhook)
+	v1.GET("/webhooks/:id/deliveries", RequirePermission("webhook:write"), g.listWebhookDeliveries)
 
 	// Knowledge-base management and namespace discovery.
 	v1.GET("/knowledge-bases", RequirePermission("kb:read"), g.listKnowledgeBases)

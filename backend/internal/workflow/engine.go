@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"log/slog"
+
+	"github.com/nexusflow/nexusflow/backend/internal/webhook"
 )
 
 // Node is the unified contract for every executable step: parsing, chunking,
@@ -92,10 +94,20 @@ type RunResult struct {
 type Engine struct {
 	registry *Registry
 	logger   *slog.Logger
+	events   webhook.Publisher
 }
 
 func NewEngine(registry *Registry, logger *slog.Logger) *Engine {
 	return &Engine{registry: registry, logger: logger}
+}
+
+// WithEventPublisher emits workflow.completed / workflow.failed webhooks for
+// persisted top-level runs.
+func (e *Engine) WithEventPublisher(publisher webhook.Publisher) *Engine {
+	if publisher != nil {
+		e.events = publisher
+	}
+	return e
 }
 
 // Validate checks references, duplicate IDs and cycles, and returns a
@@ -395,6 +407,28 @@ func (e *Engine) save(
 	}
 	state := e.state(opts, result, dag, input, "", errText)
 	opts.Store.Save(state)
+
+	if e.events == nil {
+		return
+	}
+	payload := map[string]any{
+		"run_id": result.RunID,
+		"dag":    dag.Name,
+		"status": result.Status,
+	}
+	switch result.Status {
+	case string(RunSucceeded):
+		e.events.Publish(context.Background(), webhook.Event{
+			Type: webhook.EventWorkflowCompleted, TenantID: firstNonEmpty(opts.Meta.TenantID, "default"),
+			Payload: payload,
+		})
+	case string(RunFailed):
+		payload["error"] = errText
+		e.events.Publish(context.Background(), webhook.Event{
+			Type: webhook.EventWorkflowFailed, TenantID: firstNonEmpty(opts.Meta.TenantID, "default"),
+			Payload: payload,
+		})
+	}
 }
 
 func (e *Engine) saveWithPending(

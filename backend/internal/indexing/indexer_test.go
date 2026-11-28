@@ -9,6 +9,7 @@ import (
 
 	"github.com/nexusflow/nexusflow/backend/internal/queue"
 	"github.com/nexusflow/nexusflow/backend/internal/state"
+	"github.com/nexusflow/nexusflow/backend/internal/webhook"
 )
 
 type stubIndexer struct {
@@ -130,5 +131,38 @@ func TestIndexer_ResumesFromPartialState(t *testing.T) {
 	}
 	if idx.calls != 0 {
 		t.Fatalf("index calls = %d, want 0 (index written before crash)", idx.calls)
+	}
+}
+
+type captureEvents struct {
+	events []webhook.Event
+}
+
+func (c *captureEvents) Publish(_ context.Context, evt webhook.Event) {
+	c.events = append(c.events, evt)
+}
+
+func TestIndexer_EmitsCompletionEvents(t *testing.T) {
+	st, _ := state.NewStore("memory", "")
+	seedTask(t, st, "task-1", "t1", state.Parsed)
+	events := &captureEvents{}
+	i := New(&stubIndexer{}, st, slog.Default(), WithEventPublisher(events))
+
+	payload, _ := json.Marshal(parsedEvent{TaskID: "task-1", TenantID: "t1", Markdown: "# hi"})
+	if err := i.Handle(context.Background(), queue.Message{Payload: payload}); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if len(events.events) != 2 {
+		t.Fatalf("events = %+v", events.events)
+	}
+	if events.events[0].Type != webhook.EventIndexCompleted ||
+		events.events[1].Type != webhook.EventTaskCompleted {
+		t.Fatalf("events = %+v", events.events)
+	}
+	if events.events[0].TenantID != "t1" {
+		t.Fatalf("tenant = %q", events.events[0].TenantID)
+	}
+	if events.events[0].Payload["chunks"] != 2 {
+		t.Fatalf("payload = %+v", events.events[0].Payload)
 	}
 }
