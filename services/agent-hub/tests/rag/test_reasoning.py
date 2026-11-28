@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 
 from nexusflow_agents.agents.rag.services.approvals import ApprovalService
 from nexusflow_agents.agents.rag.services.reasoning import ReasoningLoop
@@ -28,6 +29,20 @@ class FakeLLM:
 
     async def ainvoke(self, messages: list[Any]) -> AIMessage:
         return self._next()
+
+    async def astream(self, messages: list[Any]) -> AsyncIterator[AIMessageChunk]:
+        message = self._next()
+        content = message.content if isinstance(message.content, str) else ""
+        if content:
+            # Split into two deltas so tests can assert token streaming.
+            half = max(1, len(content) // 2)
+            yield AIMessageChunk(content=content[:half])
+            if content[half:]:
+                yield AIMessageChunk(content=content[half:])
+        if message.tool_calls:
+            yield AIMessageChunk(content="", tool_calls=list(message.tool_calls))
+        if not content and not message.tool_calls:
+            yield AIMessageChunk(content="")
 
     def invoke(self, messages: list[Any]) -> AIMessage:
         return self._next()
@@ -117,6 +132,9 @@ def test_reasoning_executes_tool_then_answers() -> None:
     assert final["type"] == "final"
     assert final["answer"] == "final answer"
     assert final["tool_calls"] == 1
+    tokens = [event["content"] for event in events if event["type"] == "token"]
+    assert "".join(tokens) == "final answer"
+    assert len(tokens) >= 2
 
 
 def test_reasoning_suppresses_duplicate_tool_calls() -> None:

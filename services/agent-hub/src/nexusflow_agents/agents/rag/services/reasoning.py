@@ -61,6 +61,13 @@ def _content_text(message: Any) -> str:
     return str(content or "")
 
 
+def _has_tool_calls(chunk: Any) -> bool:
+    """True when a stream chunk announces a tool call."""
+    return bool(
+        getattr(chunk, "tool_call_chunks", None) or getattr(chunk, "tool_calls", None)
+    )
+
+
 def _tool_payload(result: Any) -> str:
     text = json.dumps(result, ensure_ascii=False, default=str)
     if len(text) > MAX_TOOL_RESULT_CHARS:
@@ -192,6 +199,7 @@ class ReasoningLoop:
         calls = 0
         tokens = 0
         answer = ""
+        answer_streamed = False
         stopped = "answer"
         turn = 0
 
@@ -200,14 +208,31 @@ class ReasoningLoop:
             for turn in range(1, self._settings.reasoning_max_turns + 1):
                 self._check_budget(started, turn, tokens, calls)
                 try:
-                    message = await bound.ainvoke(messages)
+                    # Stream the turn so the final answer reaches clients
+                    # token-by-token; content is suppressed once a tool call
+                    # is announced, keeping tool preambles out of the answer.
+                    aggregate = None
+                    saw_tool = False
+                    emitted = False
+                    async for chunk in bound.astream(messages):
+                        aggregate = chunk if aggregate is None else aggregate + chunk
+                        if _has_tool_calls(chunk):
+                            saw_tool = True
+                        piece = _content_text(chunk)
+                        if piece and not saw_tool:
+                            emitted = True
+                            yield {"type": "token", "content": piece}
                 except Exception as exc:
                     raise ReasoningUnavailable(f"reasoning model failed: {exc}") from exc
+                if aggregate is None:
+                    raise ReasoningUnavailable("reasoning model returned no message")
+                message = aggregate
                 text = _content_text(message)
                 tokens += max(1, len(text) // 4)
                 tool_calls = list(getattr(message, "tool_calls", []) or [])
                 if not tool_calls:
                     answer = text.strip()
+                    answer_streamed = emitted
                     stopped = "answer"
                     break
 
@@ -255,7 +280,7 @@ class ReasoningLoop:
                 answer = ""
 
         yield {"type": "stage", "stage": "reasoning", "status": "done", "turns": turn}
-        if answer:
+        if answer and not answer_streamed:
             yield {"type": "token", "content": answer}
         yield {
             "type": "final",
