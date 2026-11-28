@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -90,6 +91,8 @@ def _loop(
         reasoning_tool_budget=overrides.pop("tool_budget", 6),
         reasoning_token_budget=overrides.pop("token_budget", 20000),
         reasoning_timeout_seconds=30,
+        reasoning_tool_timeout_seconds=overrides.pop("tool_timeout", 30.0),
+        reasoning_tool_progress_seconds=overrides.pop("tool_progress", 0.0),
     )
     checker = approvals.is_approved if approvals else None
     return ReasoningLoop(
@@ -199,6 +202,51 @@ def test_reasoning_pauses_for_approval_then_resumes() -> None:
     final = second[-1]
     assert final["answer"] == "approved"
     assert any(e["type"] == "tool_result" and e["ok"] for e in second)
+
+
+def _slow_tools(delay: float) -> ToolService:
+    service = ToolService(ToolRegistry())
+    service.register(
+        ToolSpec(name="slow.tool", description="slow"),
+        lambda payload, ctx: time.sleep(delay) or {"ok": True},
+    )
+    return service
+
+
+def test_reasoning_tool_timeout_returns_failed_result() -> None:
+    responses = [
+        AIMessage(
+            content="",
+            tool_calls=[{"name": "slow.tool", "args": {}, "id": "c1"}],
+        ),
+        AIMessage(content="after timeout"),
+    ]
+    events = _collect(_loop(responses, tools=_slow_tools(0.3), tool_timeout=0.05))
+
+    timeout = next(e for e in events if e["type"] == "tool_timeout")
+    assert timeout["tool"] == "slow.tool"
+    result = next(e for e in events if e["type"] == "tool_result")
+    assert result["ok"] is False
+    assert "timed out" in result["result"]["error"]
+    assert events[-1]["answer"] == "after timeout"
+
+
+def test_reasoning_tool_emits_progress_events() -> None:
+    responses = [
+        AIMessage(
+            content="",
+            tool_calls=[{"name": "slow.tool", "args": {}, "id": "c1"}],
+        ),
+        AIMessage(content="done"),
+    ]
+    events = _collect(
+        _loop(responses, tools=_slow_tools(0.12), tool_timeout=2, tool_progress=0.02)
+    )
+
+    progress = [e for e in events if e["type"] == "tool_progress"]
+    assert progress
+    assert progress[0]["tool"] == "slow.tool"
+    assert events[-1]["tool_calls"] == 1
 
 
 def test_reasoning_run_is_sync_equivalent() -> None:

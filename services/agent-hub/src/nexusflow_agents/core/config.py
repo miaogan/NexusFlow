@@ -52,6 +52,9 @@ class HubSettings(BaseSettings):
     reasoning_timeout_seconds: float = 60.0
     reasoning_tool_budget: int = 12
     reasoning_token_budget: int = 20000
+    # Per-tool timeout and progress heartbeat for the streaming loop.
+    reasoning_tool_timeout_seconds: float = 30.0
+    reasoning_tool_progress_seconds: float = 2.0
     mcp_servers: str = ""
     mcp_timeout_seconds: float = 10.0
     mcp_max_bytes: int = 1 << 20

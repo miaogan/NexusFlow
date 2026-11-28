@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import AsyncIterator, Callable
@@ -245,11 +246,23 @@ class ReasoningLoop:
                     if not isinstance(args, dict):
                         args = {"value": args}
                     call_id = str(call.get("id") or "")
-                    events, content = self._run_tool(name, args, ctx, seen, calls)
-                    calls += 1
-                    for event in events:
+                    yield {"type": "tool_call", "tool": name, "args": args}
+                    outcome: list[tuple[bool, Any]] = []
+                    async for event in self._invoke_tool_stream(
+                        name, args, ctx, seen, calls, outcome
+                    ):
                         yield event
-                    messages.append(ToolMessage(content=content, tool_call_id=call_id))
+                    ok, result = outcome[0]
+                    calls += 1
+                    yield {
+                        "type": "tool_result",
+                        "tool": name,
+                        "ok": ok,
+                        "result": result,
+                    }
+                    messages.append(
+                        ToolMessage(content=_tool_payload(result), tool_call_id=call_id)
+                    )
             else:
                 stopped = "max_turns"
                 final = await llm.ainvoke(messages)
@@ -290,30 +303,70 @@ class ReasoningLoop:
             "stopped": stopped,
         }
 
-    def _run_tool(
+    async def _invoke_tool_stream(
         self,
         name: str,
         args: dict[str, Any],
         ctx: dict[str, Any],
         seen: set[str],
         calls: int,
-    ) -> tuple[list[dict[str, Any]], str]:
-        events: list[dict[str, Any]] = [
-            {"type": "tool_call", "tool": name, "args": args}
-        ]
+        outcome: list[tuple[bool, Any]],
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Runs one tool in a worker thread with timeout and progress heartbeats.
+
+        The final ``(ok, result)`` is appended to ``outcome`` because async
+        generators cannot return a value.
+        """
+        if not name:
+            outcome.append((False, {"error": "tool name is missing"}))
+            return
         fingerprint = _fingerprint(name, args)
         if fingerprint in seen:
-            result: Any = {
-                "error": "duplicate tool call suppressed; use the previous result"
-            }
-            ok = False
-        elif calls >= self._settings.reasoning_tool_budget:
+            outcome.append(
+                (
+                    False,
+                    {"error": "duplicate tool call suppressed; use the previous result"},
+                )
+            )
+            return
+        if calls >= self._settings.reasoning_tool_budget:
             raise BudgetExceeded("tool budget exceeded")
-        else:
-            seen.add(fingerprint)
-            ok, result = self._invoke_tool(name, args, ctx)
-        events.append({"type": "tool_result", "tool": name, "ok": ok, "result": result})
-        return events, _tool_payload(result)
+        seen.add(fingerprint)
+
+        timeout = self._settings.reasoning_tool_timeout_seconds
+        progress = self._settings.reasoning_tool_progress_seconds
+        task = asyncio.create_task(
+            asyncio.to_thread(self._invoke_tool, name, args, ctx)
+        )
+        if progress <= 0 and timeout <= 0:
+            outcome.append(await task)
+            return
+
+        started = time.monotonic()
+        while not task.done():
+            wait_for = progress
+            if timeout > 0:
+                remaining = timeout - (time.monotonic() - started)
+                if remaining <= 0:
+                    task.cancel()
+                    yield {
+                        "type": "tool_timeout",
+                        "tool": name,
+                        "timeout_seconds": timeout,
+                    }
+                    outcome.append(
+                        (False, {"error": f"tool timed out after {timeout:g}s"})
+                    )
+                    return
+                wait_for = remaining if wait_for <= 0 else min(wait_for, remaining)
+            await asyncio.wait({task}, timeout=wait_for)
+            if not task.done() and progress > 0:
+                yield {
+                    "type": "tool_progress",
+                    "tool": name,
+                    "elapsed_seconds": round(time.monotonic() - started, 1),
+                }
+        outcome.append(task.result())
 
     def run(
         self,
