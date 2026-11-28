@@ -123,6 +123,47 @@ export function ProgressBar({ value }: { value: number }) {
   );
 }
 
+export function Pager({
+  page,
+  pageSize,
+  total,
+  loading = false,
+  onChange,
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  loading?: boolean;
+  onChange: (page: number) => void;
+}) {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500">
+      <span>
+        共 {total} 条 · 第 {page + 1} / {pages} 页
+      </span>
+      <div className="flex items-center gap-1.5">
+        <Button
+          variant="ghost"
+          className="px-2 py-1 text-[10px]"
+          disabled={loading || page <= 0}
+          onClick={() => onChange(page - 1)}
+        >
+          上一页
+        </Button>
+        <Button
+          variant="ghost"
+          className="px-2 py-1 text-[10px]"
+          disabled={loading || page + 1 >= pages}
+          onClick={() => onChange(page + 1)}
+        >
+          下一页
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function Tag({ children }: { children: ReactNode }) {
   return (
     <span className="rounded-md border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-400">

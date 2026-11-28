@@ -10,16 +10,29 @@ import {
   formatBytes,
   IconTrash,
   PageHeader,
+  Pager,
   ProgressBar,
   Spinner,
   StatePill,
   Tag,
 } from "../components/ui";
 
+const PAGE_SIZE = 20;
+
+const STATUS_TABS: { key: string; label: string }[] = [
+  { key: "", label: "全部" },
+  { key: "RUNNING", label: "进行中" },
+  { key: "COMPLETED", label: "已完成" },
+  { key: "FAILED", label: "失败" },
+];
+
 export default function Files() {
   const { kbID, kbRole, kbReadOnly } = useOutletContext<LayoutContext>();
   const canWrite = !kbReadOnly && (kbRole === "kb:admin" || kbRole === "kb:editor");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  const [status, setStatus] = useState("");
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -31,11 +44,14 @@ export default function Files() {
   const refresh = useCallback(() => {
     setLoading(true);
     setError(null);
-    listTasks(undefined, 100, 0, kbID)
-      .then((r) => setTasks(r.tasks))
+    listTasks(status || undefined, PAGE_SIZE, page * PAGE_SIZE, kbID)
+      .then((r) => {
+        setTasks(r.tasks);
+        setTotal(r.total);
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [kbID]);
+  }, [kbID, status, page]);
 
   useEffect(() => {
     setTasks([]);
@@ -53,7 +69,8 @@ export default function Files() {
         const result = await uploadFile(file, { source: "web-console" }, kbID);
         setUploadResult(result);
       }
-      refresh();
+      if (page === 0) refresh();
+      else setPage(0);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -112,6 +129,27 @@ export default function Files() {
         </div>
       )}
 
+      <div className="mb-3 flex flex-wrap items-center gap-1">
+        {STATUS_TABS.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => {
+              setStatus(tab.key);
+              setPage(0);
+            }}
+            className={`rounded-lg px-3 py-1.5 text-xs transition ${
+              status === tab.key
+                ? "bg-accent/10 text-accent"
+                : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+        {loading && <Spinner className="ml-2 h-3 w-3" />}
+      </div>
+
       <Card title="上传文件">
         <div
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -167,7 +205,7 @@ export default function Files() {
       </Card>
 
       <div className="mt-4">
-        <Card title={`文件列表（${tasks.length}）`}>
+        <Card title={`文件列表（${total}）`}>
           {loading && tasks.length === 0 ? (
             <p className="py-8 text-center text-xs text-slate-500">加载中…</p>
           ) : tasks.length === 0 ? (
@@ -230,6 +268,13 @@ export default function Files() {
               </table>
             </div>
           )}
+          <Pager
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={total}
+            loading={loading}
+            onChange={setPage}
+          />
         </Card>
       </div>
     </div>

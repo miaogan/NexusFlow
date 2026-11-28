@@ -28,9 +28,10 @@ func (SetNode) Run(_ context.Context, _ *ExecutionContext, config map[string]any
 	return map[string]any{key: config["value"]}, nil
 }
 
-// StageNode is a declarative pipeline stage. Real execution is delegated to
-// the corresponding microservice, so the DAG engine can validate and schedule
-// canvas flows before every integration is wired.
+// StageNode is a declarative pipeline stage. Ingest/parse/index are driven by
+// the asynchronous upload pipeline, so the DAG node records its place and
+// reports that it did not execute work. Use the query/sandbox nodes for real
+// synchronous execution.
 type StageNode struct {
 	Name string
 }
@@ -38,5 +39,5 @@ type StageNode struct {
 func (n StageNode) Type() string { return n.Name }
 
 func (n StageNode) Run(_ context.Context, _ *ExecutionContext, _ map[string]any) (map[string]any, error) {
-	return map[string]any{"stage": n.Name, "status": "ok"}, nil
+	return declarativeStage(n.Name), nil
 }

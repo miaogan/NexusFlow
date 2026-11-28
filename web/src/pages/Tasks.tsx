@@ -11,6 +11,7 @@ import {
   IconRefresh,
   IconTrash,
   PageHeader,
+  Pager,
   ProgressBar,
   StatePill,
   Tag,
@@ -18,12 +19,21 @@ import {
 
 type Filter = "all" | "running" | "completed" | "failed";
 
+const PAGE_SIZE = 20;
+
 const TABS: { key: Filter; label: string }[] = [
   { key: "all", label: "全部" },
   { key: "running", label: "进行中" },
   { key: "completed", label: "已完成" },
   { key: "failed", label: "失败" },
 ];
+
+const FILTER_STATUS: Record<Filter, string | undefined> = {
+  all: undefined,
+  running: "RUNNING",
+  completed: "COMPLETED",
+  failed: "FAILED",
+};
 
 const TERMINAL = new Set(["COMPLETED", "FAILED"]);
 
@@ -42,6 +52,8 @@ export default function Tasks() {
   const canWrite = !kbReadOnly && (kbRole === "kb:admin" || kbRole === "kb:editor");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<TaskDetail | null>(null);
@@ -51,11 +63,14 @@ export default function Tasks() {
   const refresh = useCallback(() => {
     setLoading(true);
     setError(null);
-    listTasks(undefined, 200, 0, kbID)
-      .then((r) => setTasks(r.tasks))
+    listTasks(FILTER_STATUS[filter], PAGE_SIZE, page * PAGE_SIZE, kbID)
+      .then((r) => {
+        setTasks(r.tasks);
+        setTotal(r.total);
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [kbID]);
+  }, [kbID, filter, page]);
 
   useEffect(() => {
     setTasks([]);
@@ -80,13 +95,6 @@ export default function Tasks() {
       .catch(() => alive && setSelected(null));
     return () => { alive = false; };
   }, [selectedId, tasks, kbID]);
-
-  const filtered = tasks.filter((t) => {
-    if (filter === "running") return !TERMINAL.has(t.status);
-    if (filter === "completed") return t.status === "COMPLETED";
-    if (filter === "failed") return t.status === "FAILED";
-    return true;
-  });
 
   const handleDelete = useCallback(
     async (id: string) => {
@@ -137,7 +145,10 @@ export default function Tasks() {
         {TABS.map((tab) => (
           <button
             key={tab.key}
-            onClick={() => setFilter(tab.key)}
+            onClick={() => {
+              setFilter(tab.key);
+              setPage(0);
+            }}
             className={`rounded-lg px-3 py-1.5 text-xs transition ${
               filter === tab.key ? "bg-accent/10 text-accent" : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
             }`}
@@ -148,16 +159,16 @@ export default function Tasks() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_320px]">
-        <Card title={`任务（${filtered.length}）`}>
+        <Card title={`任务（${total}）`}>
           {error ? (
             <p className="py-8 text-center text-xs text-rose-300">{error}</p>
           ) : loading && tasks.length === 0 ? (
             <p className="py-8 text-center text-xs text-slate-500">加载中…</p>
-          ) : filtered.length === 0 ? (
+          ) : tasks.length === 0 ? (
             <EmptyState title="无任务" hint="切换过滤条件或上传新文件。" />
           ) : (
             <ul className="divide-y divide-white/5">
-              {filtered.map((t) => (
+              {tasks.map((t) => (
                 <li
                   key={t.task_id}
                   onClick={() => setSelectedId(t.task_id)}
@@ -196,6 +207,13 @@ export default function Tasks() {
               ))}
             </ul>
           )}
+          <Pager
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={total}
+            loading={loading}
+            onChange={setPage}
+          />
         </Card>
 
         <Card title="任务详情">

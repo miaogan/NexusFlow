@@ -12,7 +12,9 @@ import {
   upsertRole,
 } from "../api/client";
 import type { AuthUser, PermissionInfo, RoleInfo } from "../types";
-import { Button, Card, EmptyState, PageHeader, Spinner, Tag } from "../components/ui";
+import { Button, Card, EmptyState, PageHeader, Pager, Spinner, Tag } from "../components/ui";
+
+const PAGE_SIZE = 20;
 
 const inputClass =
   "w-full rounded-lg border border-white/10 bg-ink-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-accent/40";
@@ -32,16 +34,32 @@ export default function Users() {
   const [roles, setRoles] = useState<RoleInfo[]>([]);
   const [perms, setPerms] = useState<PermissionInfo[]>([]);
   const [query, setQuery] = useState("");
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [editing, setEditing] = useState<AuthUser | null>(null);
+  const [editForm, setEditForm] = useState({
+    email: "",
+    role: "viewer",
+    departments: "",
+    status: "active",
+    password: "",
+  });
 
-  const reload = useCallback(async (q: string) => {
+  const reload = useCallback(async (q: string, targetPage = 0) => {
     setBusy(true);
     setError(null);
     try {
-      const [u, r, p] = await Promise.all([listUsers(q), listRoles(), listPermissions()]);
+      const [u, r, p] = await Promise.all([
+        listUsers(q, PAGE_SIZE, targetPage * PAGE_SIZE),
+        listRoles(),
+        listPermissions(),
+      ]);
       setUsers(u.users);
+      setTotal(u.total);
+      setPage(targetPage);
       setRoles(r.roles);
       setPerms(p.permissions);
     } catch (e) {
@@ -75,7 +93,7 @@ export default function Users() {
       });
       setUForm({ username: "", password: "", email: "", role: "viewer" });
       flash("用户已创建");
-      await reload(query);
+      await reload(query, 0);
     } catch (e) {
       setError(errMsg(e));
     }
@@ -84,7 +102,7 @@ export default function Users() {
   const toggleStatus = async (u: AuthUser) => {
     try {
       await updateUser(u.id, { status: u.status === "active" ? "disabled" : "active" });
-      await reload(query);
+      await reload(query, page);
     } catch (e) {
       setError(errMsg(e));
     }
@@ -95,7 +113,39 @@ export default function Users() {
     try {
       await deleteUser(u.id);
       flash("用户已删除");
-      await reload(query);
+      await reload(query, page);
+    } catch (e) {
+      setError(errMsg(e));
+    }
+  };
+
+  const openEditUser = (u: AuthUser) => {
+    setEditing(u);
+    setEditForm({
+      email: u.email ?? "",
+      role: u.roles[0] ?? "viewer",
+      departments: (u.departments ?? []).join(", "),
+      status: u.status || "active",
+      password: "",
+    });
+  };
+
+  const submitEditUser = async () => {
+    if (!editing) return;
+    try {
+      await updateUser(editing.id, {
+        email: editForm.email.trim(),
+        roles: [editForm.role],
+        departments: editForm.departments
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean),
+        status: editForm.status,
+        password: editForm.password || undefined,
+      });
+      flash("用户已更新");
+      setEditing(null);
+      await reload(query, page);
     } catch (e) {
       setError(errMsg(e));
     }
@@ -121,7 +171,7 @@ export default function Users() {
       });
       setRForm({ name: "", description: "", permissions: [] });
       flash("角色已保存");
-      await reload(query);
+      await reload(query, page);
     } catch (e) {
       setError(errMsg(e));
     }
@@ -132,7 +182,7 @@ export default function Users() {
     try {
       await deleteRole(r.name);
       flash("角色已删除");
-      await reload(query);
+      await reload(query, page);
     } catch (e) {
       setError(errMsg(e));
     }
@@ -160,11 +210,11 @@ export default function Users() {
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && reload(query)}
+                onKeyDown={(e) => e.key === "Enter" && reload(query, 0)}
                 placeholder="搜索用户名 / 邮箱"
                 className={`${inputClass} w-56`}
               />
-              <Button variant="ghost" onClick={() => reload(query)} disabled={busy}>
+              <Button variant="ghost" onClick={() => reload(query, page)} disabled={busy}>
                 刷新
               </Button>
             </>
@@ -177,7 +227,7 @@ export default function Users() {
 
       {tab === "users" && (
         <div className="grid gap-4 lg:grid-cols-[1fr,320px]">
-          <Card title={`用户列表 · ${users.length}`}>
+          <Card title={`用户列表 · ${total}`}>
             {busy && users.length === 0 ? (
               <div className="flex items-center gap-2 py-6 text-xs text-slate-500">
                 <Spinner /> 加载中…
@@ -216,6 +266,11 @@ export default function Users() {
                       </div>
                     </div>
                     {canWrite && (
+                      <Button variant="subtle" onClick={() => openEditUser(u)} className="px-2 py-1 text-[10px]">
+                        编辑
+                      </Button>
+                    )}
+                    {canWrite && (
                       <Button variant="subtle" onClick={() => toggleStatus(u)} className="px-2 py-1 text-[10px]">
                         {u.status === "active" ? "禁用" : "启用"}
                       </Button>
@@ -229,6 +284,13 @@ export default function Users() {
                 ))}
               </ul>
             )}
+            <Pager
+              page={page}
+              pageSize={PAGE_SIZE}
+              total={total}
+              loading={busy}
+              onChange={(next) => void reload(query, next)}
+            />
           </Card>
 
           <Card title="创建用户">
@@ -304,13 +366,28 @@ export default function Users() {
                     {r.builtin && <Tag>内置</Tag>}
                     {r.description && <span className="text-[10px] text-slate-500">{r.description}</span>}
                     {canWriteRole && !r.builtin && (
-                      <Button
-                        variant="danger"
-                        onClick={() => removeRole(r)}
-                        className="ml-auto px-2 py-1 text-[10px]"
-                      >
-                        删除
-                      </Button>
+                      <div className="ml-auto flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          className="px-2 py-1 text-[10px]"
+                          onClick={() =>
+                            setRForm({
+                              name: r.name,
+                              description: r.description || "",
+                              permissions: r.permissions.filter((p) => p !== "*"),
+                            })
+                          }
+                        >
+                          编辑
+                        </Button>
+                        <Button
+                          variant="danger"
+                          onClick={() => removeRole(r)}
+                          className="px-2 py-1 text-[10px]"
+                        >
+                          删除
+                        </Button>
+                      </div>
                     )}
                   </div>
                   <div className="mt-1.5 flex flex-wrap gap-1">
@@ -364,12 +441,107 @@ export default function Users() {
                       ))}
                   </div>
                 </div>
-                <Button onClick={submitRole} disabled={!rForm.name.trim()} className="w-full">
-                  保存角色
-                </Button>
+                <div className="flex gap-2">
+                  <Button onClick={submitRole} disabled={!rForm.name.trim()} className="flex-1">
+                    保存角色
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => setRForm({ name: "", description: "", permissions: [] })}
+                  >
+                    清空
+                  </Button>
+                </div>
               </div>
             )}
           </Card>
+        </div>
+      )}
+      {editing && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setEditing(null)}
+        >
+          <div className="panel w-full max-w-lg p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="panel-title">编辑用户 · {editing.username}</h3>
+              <button
+                type="button"
+                onClick={() => setEditing(null)}
+                className="rounded px-2 py-0.5 text-xs text-slate-400 hover:bg-white/5 hover:text-slate-200"
+              >
+                关闭
+              </button>
+            </div>
+            <div className="space-y-3">
+              <label className="block">
+                <span className="mb-1 block text-[10px] text-slate-500">邮箱</span>
+                <input
+                  value={editForm.email}
+                  onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                  placeholder="邮箱（可选）"
+                  className={inputClass}
+                />
+              </label>
+              <div>
+                <p className="mb-1 text-[10px] text-slate-500">角色（单选，互斥）</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {roles.map((r) => (
+                    <button
+                      key={r.name}
+                      type="button"
+                      onClick={() => setEditForm({ ...editForm, role: r.name })}
+                      className={`rounded-md border px-2 py-1 text-[10px] transition ${
+                        editForm.role === r.name
+                          ? "border-accent/40 bg-accent/10 text-accent"
+                          : "border-white/10 text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      {r.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <label className="block">
+                <span className="mb-1 block text-[10px] text-slate-500">部门（逗号分隔）</span>
+                <input
+                  value={editForm.departments}
+                  onChange={(e) => setEditForm({ ...editForm, departments: e.target.value })}
+                  placeholder="如：研发, 平台"
+                  className={inputClass}
+                />
+              </label>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1 block text-[10px] text-slate-500">状态</span>
+                  <select
+                    value={editForm.status}
+                    onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
+                    className={inputClass}
+                  >
+                    <option value="active">active</option>
+                    <option value="disabled">disabled</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-[10px] text-slate-500">重置密码（留空不改）</span>
+                  <input
+                    type="password"
+                    value={editForm.password}
+                    onChange={(e) => setEditForm({ ...editForm, password: e.target.value })}
+                    placeholder="新密码"
+                    className={inputClass}
+                  />
+                </label>
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setEditing(null)}>
+                取消
+              </Button>
+              <Button onClick={() => void submitEditUser()}>保存</Button>
+            </div>
+          </div>
         </div>
       )}
     </div>

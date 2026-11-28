@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   ReactFlowProvider,
   addEdge,
@@ -13,6 +14,7 @@ import {
   createWorkflowDefinition,
   deleteWorkflowDefinition,
   duplicateWorkflowDefinition,
+  listNodeTypes,
   listWorkflowDefinitionVersions,
   listWorkflowDefinitions,
   listWorkflowRuns,
@@ -42,19 +44,33 @@ import type {
 } from "../types";
 
 const PALETTE: PaletteItem[] = [
-  { stage: "ingest", type: "ingest", label: "文件摄入", caption: "上传 / 预签名直传", description: "接收异构文件，写入对象存储并投递任务。" },
-  { stage: "parse", type: "parse", label: "MinerU 解析", caption: "版面还原 Markdown", description: "异步解析 PDF / Word，产出结构化文本。" },
-  { stage: "index", type: "index", label: "LlamaIndex 加工", caption: "切块 / 索引 / Embedding", description: "语义切块、向量与关键词索引构建。" },
-  { stage: "sandbox", type: "sandbox", label: "代码沙箱", caption: "OpenSandbox 执行", description: "强隔离执行自定义代码节点。" },
-  { stage: "query", type: "query", label: "检索查询", caption: "多路召回 + RRF + Rerank", description: "向量 / BM25 / 图谱三路召回。" },
+  { stage: "ingest", type: "ingest", label: "文件摄入", caption: "声明式 · 异步流水线", description: "声明式阶段：真实摄入由文件上传触发，节点仅标记位置。" },
+  { stage: "parse", type: "parse", label: "MinerU 解析", caption: "声明式 · 异步流水线", description: "声明式阶段：解析由上传任务异步完成。" },
+  { stage: "index", type: "index", label: "LlamaIndex 加工", caption: "声明式 · 异步流水线", description: "声明式阶段：切块与索引由后台任务完成。" },
+  { stage: "sandbox", type: "sandbox", label: "代码沙箱", caption: "真实执行 · OpenSandbox", description: "真实执行 config.code，返回 stdout / output_json。" },
+  { stage: "query", type: "query", label: "检索查询", caption: "真实检索 · 多路召回", description: "真实调用检索服务，config 支持 query / kb_id / top_k。" },
+  { stage: "control", type: "condition", label: "条件分支", caption: "按变量选择 then/else", description: "config: field、equals/contains/in、then、else。" },
+  { stage: "control", type: "loop", label: "批量循环", caption: "并发执行子 DAG", description: "config: items、max_concurrency、sub_dag。" },
+  { stage: "human", type: "human_approval", label: "人工审批", caption: "挂起等待审批", description: "运行到该节点会挂起，可在审批中心批准后恢复。" },
+  { stage: "agent", type: "agent", label: "Agent 调用", caption: "Agent Hub 能力/工具", description: "config: agent 或 capability、input；需开启 Agent 节点。" },
+  { stage: "data", type: "nl2sql", label: "结构化查询", caption: "只读 SQL", description: "config: sql 或 sql_from，仅允许 SELECT。" },
+  { stage: "data", type: "set", label: "变量赋值", caption: "写入执行上下文", description: "config: key、value，供下游节点引用。" },
+  { stage: "data", type: "noop", label: "占位节点", caption: "noop 占位", description: "空操作，用于占位或分支汇合。" },
 ];
 
 const NODE_META: Record<string, { label: string; caption: string; stage: Stage }> = {
-  ingest: { label: "文件摄入", caption: "MinIO 对象存储", stage: "ingest" },
-  parse: { label: "MinerU 解析", caption: "输出结构化 Markdown", stage: "parse" },
-  index: { label: "LlamaIndex 加工", caption: "切块 / 索引 / Embedding", stage: "index" },
-  sandbox: { label: "代码沙箱", caption: "OpenSandbox 执行", stage: "sandbox" },
-  query: { label: "检索查询", caption: "多路召回 + RRF + Rerank", stage: "query" },
+  ingest: { label: "文件摄入", caption: "声明式 · 异步流水线", stage: "ingest" },
+  parse: { label: "MinerU 解析", caption: "声明式 · 异步流水线", stage: "parse" },
+  index: { label: "LlamaIndex 加工", caption: "声明式 · 异步流水线", stage: "index" },
+  sandbox: { label: "代码沙箱", caption: "真实执行 · OpenSandbox", stage: "sandbox" },
+  query: { label: "检索查询", caption: "真实检索 · 多路召回", stage: "query" },
+  condition: { label: "条件分支", caption: "按变量选择 then/else", stage: "control" },
+  loop: { label: "批量循环", caption: "并发执行子 DAG", stage: "control" },
+  human_approval: { label: "人工审批", caption: "挂起等待审批", stage: "human" },
+  agent: { label: "Agent 调用", caption: "Agent Hub 能力/工具", stage: "agent" },
+  nl2sql: { label: "结构化查询", caption: "只读 SQL", stage: "data" },
+  set: { label: "变量赋值", caption: "写入执行上下文", stage: "data" },
+  noop: { label: "占位节点", caption: "noop 占位", stage: "data" },
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -243,11 +259,14 @@ function statusLabel(definition: WorkflowDefinition | null): string {
 }
 
 export default function Workflow() {
+  const [searchParams] = useSearchParams();
+  const requestedDefinition = searchParams.get("definition");
   const [nodes, setNodes, onNodesChange] = useNodesState<PipelineNodeData>(DEMO_TEMPLATE.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(DEMO_TEMPLATE.edges);
   const nodeSeq = useRef(100);
 
   const [definitions, setDefinitions] = useState<WorkflowDefinition[]>([]);
+  const [availableTypes, setAvailableTypes] = useState<string[] | null>(null);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [currentName, setCurrentName] = useState("");
   const [dirty, setDirty] = useState(true);
@@ -325,7 +344,7 @@ export default function Workflow() {
           data: {
             label: meta?.label ?? node.type,
             caption: meta?.caption ?? "",
-            stage: meta?.stage ?? "index",
+            stage: meta?.stage ?? "data",
             type: node.type,
             config: node.config,
           },
@@ -372,7 +391,12 @@ export default function Workflow() {
         const res = await listWorkflowDefinitions();
         if (cancelled) return;
         setDefinitions(res.definitions);
-        if (res.definitions.length > 0) {
+        const requested = requestedDefinition
+          ? res.definitions.find((definition) => definition.id === requestedDefinition)
+          : undefined;
+        if (requested) {
+          loadDefinition(requested);
+        } else if (res.definitions.length > 0) {
           loadDefinition(res.definitions[0]);
         } else {
           setCurrentName("示例流水线（未保存）");
@@ -387,7 +411,30 @@ export default function Workflow() {
     return () => {
       cancelled = true;
     };
-  }, [loadDefinition]);
+  }, [loadDefinition, requestedDefinition]);
+
+  // Hide node types this engine did not register (agent/HITL need flags).
+  useEffect(() => {
+    let cancelled = false;
+    listNodeTypes()
+      .then((res) => {
+        if (!cancelled) setAvailableTypes(Array.isArray(res.nodes) ? res.nodes : null);
+      })
+      .catch(() => {
+        if (!cancelled) setAvailableTypes(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const paletteItems = useMemo(
+    () =>
+      availableTypes
+        ? PALETTE.filter((item) => availableTypes.includes(item.type))
+        : PALETTE,
+    [availableTypes],
+  );
 
   const visibleDefinitions = useMemo(() => {
     const term = query.trim().toLowerCase();
@@ -530,6 +577,25 @@ export default function Workflow() {
     flash("已按依赖层级自动布局");
   };
 
+  const handleApplyConfig = useCallback(
+    (nodeId: string, config: Record<string, unknown> | undefined) => {
+      setNodes((current) =>
+        current.map((node) =>
+          node.id === nodeId ? { ...node, data: { ...node.data, config } } : node,
+        ),
+      );
+      setSelected((current) =>
+        current && current.id === nodeId
+          ? { ...current, data: { ...current.data, config } }
+          : current,
+      );
+      setDirty(true);
+      setValidation(null);
+      flash("节点配置已更新");
+    },
+    [setNodes],
+  );
+
   const openCreate = () => {
     setCreateMode("template");
     setTemplateId("vectorize");
@@ -627,7 +693,7 @@ export default function Workflow() {
   };
 
   const handleDelete = async (definition: WorkflowDefinition) => {
-    if (!window.confirm(`确定删除工作流「${definition.name}」吗？历史版本将一并删除。`)) return;
+    if (!window.confirm(`确定删除工作流「${definition.name}」吗？历史版本将一并删除，既有运行记录会保留。`)) return;
     setError(null);
     try {
       await deleteWorkflowDefinition(definition.id);
@@ -963,7 +1029,7 @@ export default function Workflow() {
             </div>
           </section>
           <div className="min-h-0 flex-1">
-            <Palette items={PALETTE} onAdd={handleAddFromPalette} />
+            <Palette items={paletteItems} onAdd={handleAddFromPalette} />
           </div>
         </div>
 
@@ -1030,6 +1096,8 @@ export default function Workflow() {
             runOutput={runOutput}
             runs={runs}
             runsLoading={runsLoading}
+            readOnly={published}
+            onApplyConfig={handleApplyConfig}
           />
         </div>
       </div>

@@ -257,7 +257,10 @@ export async function listTasks(
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (status) params.set("status", status);
   params.set("kb_id", kbID);
-  return request<TaskListResponse>(`${GATEWAY_BASE}/v1/tasks?${params.toString()}`);
+  const res = await request<TaskListResponse>(
+    `${GATEWAY_BASE}/v1/tasks?${params.toString()}`,
+  );
+  return { tasks: res.tasks ?? [], total: res.total ?? 0 };
 }
 
 export async function getTask(id: string, kbID = getActiveKB()): Promise<TaskDetail> {
@@ -1038,12 +1041,15 @@ export async function decideApproval(
 export async function listWorkflowRuns(
   limit = 50,
   definitionId?: string,
+  status?: string,
 ): Promise<{ runs: WorkflowRunState[] }> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (definitionId) params.set("definition_id", definitionId);
-  return request<{ runs: WorkflowRunState[] }>(
+  if (status) params.set("status", status);
+  const res = await request<{ runs: WorkflowRunState[] | null }>(
     `${GATEWAY_BASE}/v1/workflows/runs?${params.toString()}`,
   );
+  return { runs: res.runs ?? [] };
 }
 
 export async function getWorkflowRun(id: string): Promise<WorkflowRunState> {

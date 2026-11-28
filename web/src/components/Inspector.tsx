@@ -1,6 +1,41 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { PipelineNode, SearchResponse, ValidationResult, WorkflowRunState } from "../types";
 import { Spinner, StatePill } from "./ui";
+
+const CONFIG_SAMPLES: Record<string, Record<string, unknown>> = {
+  set: { key: "name", value: "value" },
+  query: { query: "NexusFlow 的检索链路如何工作？", kb_id: "default", top_k: 20, final_top_n: 5 },
+  sandbox: {
+    code: "import json\nprint(json.dumps({'ok': True}))",
+    runtime: "python",
+    timeout_seconds: 10,
+    packages: [],
+  },
+  condition: { field: "intent", equals: "knowledge_qa", then: ["query"], else: ["noop"] },
+  loop: {
+    items: "items",
+    max_concurrency: 2,
+    sub_dag: { name: "sub", nodes: [{ id: "noop", type: "noop" }], edges: [] },
+  },
+  human_approval: { prompt: "请确认发布" },
+  agent: { capability: "intent.classify", input: { message: "hello" } },
+  nl2sql: { sql: "SELECT 1" },
+  noop: {},
+};
+
+const CONFIG_HINTS: Record<string, string> = {
+  set: "key / value",
+  query: "query / query_from、kb_id、top_k、final_top_n、rerank_model",
+  sandbox: "code、runtime、timeout_seconds、packages、input",
+  condition: "field、equals/contains/in、then、else",
+  loop: "items、max_concurrency、sub_dag",
+  human_approval: "prompt；需 HITL 开启",
+  agent: "agent 或 capability、input；需 Agent 节点开启",
+  nl2sql: "sql 或 sql_from",
+};
+
+const DECLARATIVE_TYPES = new Set(["ingest", "parse", "index"]);
+const REAL_TYPES = new Set(["query", "sandbox", "agent", "nl2sql"]);
 
 interface Props {
   selected: PipelineNode | null;
@@ -16,6 +51,8 @@ interface Props {
   runOutput: string | null;
   runs?: WorkflowRunState[];
   runsLoading?: boolean;
+  readOnly?: boolean;
+  onApplyConfig?: (nodeId: string, config: Record<string, unknown> | undefined) => void;
 }
 
 export default function Inspector({
@@ -32,8 +69,43 @@ export default function Inspector({
   runOutput,
   runs = [],
   runsLoading = false,
+  readOnly = false,
+  onApplyConfig,
 }: Props) {
   const [query, setQuery] = useState("三路召回与重排如何工作？");
+  const [configText, setConfigText] = useState("");
+  const [configError, setConfigError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!selected) {
+      setConfigText("");
+      setConfigError(null);
+      return;
+    }
+    const initial = selected.data.config ?? CONFIG_SAMPLES[selected.data.type] ?? {};
+    setConfigText(JSON.stringify(initial, null, 2));
+    setConfigError(null);
+  }, [selected?.id]);
+
+  const applyConfig = () => {
+    if (!selected || !onApplyConfig || readOnly) return;
+    const text = configText.trim();
+    if (!text) {
+      onApplyConfig(selected.id, undefined);
+      setConfigError(null);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("配置必须是 JSON 对象");
+      }
+      onApplyConfig(selected.id, parsed as Record<string, unknown>);
+      setConfigError(null);
+    } catch (error) {
+      setConfigError(error instanceof Error ? error.message : String(error));
+    }
+  };
 
   return (
     <aside className="panel flex h-full flex-col overflow-hidden">
@@ -132,6 +204,21 @@ export default function Inspector({
                 </span>
               </div>
               <p className="text-[11px] text-slate-500">{selected.data.caption}</p>
+              <p
+                className={`text-[10px] ${
+                  DECLARATIVE_TYPES.has(selected.data.type)
+                    ? "text-amber-300"
+                    : REAL_TYPES.has(selected.data.type)
+                      ? "text-emerald-300"
+                      : "text-slate-500"
+                }`}
+              >
+                {DECLARATIVE_TYPES.has(selected.data.type)
+                  ? "声明式阶段 · 不实际执行"
+                  : REAL_TYPES.has(selected.data.type)
+                    ? "真实执行节点"
+                    : "编排节点"}
+              </p>
               <dl className="space-y-1 text-[10px] text-slate-500">
                 <div className="flex justify-between">
                   <dt>node id</dt>
@@ -142,6 +229,46 @@ export default function Inspector({
                   <dd className="font-mono text-slate-400">{selected.data.type}</dd>
                 </div>
               </dl>
+
+              <div className="border-t border-white/5 pt-2">
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="text-[10px] text-slate-500">节点配置（JSON）</span>
+                  <button
+                    type="button"
+                    disabled={readOnly}
+                    onClick={() =>
+                      setConfigText(
+                        JSON.stringify(CONFIG_SAMPLES[selected.data.type] ?? {}, null, 2),
+                      )
+                    }
+                    className="text-[9px] text-slate-500 transition hover:text-slate-300 disabled:opacity-40"
+                  >
+                    填入示例
+                  </button>
+                </div>
+                <textarea
+                  value={configText}
+                  onChange={(event) => setConfigText(event.target.value)}
+                  rows={8}
+                  spellCheck={false}
+                  readOnly={readOnly}
+                  className="w-full resize-y rounded-lg border border-white/10 bg-ink-950 p-2 font-mono text-[10px] leading-relaxed text-slate-300 outline-none focus:border-accent/40 disabled:opacity-60"
+                />
+                {configError && <p className="mt-1 text-[10px] text-rose-300">{configError}</p>}
+                <div className="mt-1 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={applyConfig}
+                    disabled={readOnly || !onApplyConfig}
+                    className="rounded border border-accent/40 bg-accent/10 px-2 py-0.5 text-[10px] text-accent transition hover:bg-accent/15 disabled:opacity-40"
+                  >
+                    应用配置
+                  </button>
+                  <span className="text-[9px] text-slate-600">
+                    {CONFIG_HINTS[selected.data.type] ?? ""}
+                  </span>
+                </div>
+              </div>
             </div>
           ) : (
             <p className="text-[11px] text-slate-500">在画布中点击节点查看详情。</p>

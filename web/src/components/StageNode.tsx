@@ -7,6 +7,10 @@ const STAGE_STYLE: Record<Stage, { ring: string; badge: string; letter: string }
   index: { ring: "border-accent/40", badge: "bg-accent/10 text-accent", letter: "索" },
   sandbox: { ring: "border-amber-400/40", badge: "bg-amber-400/10 text-amber-300", letter: "沙" },
   query: { ring: "border-rose-400/40", badge: "bg-rose-400/10 text-rose-300", letter: "查" },
+  control: { ring: "border-cyan-400/40", badge: "bg-cyan-400/10 text-cyan-300", letter: "控" },
+  agent: { ring: "border-fuchsia-400/40", badge: "bg-fuchsia-400/10 text-fuchsia-300", letter: "智" },
+  human: { ring: "border-orange-400/40", badge: "bg-orange-400/10 text-orange-300", letter: "人" },
+  data: { ring: "border-slate-400/40", badge: "bg-slate-400/10 text-slate-300", letter: "数" },
 };
 
 export default function StageNode({ data, selected }: NodeProps<PipelineNodeData>) {

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
-import { getUsage, listTasks } from "../api/client";
+import { getUsage, hasPermission, listKnowledgeBases, listTasks } from "../api/client";
 import type { LayoutContext } from "../components/Layout";
-import type { TaskSummary, UsageResponse } from "../types";
+import type { KnowledgeBase, TaskSummary, UsageResponse } from "../types";
 import {
   Button,
   Card,
@@ -56,37 +56,58 @@ function formatQuota(total: number, formatter?: (n: number) => string): string {
 }
 
 export default function Dashboard() {
-  const { kbID } = useOutletContext<LayoutContext>();
-  const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  const { kbID, kbReadOnly } = useOutletContext<LayoutContext>();
+  const [recent, setRecent] = useState<TaskSummary[]>([]);
+  const [stats, setStats] = useState({ total: 0, done: 0, failed: 0, running: 0 });
   const [usage, setUsage] = useState<UsageResponse | null>(null);
+  const [usageError, setUsageError] = useState<string | null>(null);
+  const [kbs, setKbs] = useState<KnowledgeBase[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     setLoading(true);
     setError(null);
+    setUsageError(null);
     Promise.all([
-      listTasks(undefined, 100, 0, kbID),
-      getUsage().catch(() => null),
+      listTasks(undefined, 6, 0, kbID),
+      listTasks("COMPLETED", 1, 0, kbID),
+      listTasks("FAILED", 1, 0, kbID),
     ])
-      .then(([tasksRes, usageRes]) => {
-        setTasks(tasksRes.tasks);
-        setUsage(usageRes);
+      .then(([recentRes, doneRes, failedRes]) => {
+        setRecent(recentRes.tasks);
+        const total = recentRes.total;
+        const done = doneRes.total;
+        const failed = failedRes.total;
+        setStats({ total, done, failed, running: Math.max(0, total - done - failed) });
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
+
+    getUsage()
+      .then(setUsage)
+      .catch((e) => {
+        setUsage(null);
+        setUsageError(e instanceof Error ? e.message : String(e));
+      });
+
+    if (hasPermission("kb:read")) {
+      listKnowledgeBases()
+        .then((res) => setKbs(res.knowledge_bases))
+        .catch(() => setKbs([]));
+    }
   }, [kbID]);
 
   useEffect(() => {
-    setTasks([]);
+    setRecent([]);
     refresh();
   }, [refresh]);
 
-  const total = tasks.length;
-  const done = tasks.filter((t) => t.status === "COMPLETED").length;
-  const failed = tasks.filter((t) => t.status === "FAILED").length;
-  const running = total - done - failed;
-  const recent = tasks.slice(0, 6);
+  const kbNames = useMemo(
+    () => new Map(kbs.map((kb) => [kb.id, kb.name])),
+    [kbs],
+  );
+  const perKB = usage?.usage.knowledge_bases ?? [];
 
   return (
     <div>
@@ -95,9 +116,11 @@ export default function Dashboard() {
         description="文件向量化管道的整体运行状态"
         actions={
           <>
-            <Link to="/files">
-              <Button>上传文件</Button>
-            </Link>
+            {!kbReadOnly && (
+              <Link to="/files">
+                <Button>上传文件</Button>
+              </Link>
+            )}
             <Button variant="ghost" onClick={refresh}>
               刷新
             </Button>
@@ -106,11 +129,15 @@ export default function Dashboard() {
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="任务总数" value={total} accent="text-slate-100" />
-        <StatCard label="进行中" value={running} accent="text-amber-300" />
-        <StatCard label="已完成" value={done} accent="text-emerald-300" />
-        <StatCard label="失败" value={failed} accent="text-rose-300" />
+        <StatCard label="任务总数" value={stats.total} accent="text-slate-100" />
+        <StatCard label="进行中" value={stats.running} accent="text-amber-300" />
+        <StatCard label="已完成" value={stats.done} accent="text-emerald-300" />
+        <StatCard label="失败" value={stats.failed} accent="text-rose-300" />
       </div>
+
+      {usageError && (
+        <div className="panel mt-4 p-3 text-xs text-amber-300">用量加载失败：{usageError}</div>
+      )}
 
       {usage && (
         <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -135,11 +162,34 @@ export default function Dashboard() {
         </div>
       )}
 
+      {usage && (
+        <div className="mt-4">
+          <Card title="知识库用量">
+            {perKB.length === 0 ? (
+              <p className="text-xs text-slate-500">暂无按知识库的用量明细。</p>
+            ) : (
+              <ul className="divide-y divide-white/5">
+                {perKB.map((kb) => (
+                  <li key={kb.kb_id} className="flex items-center justify-between py-2 text-xs">
+                    <span className="truncate text-slate-300">
+                      {kbNames.get(kb.kb_id) ?? kb.kb_id}
+                    </span>
+                    <span className="text-[10px] text-slate-500">
+                      {kb.file_count} 文件 · {formatBytes(kb.storage_bytes)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
+      )}
+
       <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card title="最近任务" className="lg:col-span-2" action={<Link to="/tasks" className="text-[11px] text-accent hover:underline">查看全部</Link>}>
           {error ? (
             <p className="py-8 text-center text-xs text-rose-300">{error}</p>
-          ) : loading && tasks.length === 0 ? (
+          ) : loading && recent.length === 0 ? (
             <p className="py-8 text-center text-xs text-slate-500">加载中…</p>
           ) : recent.length === 0 ? (
             <EmptyState title="还没有任务" hint="去「文件管理」上传第一个文件，启动向量化管道。" />

@@ -5,6 +5,21 @@ import (
 	"testing"
 )
 
+func TestMatchesStatusRunning(t *testing.T) {
+	if !matchesStatus(Pending, "RUNNING") || !matchesStatus(Indexed, "RUNNING") {
+		t.Fatal("non-terminal states should match RUNNING")
+	}
+	if matchesStatus(Completed, "RUNNING") || matchesStatus(Failed, "RUNNING") {
+		t.Fatal("terminal states must not match RUNNING")
+	}
+	if !matchesStatus(Completed, "COMPLETED") || !matchesStatus(Completed, "") {
+		t.Fatal("exact and empty filters should match")
+	}
+	if matchesStatus(Completed, "FAILED") {
+		t.Fatal("COMPLETED must not match FAILED")
+	}
+}
+
 func TestTransitions(t *testing.T) {
 	cases := []struct {
 		from, to State

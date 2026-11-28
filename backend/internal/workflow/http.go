@@ -419,17 +419,34 @@ func NewHTTPHandler(engine *Engine, registry *Registry, opts ...HTTPOption) http
 			return
 		}
 		limit, _ := strconv.Atoi(c.Query("limit"))
+		if limit <= 0 || limit > 500 {
+			limit = 50
+		}
 		meta := requestMeta(c)
-		runs := options.store.List(limit)
 		definitionID := strings.TrimSpace(c.Query("definition_id"))
+		status := strings.TrimSpace(c.Query("status"))
+		// Over-fetch before filtering so a busy tenant still gets the newest
+		// runs of the requested workflow/status.
+		listLimit := limit
+		if definitionID != "" || status != "" {
+			listLimit = 500
+		}
+		runs := options.store.List(listLimit)
 		// Runs are tenant-scoped: never leak another tenant's executions.
-		filtered := make([]*RunState, 0, len(runs))
+		filtered := make([]*RunState, 0, limit)
 		for _, run := range runs {
 			if definitionID != "" && run.DefinitionID != definitionID {
 				continue
 			}
-			if run.Meta.TenantID == "" || run.Meta.TenantID == meta.TenantID {
-				filtered = append(filtered, run)
+			if status != "" && run.Status != status {
+				continue
+			}
+			if run.Meta.TenantID != "" && run.Meta.TenantID != meta.TenantID {
+				continue
+			}
+			filtered = append(filtered, run)
+			if len(filtered) >= limit {
+				break
 			}
 		}
 		c.JSON(http.StatusOK, gin.H{"runs": filtered})

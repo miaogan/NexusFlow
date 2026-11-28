@@ -121,7 +121,7 @@ func (s *RedisStore) List(ctx context.Context, tenantID, status string, limit, o
 		if err != nil || !ok {
 			continue
 		}
-		if status != "" && string(t.State) != status {
+		if !matchesStatus(t.State, status) {
 			continue
 		}
 		matched = append(matched, t)

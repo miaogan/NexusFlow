@@ -120,6 +120,19 @@ func taskIdempotencyKey(t Task) string {
 	return t.TenantID + ":" + kbID + ":" + t.ContentHash
 }
 
+// matchesStatus applies the list filter. RUNNING is a synthetic filter that
+// selects tasks which have not reached a terminal state yet.
+func matchesStatus(current State, filter string) bool {
+	switch filter {
+	case "":
+		return true
+	case "RUNNING":
+		return current != Completed && current != Failed
+	default:
+		return string(current) == filter
+	}
+}
+
 // Create registers a task. When a content hash is provided the
 // (tenant, knowledge base, hash) tuple acts as the idempotency key: an existing
 // task is returned instead of creating a duplicate.
@@ -172,7 +185,7 @@ func (m *Machine) List(_ context.Context, tenantID, status string, limit, offset
 		if tenantID != "" && t.TenantID != tenantID {
 			continue
 		}
-		if status != "" && string(t.State) != status {
+		if !matchesStatus(t.State, status) {
 			continue
 		}
 		matched = append(matched, *t)

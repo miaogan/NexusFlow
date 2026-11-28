@@ -329,6 +329,9 @@ services:
       AGENT_HUB_TOKEN: ${AGENT_HUB_ADMIN_TOKEN:-nexusflow-agent-admin}
       AGENT_HUB_TIMEOUT: 30s
       HITL_ENABLED: ${HITL_ENABLED:-false}
+      # Real execution for the query/sandbox DAG nodes.
+      QUERY_TARGET: "query-service:9094"
+      SANDBOX_TARGET: "sandbox-execution:9093"
       # Suspended runs and approval tickets persist across restarts and are
       # shared by every replica.
       WORKFLOW_RUN_STORE_DRIVER: ${WORKFLOW_RUN_STORE_DRIVER:-postgres}

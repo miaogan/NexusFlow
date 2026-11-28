@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   decideApproval,
   decideWorkflowRun,
@@ -62,8 +63,11 @@ export default function Approvals() {
 
   const [runs, setRuns] = useState<WorkflowRunState[]>([]);
   const [runLoading, setRunLoading] = useState(false);
+  const [runStatus, setRunStatus] = useState("WAITING_APPROVAL");
   const [selectedRun, setSelectedRun] = useState<WorkflowRunState | null>(null);
   const [runBusy, setRunBusy] = useState(false);
+  const [reason, setReason] = useState("");
+  const [autoRefresh, setAutoRefresh] = useState(true);
 
   const flash = (msg: string) => {
     setNotice(msg);
@@ -83,11 +87,15 @@ export default function Approvals() {
     }
   }, []);
 
-  const loadRuns = useCallback(async () => {
+  const loadRuns = useCallback(async (status: string) => {
     setRunLoading(true);
     setError(null);
     try {
-      const res = await listWorkflowRuns(50);
+      const res = await listWorkflowRuns(
+        50,
+        undefined,
+        status === "all" ? undefined : status,
+      );
       setRuns(res.runs ?? []);
     } catch (e) {
       setError(errMsg(e));
@@ -99,15 +107,40 @@ export default function Approvals() {
   useEffect(() => {
     if (!canRun) return;
     if (tab === "tools") void loadApprovals(approvalStatus);
-    else void loadRuns();
-  }, [canRun, tab, approvalStatus, loadApprovals, loadRuns]);
+    else void loadRuns(runStatus);
+  }, [canRun, tab, approvalStatus, runStatus, loadApprovals, loadRuns]);
+
+  // Optional polling keeps the approval queue fresh without manual refresh.
+  useEffect(() => {
+    if (!canRun || !autoRefresh) return;
+    const id = setInterval(() => {
+      if (tab === "tools") {
+        void loadApprovals(approvalStatus);
+      } else {
+        void loadRuns(runStatus);
+        if (selectedRun && selectedRun.status === "WAITING_APPROVAL") {
+          void openRun(selectedRun.id);
+        }
+      }
+    }, 8000);
+    return () => clearInterval(id);
+  }, [
+    canRun,
+    autoRefresh,
+    tab,
+    approvalStatus,
+    runStatus,
+    selectedRun?.id,
+    selectedRun?.status,
+    loadApprovals,
+    loadRuns,
+  ]);
 
   const decideTool = async (approval: ToolApproval, decision: "approve" | "reject") => {
-    const reason = window.prompt("审批原因（可选）", "");
-    if (reason === null) return;
     setError(null);
     try {
-      await decideApproval(approval.id, decision, reason);
+      await decideApproval(approval.id, decision, reason.trim());
+      setReason("");
       flash(decision === "approve" ? "已批准" : "已拒绝");
       await loadApprovals(approvalStatus);
     } catch (e) {
@@ -126,17 +159,16 @@ export default function Approvals() {
 
   const decideRun = async (decision: "approve" | "reject") => {
     if (!selectedRun || runBusy) return;
-    const reason = window.prompt("审批原因（可选）", "");
-    if (reason === null) return;
     setRunBusy(true);
     setError(null);
     try {
-      await decideWorkflowRun(selectedRun.id, decision, reason);
+      await decideWorkflowRun(selectedRun.id, decision, reason.trim());
+      setReason("");
       // Approve returns a RunResult; re-read the persisted state for the detail.
       const updated = await getWorkflowRun(selectedRun.id);
       setSelectedRun(updated);
       flash(decision === "approve" ? "已批准并恢复运行" : "已拒绝运行");
-      await loadRuns();
+      await loadRuns(runStatus);
     } catch (e) {
       setError(errMsg(e));
     } finally {
@@ -163,7 +195,7 @@ export default function Approvals() {
         actions={
           <Button
             variant="ghost"
-            onClick={() => (tab === "tools" ? loadApprovals(approvalStatus) : loadRuns())}
+            onClick={() => (tab === "tools" ? loadApprovals(approvalStatus) : loadRuns(runStatus))}
           >
             刷新
           </Button>
@@ -172,6 +204,24 @@ export default function Approvals() {
 
       {error && <div className="panel mb-4 p-3 text-xs text-rose-300">{error}</div>}
       {notice && <div className="panel mb-4 p-3 text-xs text-emerald-300">{notice}</div>}
+
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <input
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          placeholder="审批备注（可选，批准/拒绝时一并记录）"
+          className="w-72 rounded-lg border border-white/10 bg-ink-950 px-3 py-1.5 text-xs text-slate-200 outline-none focus:border-accent/40"
+        />
+        <label className="flex items-center gap-1.5 text-[10px] text-slate-400">
+          <input
+            type="checkbox"
+            checked={autoRefresh}
+            onChange={(event) => setAutoRefresh(event.target.checked)}
+            className="accent-[color:var(--accent)]"
+          />
+          自动刷新
+        </label>
+      </div>
 
       <div className="mb-4 flex items-center gap-2">
         {(["tools", "runs"] as const).map((t) => (
@@ -275,7 +325,32 @@ export default function Approvals() {
 
       {tab === "runs" && (
         <div className="grid gap-4 lg:grid-cols-[380px,1fr]">
-          <Card title={`运行列表 · ${runs.length}`}>
+          <Card
+            title={`运行列表 · ${runs.length}`}
+            action={
+              <div className="flex flex-wrap items-center gap-1">
+                {[
+                  ["WAITING_APPROVAL", "待审批"],
+                  ["COMPLETED", "已完成"],
+                  ["FAILED", "失败"],
+                  ["REJECTED", "已拒绝"],
+                  ["all", "全部"],
+                ].map(([value, label]) => (
+                  <button
+                    key={value}
+                    onClick={() => setRunStatus(value)}
+                    className={`rounded px-2 py-1 text-[10px] transition ${
+                      runStatus === value
+                        ? "bg-accent/15 text-accent"
+                        : "text-slate-400 hover:bg-white/5"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            }
+          >
             {runLoading && runs.length === 0 ? (
               <div className="flex items-center gap-2 py-6 text-xs text-slate-500">
                 <Spinner /> 加载中…
@@ -322,6 +397,14 @@ export default function Approvals() {
                     {selectedRun.status}
                   </span>
                   <span className="text-sm font-medium text-slate-200">{selectedRun.dag?.name}</span>
+                  {selectedRun.definition_id && (
+                    <Link
+                      to={`/workflow?definition=${encodeURIComponent(selectedRun.definition_id)}`}
+                      className="text-[10px] text-accent hover:underline"
+                    >
+                      打开工作流
+                    </Link>
+                  )}
                   {selectedRun.pending_node && <Tag>等待节点 {selectedRun.pending_node}</Tag>}
                 </div>
                 <div className="grid gap-1 text-[10px] text-slate-500 sm:grid-cols-2">

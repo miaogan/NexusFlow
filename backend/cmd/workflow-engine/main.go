@@ -9,11 +9,15 @@ import (
 	"syscall"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
 	"github.com/nexusflow/nexusflow/backend/internal/config"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/httpserver"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/log"
 	"github.com/nexusflow/nexusflow/backend/internal/webhook"
 	"github.com/nexusflow/nexusflow/backend/internal/workflow"
+	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 )
 
 func main() {
@@ -26,8 +30,27 @@ func main() {
 	registry := workflow.NewRegistry()
 	registry.Register(workflow.NoopNode{})
 	registry.Register(workflow.SetNode{})
-	for _, stage := range []string{"ingest", "parse", "index", "sandbox", "query"} {
+	// Ingest/parse/index are asynchronous stages owned by the upload pipeline;
+	// the DAG nodes are declarative markers. Query and sandbox execute for real
+	// through their services.
+	for _, stage := range []string{"ingest", "parse", "index"} {
 		registry.Register(workflow.StageNode{Name: stage})
+	}
+	if conn, err := grpc.NewClient(
+		cfg.QueryTarget, grpc.WithTransportCredentials(insecure.NewCredentials()),
+	); err != nil {
+		logger.Warn("query node disabled: cannot create client", "target", cfg.QueryTarget, "error", err)
+	} else {
+		defer conn.Close()
+		registry.Register(workflow.NewQueryStageNode(pb.NewQueryServiceClient(conn)))
+	}
+	if conn, err := grpc.NewClient(
+		cfg.SandboxTarget, grpc.WithTransportCredentials(insecure.NewCredentials()),
+	); err != nil {
+		logger.Warn("sandbox node disabled: cannot create client", "target", cfg.SandboxTarget, "error", err)
+	} else {
+		defer conn.Close()
+		registry.Register(workflow.NewSandboxStageNode(pb.NewSandboxExecutionServiceClient(conn)))
 	}
 	registry.Register(newNL2SQLNode(ctx, cfg, logger))
 	if cfg.WorkflowAgentNode {

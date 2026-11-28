@@ -6,6 +6,10 @@ const DOT: Record<Stage, string> = {
   index: "bg-accent",
   sandbox: "bg-amber-400",
   query: "bg-rose-400",
+  control: "bg-cyan-400",
+  agent: "bg-fuchsia-400",
+  human: "bg-orange-400",
+  data: "bg-slate-400",
 };
 
 interface Props {

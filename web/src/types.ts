@@ -1,6 +1,15 @@
 import type { Edge, Node } from "reactflow";
 
-export type Stage = "ingest" | "parse" | "index" | "sandbox" | "query";
+export type Stage =
+  | "ingest"
+  | "parse"
+  | "index"
+  | "sandbox"
+  | "query"
+  | "control"
+  | "agent"
+  | "human"
+  | "data";
 
 export interface PipelineNodeData {
   label: string;
@@ -513,6 +522,7 @@ export interface WorkflowRunMeta {
 export interface WorkflowRunState {
   id: string;
   dag: Dag;
+  definition_id?: string;
   input?: Record<string, unknown>;
   meta: WorkflowRunMeta;
   status: string;

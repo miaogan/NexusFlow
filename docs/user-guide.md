@@ -133,12 +133,16 @@ python scripts/e2e_demo.py --output docs/e2e-evidence.md
 | 类型 | 说明 | 关键配置 |
 | --- | --- | --- |
 | `noop` / `set` | 占位与变量赋值 | `set`: `key`、`value` |
-| `ingest` / `parse` / `index` / `sandbox` / `query` | 声明式阶段节点 | 无 |
+| `ingest` / `parse` / `index` | 声明式阶段（真实流水线由文件上传触发，节点不直接执行） | 无 |
+| `query` | 真实检索：调用 query-service 做多路召回 | `query` 或 `query_from`、`kb_id`、`top_k`、`final_top_n`、`rerank_model` |
+| `sandbox` | 真实执行：调用 OpenSandbox 运行代码 | `code`、`runtime`、`timeout_seconds`、`packages`、`input` |
 | `condition` | 条件分支 | `field`、`equals`/`contains`/`in`、`then`、`else` |
 | `loop` | 按列表并发执行子 DAG | `items`、`max_concurrency`、`sub_dag` |
 | `human_approval` | 挂起等待人工审批 | 需 `HITL_ENABLED=true` |
 | `agent` | 调用 Agent Hub 的能力或工具 | `agent` 或 `capability`、`input`；需 `WORKFLOW_AGENT_NODE=true` |
 | `nl2sql` | 只读结构化查询 | `sql` / `sql_from` 等 |
+
+画布节点库会按引擎实际注册的类型动态显示；选中节点后可在右侧「节点详情」中编辑 JSON 配置，`query` 与 `sandbox` 会真实调用后端服务。
 
 示例文件（请求体可直接用于 `/v1/workflows/run`）：
 

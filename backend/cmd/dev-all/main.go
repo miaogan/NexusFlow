@@ -203,7 +203,9 @@ func main() {
 	wfRegistry := workflow.NewRegistry()
 	wfRegistry.Register(workflow.NoopNode{})
 	wfRegistry.Register(workflow.SetNode{})
-	for _, stage := range []string{"ingest", "parse", "index", "sandbox", "query"} {
+	// Ingest/parse/index stay declarative; query and sandbox execute for real
+	// once their gRPC clients are wired below.
+	for _, stage := range []string{"ingest", "parse", "index"} {
 		wfRegistry.Register(workflow.StageNode{Name: stage})
 	}
 	nl2sqlOpts := []workflow.NL2SQLOption{
@@ -299,6 +301,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer sandboxConn.Close()
+
+	// Real DAG execution nodes reuse the same service clients as the gateway.
+	wfRegistry.Register(workflow.NewQueryStageNode(pb.NewQueryServiceClient(queryConn)))
+	wfRegistry.Register(workflow.NewSandboxStageNode(pb.NewSandboxExecutionServiceClient(sandboxConn)))
 
 	authConn, err := grpc.NewClient(cfg.AuthTarget, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
