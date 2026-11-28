@@ -149,17 +149,9 @@ class ExtractGraph:
         self._store = store
         self._embedder = embedder
         self._llm: Any | None = None
+        self._tenant_llms: dict[str, Any] = {}
         if settings.llm_enabled:
-            from langchain_openai import ChatOpenAI
-
-            llm = ChatOpenAI(
-                model=settings.llm_model,
-                base_url=settings.llm_base_url,
-                api_key=settings.llm_api_key,
-                temperature=0,
-                timeout=settings.llm_timeout_seconds,
-            )
-            self._llm = llm.with_structured_output(ExtractedMemories)
+            self._llm = self._build_llm("")
 
         builder = StateGraph(ExtractState)
         builder.add_node("normalize", self._normalize)
@@ -170,6 +162,33 @@ class ExtractGraph:
         builder.add_edge("extract", "persist")
         builder.add_edge("persist", END)
         self._compiled = builder.compile()
+
+    def _build_llm(self, tenant_id: str) -> Any:
+        from langchain_openai import ChatOpenAI
+
+        kwargs: dict[str, Any] = {}
+        if tenant_id:
+            kwargs["default_headers"] = {"x-tenant-id": tenant_id}
+        model = ChatOpenAI(
+            model=self._settings.llm_model,
+            base_url=self._settings.llm_base_url,
+            api_key=self._settings.llm_api_key,
+            temperature=0,
+            timeout=self._settings.llm_timeout_seconds,
+            **kwargs,
+        )
+        return model.with_structured_output(ExtractedMemories)
+
+    def _llm_for(self, tenant_id: str) -> Any:
+        if not tenant_id or self._llm is None:
+            return self._llm
+        cached = self._tenant_llms.get(tenant_id)
+        if cached is None:
+            if len(self._tenant_llms) >= 32:
+                self._tenant_llms.clear()
+            cached = self._build_llm(tenant_id)
+            self._tenant_llms[tenant_id] = cached
+        return cached
 
     def _normalize(self, state: ExtractState) -> dict[str, Any]:
         messages = [
@@ -186,7 +205,9 @@ class ExtractGraph:
         messages = state.get("messages") or []
         if self._llm is not None and messages:
             try:
-                candidates = self._extract_with_llm(messages)
+                candidates = self._extract_with_llm(
+                    messages, state.get("tenant_id") or ""
+                )
                 if candidates:
                     EXTRACTIONS.labels(source="llm").inc()
                     return {"candidates": candidates, "source": "llm"}
@@ -201,14 +222,16 @@ class ExtractGraph:
         EXTRACTIONS.labels(source="rules").inc()
         return {"candidates": candidates, "source": "rules"}
 
-    def _extract_with_llm(self, messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    def _extract_with_llm(
+        self, messages: list[dict[str, str]], tenant_id: str = ""
+    ) -> list[dict[str, str]]:
         from langchain_core.messages import HumanMessage, SystemMessage
 
         lines = []
         for message in messages:
             label = "用户" if message["role"] == "user" else "助手"
             lines.append(f"{label}：{message['content']}")
-        result = self._llm.invoke(  # type: ignore[union-attr]
+        result = self._llm_for(tenant_id).invoke(  # type: ignore[union-attr]
             [
                 SystemMessage(content=EXTRACT_PROMPT),
                 HumanMessage(content="\n".join(lines)),

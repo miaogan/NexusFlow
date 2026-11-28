@@ -266,7 +266,7 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 **LLM 网关**
 
 - 服务入口：`POST /v1/chat/completions`（支持 `stream=true` 的 SSE 透传）与 `/v1/embeddings`，健康检查 `GET /healthz`。
-- 接入方式：把 `RAG_LLM_BASE_URL`、`INTENT_LLM_BASE_URL`、`SUMMARY_LLM_BASE_URL`、`MEMORY_LLM_BASE_URL` 指向 `http://llm-gateway:8082/v1`；RAG 生成会携带 `x-tenant-id`。
+- 接入方式：把 `RAG_LLM_BASE_URL`、`INTENT_LLM_BASE_URL`、`SUMMARY_LLM_BASE_URL`、`MEMORY_LLM_BASE_URL` 指向 `http://llm-gateway:8082/v1`；RAG 生成与 Intent / Summary / Memory 的独立 Agent 都会携带 `x-tenant-id`，网关据此做租户计量。
 - 主备与熔断：`LLM_PRIMARY_*` 与 `LLM_BACKUP_*` 可只配一个；网络错误、429、5xx 自动切换，连续失败达到 `LLM_BREAKER_THRESHOLD` 后冷却 `LLM_BREAKER_COOLDOWN`。
 - 配额：`LLM_DAILY_TOKEN_LIMIT > 0` 时按租户 + UTC 日预扣 token，超限前置返回 `429 quota_exceeded`；多副本部署使用 `LLM_QUOTA_DRIVER=redis`。
 - 客户端若未设置 `max_tokens`，按 512 预留额度，响应后按实际 `usage.total_tokens` 修正。

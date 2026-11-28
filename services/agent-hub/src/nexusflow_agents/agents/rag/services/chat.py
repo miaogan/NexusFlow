@@ -71,7 +71,7 @@ class ChatService:
         self._skills = skills
 
     def _prepare_history(
-        self, conv: dict[str, Any]
+        self, conv: dict[str, Any], tenant_id: str = ""
     ) -> tuple[list[dict[str, str]], str]:
         """Returns the recent window plus a rolling summary of older turns.
 
@@ -94,7 +94,7 @@ class ChatService:
                     {"role": m["role"], "content": m["content"]}
                     for m in messages[count:end]
                 ]
-                new_summary = self._summarizer.summarize(summary, folded)
+                new_summary = self._summarizer.summarize(summary, folded, tenant_id)
                 if new_summary:
                     summary = new_summary
                     count = end
@@ -372,7 +372,7 @@ class ChatService:
                     raise ConversationNotFound("conversation not found")
             else:
                 conv = self._store.create(tenant_id, user_id, message[:40])
-            history, summary = self._prepare_history(conv)
+            history, summary = self._prepare_history(conv, tenant_id)
 
         memories = self._memory.recall(
             tenant_id, user_id, message, self._settings.memory_top_k
@@ -545,7 +545,9 @@ class ChatService:
                 conv = await run_in_threadpool(
                     self._store.create, tenant_id, user_id, message[:40]
                 )
-            history, summary = await run_in_threadpool(self._prepare_history, conv)
+            history, summary = await run_in_threadpool(
+                self._prepare_history, conv, tenant_id
+            )
 
         memories = await run_in_threadpool(
             self._memory.recall,

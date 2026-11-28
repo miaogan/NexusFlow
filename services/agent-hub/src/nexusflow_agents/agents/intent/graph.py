@@ -37,6 +37,7 @@ class IntentState(TypedDict, total=False):
     message: str
     history: list[dict[str, str]]
     skills: list[str]
+    tenant_id: str
     intent: str
     confidence: float
     need_retrieval: bool
@@ -51,17 +52,9 @@ class IntentGraph:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._llm: Any | None = None
+        self._tenant_llms: dict[str, Any] = {}
         if settings.llm_enabled:
-            from langchain_openai import ChatOpenAI
-
-            llm = ChatOpenAI(
-                model=settings.llm_model,
-                base_url=settings.llm_base_url,
-                api_key=settings.llm_api_key,
-                temperature=0,
-                timeout=settings.llm_timeout_seconds,
-            )
-            self._llm = llm.with_structured_output(IntentResult)
+            self._llm = self._build_llm("")
 
         builder = StateGraph(IntentState)
         builder.add_node("normalize", self._normalize)
@@ -70,6 +63,35 @@ class IntentGraph:
         builder.add_edge("normalize", "classify")
         builder.add_edge("classify", END)
         self._compiled = builder.compile()
+
+    def _build_llm(self, tenant_id: str) -> Any:
+        from langchain_openai import ChatOpenAI
+
+        kwargs: dict[str, Any] = {}
+        if tenant_id:
+            # Forward the tenant to the OpenAI-compatible LLM gateway so its
+            # quota accounting attributes this call correctly.
+            kwargs["default_headers"] = {"x-tenant-id": tenant_id}
+        model = ChatOpenAI(
+            model=self._settings.llm_model,
+            base_url=self._settings.llm_base_url,
+            api_key=self._settings.llm_api_key,
+            temperature=0,
+            timeout=self._settings.llm_timeout_seconds,
+            **kwargs,
+        )
+        return model.with_structured_output(IntentResult)
+
+    def _llm_for(self, tenant_id: str) -> Any:
+        if not tenant_id or self._llm is None:
+            return self._llm
+        cached = self._tenant_llms.get(tenant_id)
+        if cached is None:
+            if len(self._tenant_llms) >= 32:
+                self._tenant_llms.clear()
+            cached = self._build_llm(tenant_id)
+            self._tenant_llms[tenant_id] = cached
+        return cached
 
     def _normalize(self, state: IntentState) -> dict[str, Any]:
         message = (state.get("message") or "").strip()[: self._settings.max_message_chars]
@@ -91,7 +113,10 @@ class IntentGraph:
         if self._llm is not None and message:
             try:
                 result = self._classify_with_llm(
-                    message, state.get("history") or [], skills
+                    message,
+                    state.get("history") or [],
+                    skills,
+                    state.get("tenant_id") or "",
                 )
                 return self._result_payload(result, source="llm", skills=skills)
             except Exception as exc:  # noqa: BLE001 - fall back to rules
@@ -106,6 +131,7 @@ class IntentGraph:
         message: str,
         history: list[dict[str, str]],
         skills: list[str],
+        tenant_id: str = "",
     ) -> IntentResult:
         from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
@@ -122,7 +148,7 @@ class IntentGraph:
                 messages.append(AIMessage(content=item.get("content") or ""))
         messages.append(HumanMessage(content=f"最后一条用户消息：{message}"))
 
-        result = self._llm.invoke(messages)  # type: ignore[union-attr]
+        result = self._llm_for(tenant_id).invoke(messages)  # type: ignore[union-attr]
         if isinstance(result, dict):
             result = IntentResult(**result)
         if not isinstance(result, IntentResult):
@@ -164,9 +190,15 @@ class IntentGraph:
         message: str,
         history: list[dict[str, str]],
         skills: list[str] | None = None,
+        tenant_id: str = "",
     ) -> dict[str, Any]:
         state = self._compiled.invoke(
-            {"message": message, "history": history, "skills": skills or []}
+            {
+                "message": message,
+                "history": history,
+                "skills": skills or [],
+                "tenant_id": tenant_id,
+            }
         )
         return {
             "intent": state.get("intent", "knowledge_qa"),

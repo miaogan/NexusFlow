@@ -10,6 +10,7 @@ class ConversationSummarizer(Protocol):
         self,
         previous_summary: str,
         messages: list[dict[str, str]],
+        tenant_id: str = "",
     ) -> str | None: ...
 
 
@@ -34,9 +35,11 @@ class HttpSummarizer:
         self,
         previous_summary: str,
         messages: list[dict[str, str]],
+        tenant_id: str = "",
     ) -> str | None:
         if not self._base_url or not messages:
             return None
+        headers = {"x-tenant-id": tenant_id} if tenant_id else None
         try:
             resp = httpx.post(
                 f"{self._base_url}/v1/summarize",
@@ -45,6 +48,7 @@ class HttpSummarizer:
                     "messages": messages,
                     "budget_chars": self._budget,
                 },
+                headers=headers,
                 timeout=self._timeout,
             )
             resp.raise_for_status()

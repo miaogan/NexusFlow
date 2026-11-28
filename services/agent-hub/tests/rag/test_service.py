@@ -381,9 +381,18 @@ class FakeSummarizer:
         self.calls: list[dict[str, Any]] = []
 
     def summarize(
-        self, previous_summary: str, messages: list[dict[str, str]]
+        self,
+        previous_summary: str,
+        messages: list[dict[str, str]],
+        tenant_id: str = "",
     ) -> str | None:
-        self.calls.append({"previous_summary": previous_summary, "messages": messages})
+        self.calls.append(
+            {
+                "previous_summary": previous_summary,
+                "messages": messages,
+                "tenant_id": tenant_id,
+            }
+        )
         return self.result
 
 

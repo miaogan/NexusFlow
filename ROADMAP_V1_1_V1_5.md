@@ -68,8 +68,8 @@ Milestone 1–5 的 11 个任务已全部交付，无待做项。
 
 * **[x] Task 4.2: 建设多模型路由网关（主备自动故障转移）与租户级用量计量/配额管控（防 429 溢出）**
   * 统一 LLM 调用入口，按模型与租户路由至主/备通道，失败自动切换并熔断；复用并扩展已有计量能力，按租户累计 token 与调用量，超限前置拦截并避免上游 429 溢出。
-  * 交付情况：新增独立 `cmd/llm-gateway`（`internal/llmgateway`），提供 OpenAI 兼容 `/v1/chat/completions`（含 SSE 透传与 usage 解析）与 `/v1/embeddings`；按 `LLM_PRIMARY_*` → `LLM_BACKUP_*` 顺序失败切换，网络错误 / 429 / 5xx 计入熔断（`LLM_BREAKER_THRESHOLD` / `LLM_BREAKER_COOLDOWN`）。按 `x-tenant-id` + UTC 日原子预留 token（提示词估算 + max_tokens），超限前置返回 `429 quota_exceeded`，响应后按实际 usage 修正；计数支持 `LLM_QUOTA_DRIVER=memory|redis`。Agent Hub 的 RAG 生成在 `generate` / `astream` / intent 路径透传 `x-tenant-id`。
-  * 边界：模型路由以通道顺序为准（`LLM_*_MODEL` 可按通道覆盖模型名）；Intent/Summary/Memory 独立 Agent 若直连上游则不带租户头；Embedding 用量按请求体估算；配额按 UTC 自然日重置。
+  * 交付情况：新增独立 `cmd/llm-gateway`（`internal/llmgateway`），提供 OpenAI 兼容 `/v1/chat/completions`（含 SSE 透传与 usage 解析）与 `/v1/embeddings`；按 `LLM_PRIMARY_*` → `LLM_BACKUP_*` 顺序失败切换，网络错误 / 429 / 5xx 计入熔断（`LLM_BREAKER_THRESHOLD` / `LLM_BREAKER_COOLDOWN`）。按 `x-tenant-id` + UTC 日原子预留 token（提示词估算 + max_tokens），超限前置返回 `429 quota_exceeded`，响应后按实际 usage 修正；计数支持 `LLM_QUOTA_DRIVER=memory|redis`。Agent Hub 的 RAG 生成在 `generate` / `astream` / intent 路径透传 `x-tenant-id`；Intent / Summary / Memory 的独立 Agent 图按租户缓存 `ChatOpenAI(default_headers)`，HTTP 客户端调用也携带 `x-tenant-id`，直连网关时配额归属正确。
+  * 边界：模型路由以通道顺序为准（`LLM_*_MODEL` 可按通道覆盖模型名）；租户绑定 LLM 按租户缓存（上限 32，溢出清空）；未传租户时使用共享实例且不带租户头；Embedding 用量按请求体估算；配额按 UTC 自然日重置。
 
 ---
 

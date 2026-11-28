@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import httpx
+
 from nexusflow_agents.agents.rag.services.llm import (
     AnswerGenerator,
     GenerationOptions,
@@ -180,3 +182,152 @@ def test_usage_is_empty_without_llm_metadata() -> None:
         usage = reset_usage(token)
 
     assert usage.total_tokens == 0
+
+
+class FakeResponse:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, Any]:
+        return self._payload
+
+
+def test_http_intent_classifier_sends_tenant_header(monkeypatch: Any) -> None:
+    from nexusflow_agents.agents.rag.services.intent import HttpIntentClassifier
+
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, **kwargs: Any) -> FakeResponse:
+        captured["headers"] = kwargs.get("headers")
+        return FakeResponse({"intent": "knowledge_qa", "confidence": 0.8})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    result = HttpIntentClassifier("http://intent").classify(
+        "hi", [], tenant_id="tenant-a"
+    )
+
+    assert captured["headers"] == {"x-tenant-id": "tenant-a"}
+    assert result["intent"] == "knowledge_qa"
+
+
+def test_http_intent_classifier_omits_header_without_tenant(monkeypatch: Any) -> None:
+    from nexusflow_agents.agents.rag.services.intent import HttpIntentClassifier
+
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, **kwargs: Any) -> FakeResponse:
+        captured["headers"] = kwargs.get("headers")
+        return FakeResponse({"intent": "chitchat"})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    HttpIntentClassifier("http://intent").classify("hi", [])
+
+    assert captured["headers"] is None
+
+
+def test_http_summarizer_sends_tenant_header(monkeypatch: Any) -> None:
+    from nexusflow_agents.agents.rag.services.summary import HttpSummarizer
+
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, **kwargs: Any) -> FakeResponse:
+        captured["headers"] = kwargs.get("headers")
+        return FakeResponse({"summary": "摘要"})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    summary = HttpSummarizer("http://summary").summarize(
+        "", [{"role": "user", "content": "hi"}], tenant_id="tenant-a"
+    )
+
+    assert captured["headers"] == {"x-tenant-id": "tenant-a"}
+    assert summary == "摘要"
+
+
+def test_http_memory_recall_sends_tenant_header(monkeypatch: Any) -> None:
+    from nexusflow_agents.agents.rag.services.memory import HttpMemoryClient
+
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, **kwargs: Any) -> FakeResponse:
+        captured["headers"] = kwargs.get("headers")
+        return FakeResponse({"memories": [{"content": "偏好 Go"}]})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    memories = HttpMemoryClient("http://memory").recall("tenant-a", "u1", "q")
+
+    assert captured["headers"] == {"x-tenant-id": "tenant-a"}
+    assert memories == ["偏好 Go"]
+
+
+def test_http_memory_extract_sends_tenant_header(monkeypatch: Any) -> None:
+    from nexusflow_agents.agents.rag.services.memory import HttpMemoryClient
+
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, **kwargs: Any) -> FakeResponse:
+        captured["headers"] = kwargs.get("headers")
+        return FakeResponse({})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    HttpMemoryClient("http://memory")._extract(
+        "tenant-a", "u1", [{"role": "user", "content": "hi"}]
+    )
+
+    assert captured["headers"] == {"x-tenant-id": "tenant-a"}
+
+
+def test_summary_graph_caches_llm_per_tenant(monkeypatch: Any) -> None:
+    from nexusflow_agents.agents.summary.core.config import Settings as SummarySettings
+    from nexusflow_agents.agents.summary.graph import SummaryGraph
+
+    graph = SummaryGraph(SummarySettings(_env_file=None))
+    shared = object()
+    graph._llm = shared
+    built: list[str] = []
+
+    def fake_build(tenant_id: str) -> Any:
+        built.append(tenant_id)
+        return object()
+
+    monkeypatch.setattr(graph, "_build_llm", fake_build)
+
+    assert graph._llm_for("") is shared
+    first = graph._llm_for("tenant-a")
+    assert graph._llm_for("tenant-a") is first
+    assert built == ["tenant-a"]
+
+
+def test_summary_graph_invoke_binds_tenant_llm(monkeypatch: Any) -> None:
+    from nexusflow_agents.agents.summary.core.config import Settings as SummarySettings
+    from nexusflow_agents.agents.summary.graph import SummaryGraph
+
+    graph = SummaryGraph(SummarySettings(_env_file=None))
+    graph._llm = object()
+    seen: list[str] = []
+
+    class FakeChatModel:
+        def invoke(self, messages: Any) -> Any:
+            return type("Result", (), {"content": "租户摘要"})()
+
+    monkeypatch.setattr(
+        graph, "_llm_for", lambda tenant_id: seen.append(tenant_id) or FakeChatModel()
+    )
+
+    result = graph.invoke(
+        "",
+        [{"role": "user", "content": "你好"}],
+        budget_chars=200,
+        tenant_id="tenant-a",
+    )
+
+    assert seen == ["tenant-a"]
+    assert result["strategy"] == "llm"
+    assert result["summary"] == "租户摘要"

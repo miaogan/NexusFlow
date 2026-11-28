@@ -44,6 +44,7 @@ class HttpIntentClassifier:
     ) -> dict[str, Any]:
         if not self._base_url:
             return fallback_intent("未配置意图服务，按知识库问答处理")
+        headers = {"x-tenant-id": tenant_id} if tenant_id else None
         try:
             resp = httpx.post(
                 f"{self._base_url}/v1/intent",
@@ -52,6 +53,7 @@ class HttpIntentClassifier:
                     "history": history,
                     "skills": list(skills or []),
                 },
+                headers=headers,
                 timeout=self._timeout,
             )
             resp.raise_for_status()

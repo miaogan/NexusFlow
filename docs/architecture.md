@@ -264,7 +264,7 @@ V2.0 将切块从 Go 迁移至 LlamaIndex 服务。LlamaIndex 按标题层级与
 
 ### 6.5 LLM 路由网关
 
-`backend/internal/llmgateway` 提供 OpenAI 兼容的 `/v1/chat/completions`（含 SSE）与 `/v1/embeddings`，供 RAG、Intent、Summary、Memory 等 Agent 统一接入。请求按顺序尝试主/备通道，网络错误、429 与 5xx 触发切换；同一通道连续失败达到阈值后进入冷却（熔断），冷却期内直接跳过。配额按 `x-tenant-id` 与 UTC 日聚合，调用前以「提示词长度估算 + max_tokens」原子预留每日 token，超限返回 `429 quota_exceeded`，响应后按实际 usage 修正预留值；计数可存内存或 Redis（`LLM_QUOTA_DRIVER`），多副本共享。Agent Hub 的 RAG 生成会把租户写入 `x-tenant-id` 请求头，实现租户级计量。
+`backend/internal/llmgateway` 提供 OpenAI 兼容的 `/v1/chat/completions`（含 SSE）与 `/v1/embeddings`，供 RAG、Intent、Summary、Memory 等 Agent 统一接入。请求按顺序尝试主/备通道，网络错误、429 与 5xx 触发切换；同一通道连续失败达到阈值后进入冷却（熔断），冷却期内直接跳过。配额按 `x-tenant-id` 与 UTC 日聚合，调用前以「提示词长度估算 + max_tokens」原子预留每日 token，超限返回 `429 quota_exceeded`，响应后按实际 usage 修正预留值；计数可存内存或 Redis（`LLM_QUOTA_DRIVER`），多副本共享。Agent Hub 的 RAG 生成、Intent / Summary / Memory 图均会把租户写入 `x-tenant-id` 请求头（图按租户缓存 `ChatOpenAI(default_headers)`，HTTP 客户端调用同样携带该头），实现租户级计量。
 
 ### 6.6 对外 API Key 与 OpenAI 兼容端点
 

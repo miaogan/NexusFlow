@@ -56,6 +56,7 @@ class HttpMemoryClient:
     ) -> list[str]:
         if not self._base_url or not query.strip():
             return []
+        headers = {"x-tenant-id": tenant_id} if tenant_id else None
         try:
             resp = httpx.post(
                 f"{self._base_url}/v1/memories/search",
@@ -65,6 +66,7 @@ class HttpMemoryClient:
                     "query": query,
                     "top_k": top_k or self._top_k,
                 },
+                headers=headers,
                 timeout=self._timeout,
             )
             resp.raise_for_status()
@@ -98,6 +100,7 @@ class HttpMemoryClient:
         user_id: str,
         messages: list[dict[str, str]],
     ) -> None:
+        headers = {"x-tenant-id": tenant_id} if tenant_id else None
         try:
             httpx.post(
                 f"{self._base_url}/v1/memories/extract",
@@ -106,6 +109,7 @@ class HttpMemoryClient:
                     "user_id": user_id,
                     "messages": messages,
                 },
+                headers=headers,
                 timeout=self._timeout,
             ).raise_for_status()
         except Exception as exc:  # noqa: BLE001 - background write, log only
