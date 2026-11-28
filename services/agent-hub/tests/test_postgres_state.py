@@ -10,6 +10,7 @@ from nexusflow_agents.agents.rag.services.approvals import (
     PostgresApprovalService,
 )
 from nexusflow_agents.core.audit import PostgresAuditLog
+from nexusflow_agents.mcp.sessions import PostgresSessionStore
 
 DSN = os.environ.get("AGENT_HUB_TEST_DATABASE_URL", "")
 
@@ -67,3 +68,29 @@ def test_postgres_audit_trail_is_queryable() -> None:
     finally:
         with audit._connect() as conn:
             conn.execute("DELETE FROM audit_logs WHERE id = %s", (event.id,))
+
+
+def test_postgres_mcp_sessions_are_shared_between_replicas() -> None:
+    first = PostgresSessionStore(DSN)
+    second = PostgresSessionStore(DSN)  # simulates another pod
+    session_id = "mcp-" + uuid.uuid4().hex[:8]
+    first.create(session_id, "t-mcp", "fp-0")
+    try:
+        assert second.exists(session_id) is True
+        assert second.tenant(session_id) == "t-mcp"
+        assert second.list_fingerprint(session_id) == "fp-0"
+
+        second.subscribe(session_id, "nexusflow://agents", "hash-1")
+        assert first.subscriptions(session_id) == {"nexusflow://agents": "hash-1"}
+
+        second.set_fingerprint(session_id, "nexusflow://agents", "hash-2")
+        assert first.subscriptions(session_id) == {"nexusflow://agents": "hash-2"}
+
+        second.set_list_fingerprint(session_id, "fp-1")
+        assert first.list_fingerprint(session_id) == "fp-1"
+
+        second.unsubscribe(session_id, "nexusflow://agents")
+        assert first.subscriptions(session_id) == {}
+    finally:
+        first.delete(session_id)
+    assert second.exists(session_id) is False

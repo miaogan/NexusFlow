@@ -222,6 +222,8 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 | `WORKFLOW_AGENT_NODE` | false | 注册 DAG `agent` 节点（DAG → Hub） |
 | `AGENT_HUB_REASONING_ENABLED` | false | 多轮推理与工具调用循环 |
 | `AGENT_HUB_MCP_ENABLED` | false | `/mcp` Server 与外部 MCP Client |
+| `AGENT_HUB_MCP_SESSION_DRIVER` | memory | Streamable HTTP 会话元数据：memory / postgres（跨副本共享 `mcp_sessions`） |
+| `AGENT_HUB_MCP_SESSION_TTL_SECONDS` | 86400 | 共享会话空闲过期时间（秒），仅 postgres 驱动生效 |
 | `AGENT_HUB_HITL_ENABLED` | false | 工具审批与 `POST /v1/approvals/{id}/decide` |
 | `HITL_ENABLED` | false | DAG `human_approval` 节点与 runs 持久化 |
 | `AGENT_HUB_APPROVAL_DRIVER` | memory | 工具审批存储：memory / postgres（`agent_approvals`） |
@@ -311,10 +313,10 @@ if not hmac.compare_digest(expected, request.headers["X-NexusFlow-Signature"]):
 
 **MCP**
 
-- Server 传输：Streamable HTTP `POST /mcp`（JSON 或 `Accept: text/event-stream` 单次 SSE）、`GET /mcp`（服务端通知流）、`DELETE /mcp`（结束会话，`Mcp-Session-Id` 标识）；旧版 HTTP+SSE `GET /mcp/sse` + `POST /mcp/messages?session_id=...`；本地 stdio `python -m nexusflow_agents.mcp.stdio`。网关不代理，建议仅在内网暴露并设置 `AGENT_HUB_ADMIN_TOKEN` 保护。会话与订阅保存在进程内，多副本必须使用粘性会话。
+- Server 传输：Streamable HTTP `POST /mcp`（JSON 或 `Accept: text/event-stream` 单次 SSE）、`GET /mcp`（服务端通知流）、`DELETE /mcp`（结束会话，`Mcp-Session-Id` 标识）；旧版 HTTP+SSE `GET /mcp/sse` + `POST /mcp/messages?session_id=...`；本地 stdio `python -m nexusflow_agents.mcp.stdio`。网关不代理，建议仅在内网暴露并设置 `AGENT_HUB_ADMIN_TOKEN` 保护。`AGENT_HUB_MCP_SESSION_DRIVER=postgres` 时会话存在性、租户与订阅写入共享 `mcp_sessions`，POST/GET/DELETE 可落在任意副本；SSE 响应流本身仍绑定当前副本。
 - `AGENT_HUB_MCP_SERVERS=name=url,...` 在启动时连接外部 MCP；不可达只记录告警并跳过，不影响 Hub 启动。
 - 外部工具注册为 `mcp.<server>.<tool>`，默认 `risk=external` 且需审批；`sandbox.execute` 默认不暴露，确需开放时设置 `AGENT_HUB_MCP_ALLOW_SANDBOX=true`。
-- 所有传输均支持 `initialize`、`tools/list|call`、`resources/list|templates/list|read|subscribe|unsubscribe`、`prompts/list|get`。资源为只读：`nexusflow://agents` / `nexusflow://skills` / `nexusflow://tools`（支持 `nexusflow://agents/{name}`、`nexusflow://tools/{name}`）；`resources/subscribe` 后 `GET /mcp` 会在快照变化时推送 `notifications/resources/updated`。提示词为 `rag_answer` / `summarize` / `intent_classify`。`resources/listChanged` 主动推送未实现。
+- 所有传输均支持 `initialize`、`tools/list|call`、`resources/list|templates/list|read|subscribe|unsubscribe`、`prompts/list|get`。资源为只读：`nexusflow://agents` / `nexusflow://skills` / `nexusflow://tools`（支持 `nexusflow://agents/{name}`、`nexusflow://tools/{name}`）；`resources/subscribe` 后 `GET /mcp` 会在快照变化时推送 `notifications/resources/updated`，资源目录（agents / skills / tools）变化时推送 `notifications/resources/list_changed`（`initialize` 声明 `resources.listChanged=true`）。提示词为 `rag_answer` / `summarize` / `intent_classify`。
 
 **审计**
 

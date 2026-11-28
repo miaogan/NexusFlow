@@ -31,6 +31,8 @@
 --   * 所有状态/枚举字段以字符串存储，应用层常量必须与本文件的取值保持一致。
 --   * 已存在的非分区 audit_logs 不会被自动改写：需手工迁移为分区表后，保留策略才会
 --     按整月 DROP；在此之前退化为 DELETE 过期行。
+--   * mcp_sessions 已落地：AGENT_HUB_MCP_SESSION_DRIVER=postgres 时由 Agent Hub 建表，
+--     保存 Streamable HTTP 会话的租户、订阅与指纹，供多副本共享。
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
@@ -326,3 +328,18 @@ CREATE TABLE IF NOT EXISTS agent_approvals (
 
 CREATE INDEX IF NOT EXISTS agent_approvals_pending_idx
     ON agent_approvals (tenant_id, status, created_at DESC);
+
+-- 14. MCP Streamable HTTP 会话元数据（AGENT_HUB_MCP_SESSION_DRIVER=postgres）
+-- SSE 响应流仍绑定单个副本；本表只保存会话存在性、租户、订阅 URI → 指纹与
+-- 资源目录指纹，使任意副本都能续接同一会话。updated_at 超过
+-- AGENT_HUB_MCP_SESSION_TTL_SECONDS 的空闲会话在创建新会话时清理。
+CREATE TABLE IF NOT EXISTS mcp_sessions (
+    session_id       VARCHAR(64) PRIMARY KEY,
+    tenant_id        VARCHAR(64) NOT NULL DEFAULT '',
+    subscriptions    JSONB NOT NULL DEFAULT '{}'::jsonb,
+    list_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_sessions_updated
+    ON mcp_sessions (updated_at);

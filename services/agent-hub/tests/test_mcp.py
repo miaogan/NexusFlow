@@ -76,8 +76,8 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
 
 
 def _clear_stream_sessions() -> None:
-    for session_id in list(mcp_server._stream_sessions):
-        mcp_server._drop_stream_session(session_id)
+    mcp_server._stream_queues.clear()
+    mcp_server.get_session_store().clear()
 
 
 def _rpc(
@@ -107,6 +107,7 @@ def test_mcp_initialize_and_list_hides_sandbox(client: TestClient) -> None:
     caps = init.json()["result"]["capabilities"]
     assert "resources" in caps and "prompts" in caps
     assert caps["resources"]["subscribe"] is True
+    assert caps["resources"]["listChanged"] is True
     assert init.json()["result"]["serverInfo"]["name"] == "nexusflow-agent-hub"
 
     listing = _rpc(client, "tools/list").json()["result"]["tools"]
@@ -269,6 +270,46 @@ def test_resource_subscription_emits_updates(client: TestClient) -> None:
 def _read_resource(client: TestClient, uri: str) -> dict[str, Any]:
     resp = _rpc(client, "resources/read", {"uri": uri}).json()
     return json.loads(resp["result"]["contents"][0]["text"])
+
+
+def test_resource_list_changed_notifies_on_registry_update(client: TestClient) -> None:
+    session_id = _init_session(client)
+    assert mcp_server._collect_list_changed(session_id) == []
+
+    mcp_server.get_registry().register(
+        AgentSpec(name="newcomer", capabilities=frozenset(), kind="local")
+    )
+
+    updates = mcp_server._collect_list_changed(session_id)
+    assert len(updates) == 1
+    assert updates[0]["method"] == "notifications/resources/list_changed"
+    assert mcp_server._collect_list_changed(session_id) == []
+
+
+def test_memory_session_store_tracks_subscriptions() -> None:
+    from nexusflow_agents.mcp.sessions import MemorySessionStore
+
+    store = MemorySessionStore()
+    store.create("s1", "t1", "fp0")
+
+    assert store.exists("s1") is True
+    assert store.tenant("s1") == "t1"
+    assert store.count() == 1
+    assert store.list_fingerprint("s1") == "fp0"
+
+    store.subscribe("s1", "nexusflow://agents", "hash1")
+    store.set_fingerprint("s1", "nexusflow://agents", "hash2")
+    assert store.subscriptions("s1") == {"nexusflow://agents": "hash2"}
+
+    store.unsubscribe("s1", "nexusflow://agents")
+    assert store.subscriptions("s1") == {}
+
+    store.set_list_fingerprint("s1", "fp1")
+    assert store.list_fingerprint("s1") == "fp1"
+
+    store.delete("s1")
+    assert store.exists("s1") is False
+    assert store.count() == 0
 
 
 def test_mcp_calls_tool(client: TestClient) -> None:

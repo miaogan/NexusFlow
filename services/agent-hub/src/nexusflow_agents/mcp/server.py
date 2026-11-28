@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from nexusflow_agents.core.config import get_hub_settings
 from nexusflow_agents.core.runtime import get_registry, get_tools
 from nexusflow_agents.core.tooling import ApprovalRequired, ToolError
+from nexusflow_agents.mcp.sessions import get_session_store
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +36,10 @@ TOOLS_PREFIX = RESOURCE_TOOLS + "/"
 _sse_sessions: dict[str, asyncio.Queue[dict[str, Any]]] = {}
 MAX_SSE_SESSIONS = 64
 
-# Streamable HTTP sessions (2025-03-26 transport): server-initiated messages
-# are queued for the GET stream. Subscriptions are process-local.
-_stream_sessions: dict[str, asyncio.Queue[dict[str, Any]]] = {}
-_stream_tenants: dict[str, str] = {}
-_stream_subscriptions: dict[str, set[str]] = {}
-_stream_fingerprints: dict[str, dict[str, str]] = {}
+# Streamable HTTP GET streams are process-local wait handles; session metadata
+# (existence, tenant, subscriptions, fingerprints) lives in the session store,
+# which can be shared across replicas.
+_stream_queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
 MAX_STREAM_SESSIONS = 64
 
 
@@ -176,25 +175,26 @@ def _fingerprint(body: Any) -> str:
 def _subscribe_resource(
     request_id: Any, params: dict[str, Any], session_id: str
 ) -> dict[str, Any]:
-    if not session_id or session_id not in _stream_sessions:
+    store = get_session_store()
+    if not session_id or not store.exists(session_id):
         return error_payload(
             request_id, -32602, "resources/subscribe requires a streamable HTTP session"
         )
     uri = params.get("uri")
     if not isinstance(uri, str) or not uri:
         return error_payload(request_id, -32602, "resource uri is required")
-    body = _resource_body(uri, _stream_tenants.get(session_id, ""))
+    body = _resource_body(uri, store.tenant(session_id))
     if body is None:
         return error_payload(request_id, -32002, f"resource not found: {uri}")
-    _stream_subscriptions.setdefault(session_id, set()).add(uri)
-    _stream_fingerprints.setdefault(session_id, {})[uri] = _fingerprint(body)
+    store.subscribe(session_id, uri, _fingerprint(body))
     return _result_payload(request_id, {})
 
 
 def _unsubscribe_resource(
     request_id: Any, params: dict[str, Any], session_id: str
 ) -> dict[str, Any]:
-    if not session_id or session_id not in _stream_sessions:
+    store = get_session_store()
+    if not session_id or not store.exists(session_id):
         return error_payload(
             request_id,
             -32602,
@@ -203,27 +203,26 @@ def _unsubscribe_resource(
     uri = params.get("uri")
     if not isinstance(uri, str) or not uri:
         return error_payload(request_id, -32602, "resource uri is required")
-    _stream_subscriptions.get(session_id, set()).discard(uri)
-    _stream_fingerprints.get(session_id, {}).pop(uri, None)
+    store.unsubscribe(session_id, uri)
     return _result_payload(request_id, {})
 
 
 def _collect_updates(session_id: str) -> list[dict[str, Any]]:
     """Diffs subscribed resources against their last fingerprint."""
-    uris = _stream_subscriptions.get(session_id)
-    if not uris:
+    store = get_session_store()
+    subscriptions = store.subscriptions(session_id)
+    if not subscriptions:
         return []
-    tenant = _stream_tenants.get(session_id, "")
-    seen = _stream_fingerprints.setdefault(session_id, {})
+    tenant = store.tenant(session_id)
     updates: list[dict[str, Any]] = []
-    for uri in list(uris):
+    for uri, seen in subscriptions.items():
         body = _resource_body(uri, tenant)
         if body is None:
             continue
         digest = _fingerprint(body)
-        if seen.get(uri) == digest:
+        if seen == digest:
             continue
-        seen[uri] = digest
+        store.set_fingerprint(session_id, uri, digest)
         updates.append(
             {
                 "jsonrpc": "2.0",
@@ -234,11 +233,47 @@ def _collect_updates(session_id: str) -> list[dict[str, Any]]:
     return updates
 
 
+def _resource_list_fingerprint() -> str:
+    """Stable digest of the resource catalog (ignores agent health flapping)."""
+    agents = sorted(
+        (
+            str(item.get("name") or ""),
+            str(item.get("tenant_id") or ""),
+            tuple(sorted(item.get("skills") or ())),
+        )
+        for item in get_registry().snapshot(None)
+    )
+    return _fingerprint(
+        {
+            "resources": _resource_defs(),
+            "templates": _resource_templates(),
+            "agents": agents,
+            "tools": sorted(item["name"] for item in _tool_snapshot()),
+        }
+    )
+
+
+def _collect_list_changed(session_id: str) -> list[dict[str, Any]]:
+    """Emits ``notifications/resources/list_changed`` when the catalog changes.
+
+    The first tick only seeds the baseline so clients are not notified right
+    after connecting.
+    """
+    store = get_session_store()
+    digest = _resource_list_fingerprint()
+    seen = store.list_fingerprint(session_id)
+    if not seen:
+        store.set_list_fingerprint(session_id, digest)
+        return []
+    if seen == digest:
+        return []
+    store.set_list_fingerprint(session_id, digest)
+    return [{"jsonrpc": "2.0", "method": "notifications/resources/list_changed"}]
+
+
 def _drop_stream_session(session_id: str) -> None:
-    _stream_sessions.pop(session_id, None)
-    _stream_tenants.pop(session_id, None)
-    _stream_subscriptions.pop(session_id, None)
-    _stream_fingerprints.pop(session_id, None)
+    _stream_queues.pop(session_id, None)
+    get_session_store().delete(session_id)
 
 
 def _prompt_defs() -> list[dict[str, Any]]:
@@ -419,7 +454,7 @@ def handle_payload(payload: Any, session_id: str = "") -> dict[str, Any] | None:
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {
                     "tools": {"listChanged": False},
-                    "resources": {"subscribe": True, "listChanged": False},
+                    "resources": {"subscribe": True, "listChanged": True},
                     "prompts": {"listChanged": False},
                 },
                 "serverInfo": SERVER_INFO,
@@ -546,20 +581,22 @@ async def mcp_endpoint(request: Request) -> Response:
         return JSONResponse(status_code=200, content=early)
 
     session_id = request.headers.get("mcp-session-id", "")
-    if session_id and session_id not in _stream_sessions:
+    store = get_session_store()
+    if session_id and not store.exists(session_id):
         raise HTTPException(status_code=404, detail="unknown MCP session")
     if (
         not session_id
         and isinstance(payload, dict)
         and payload.get("method") == "initialize"
     ):
-        if len(_stream_sessions) >= MAX_STREAM_SESSIONS:
+        if store.count() >= MAX_STREAM_SESSIONS:
             raise HTTPException(status_code=503, detail="too many MCP sessions")
         session_id = uuid.uuid4().hex
-        _stream_sessions[session_id] = asyncio.Queue()
         params = payload.get("params") or {}
-        _stream_tenants[session_id] = (
-            _request_tenant(params) if isinstance(params, dict) else ""
+        store.create(
+            session_id,
+            _request_tenant(params) if isinstance(params, dict) else "",
+            _resource_list_fingerprint(),
         )
 
     response = handle_payload(payload, session_id)
@@ -596,16 +633,16 @@ async def mcp_stream(request: Request) -> StreamingResponse:
             status_code=406, detail="Accept must include text/event-stream"
         )
     session_id = request.headers.get("mcp-session-id", "")
+    store = get_session_store()
     if session_id:
-        if session_id not in _stream_sessions:
+        if not store.exists(session_id):
             raise HTTPException(status_code=404, detail="unknown MCP session")
     else:
-        if len(_stream_sessions) >= MAX_STREAM_SESSIONS:
+        if store.count() >= MAX_STREAM_SESSIONS:
             raise HTTPException(status_code=503, detail="too many MCP sessions")
         session_id = uuid.uuid4().hex
-        _stream_sessions[session_id] = asyncio.Queue()
-        _stream_tenants[session_id] = ""
-    queue = _stream_sessions[session_id]
+        store.create(session_id, "", _resource_list_fingerprint())
+    queue = _stream_queues.setdefault(session_id, asyncio.Queue())
 
     async def event_stream():
         try:
@@ -616,7 +653,12 @@ async def mcp_stream(request: Request) -> StreamingResponse:
                 try:
                     message = await asyncio.wait_for(queue.get(), timeout=15.0)
                 except TimeoutError:
+                    if not store.exists(session_id):
+                        break
                     for update in _collect_updates(session_id):
+                        data = json.dumps(update, ensure_ascii=False, default=str)
+                        yield f"event: message\ndata: {data}\n\n"
+                    for update in _collect_list_changed(session_id):
                         data = json.dumps(update, ensure_ascii=False, default=str)
                         yield f"event: message\ndata: {data}\n\n"
                     yield ": keepalive\n\n"
@@ -643,7 +685,8 @@ async def mcp_close(request: Request) -> Response:
     """Terminates a streamable HTTP session and its subscriptions."""
     _check_access(request)
     session_id = request.headers.get("mcp-session-id", "")
-    if not session_id or session_id not in _stream_sessions:
+    store = get_session_store()
+    if not session_id or not store.exists(session_id):
         raise HTTPException(status_code=404, detail="unknown MCP session")
     _drop_stream_session(session_id)
     return Response(status_code=204)

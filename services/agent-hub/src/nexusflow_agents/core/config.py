@@ -62,6 +62,10 @@ class HubSettings(BaseSettings):
     mcp_timeout_seconds: float = 10.0
     mcp_max_bytes: int = 1 << 20
     mcp_allow_sandbox: bool = False
+    # Session metadata for streamable HTTP. postgres shares sessions and
+    # subscriptions across replicas (uses state_database_url).
+    mcp_session_driver: Literal["memory", "postgres"] = "memory"
+    mcp_session_ttl_seconds: int = 86400
 
 
 @lru_cache
