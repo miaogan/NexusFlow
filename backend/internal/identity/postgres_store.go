@@ -81,6 +81,10 @@ var identitySchema = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_kb_tenant_status
 		ON knowledge_bases (tenant_id, status)`,
+	`ALTER TABLE knowledge_bases
+		ADD COLUMN IF NOT EXISTS source_kb_id VARCHAR(64) NOT NULL DEFAULT ''`,
+	`CREATE INDEX IF NOT EXISTS idx_kb_source
+		ON knowledge_bases (tenant_id, source_kb_id)`,
 	`CREATE TABLE IF NOT EXISTS kb_permissions (
 		id VARCHAR(64) PRIMARY KEY,
 		tenant_id VARCHAR(64) NOT NULL,

@@ -206,6 +206,8 @@ type RunOptions struct {
 	Store RunStore
 	// Resume replays a suspended run from its saved checkpoint.
 	Resume *RunState
+	// DefinitionID links the run to the saved workflow definition.
+	DefinitionID string
 	// Approved marks the pending human_approval node as approved.
 	Approved       bool
 	ApprovedBy     string
@@ -495,12 +497,17 @@ func (e *Engine) state(
 ) *RunState {
 	now := time.Now()
 	created := now
+	definitionID := opts.DefinitionID
 	if opts.Resume != nil {
 		created = opts.Resume.CreatedAt
+		if definitionID == "" {
+			definitionID = opts.Resume.DefinitionID
+		}
 	}
 	return &RunState{
 		ID:             result.RunID,
 		DAG:            *dag,
+		DefinitionID:   definitionID,
 		Input:          input,
 		Meta:           opts.Meta,
 		Status:         result.Status,

@@ -38,6 +38,9 @@ import type {
   ValidationResult,
   WebhookDelivery,
   WebhookSubscription,
+  WorkflowDefinition,
+  WorkflowDefinitionInput,
+  WorkflowDefinitionVersion,
   WorkflowRunState,
 } from "../types";
 
@@ -450,8 +453,10 @@ export async function chatStream(
 export async function listConversations(
   limit = 20,
   offset = 0,
+  kbID?: string,
 ): Promise<ConversationListResponse> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (kbID) params.set("kb_id", kbID);
   return request<ConversationListResponse>(
     `${GATEWAY_BASE}/v1/conversations?${params.toString()}`,
   );
@@ -556,7 +561,11 @@ export async function logout(): Promise<void> {
 export async function listUsers(query = "", limit = 50, offset = 0): Promise<UserListResponse> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (query) params.set("query", query);
-  return request<UserListResponse>(`${GATEWAY_BASE}/v1/users?${params.toString()}`);
+  const res = await request<{ users: AuthUser[] | null; total?: number }>(
+    `${GATEWAY_BASE}/v1/users?${params.toString()}`,
+  );
+  // gRPC repeated fields decode to nil, so an empty page arrives as JSON null.
+  return { users: res.users ?? [], total: res.total ?? 0 };
 }
 
 export interface CreateUserInput {
@@ -598,7 +607,8 @@ export async function deleteUser(id: string): Promise<{ success: boolean }> {
 }
 
 export async function listRoles(): Promise<{ roles: RoleInfo[] }> {
-  return request<{ roles: RoleInfo[] }>(`${GATEWAY_BASE}/v1/roles`);
+  const res = await request<{ roles: RoleInfo[] | null }>(`${GATEWAY_BASE}/v1/roles`);
+  return { roles: res.roles ?? [] };
 }
 
 export async function upsertRole(input: {
@@ -620,7 +630,10 @@ export async function deleteRole(name: string): Promise<{ success: boolean }> {
 }
 
 export async function listPermissions(): Promise<{ permissions: PermissionInfo[] }> {
-  return request<{ permissions: PermissionInfo[] }>(`${GATEWAY_BASE}/v1/permissions`);
+  const res = await request<{ permissions: PermissionInfo[] | null }>(
+    `${GATEWAY_BASE}/v1/permissions`,
+  );
+  return { permissions: res.permissions ?? [] };
 }
 
 // ---------- Usage & quota ----------
@@ -631,12 +644,16 @@ export async function getUsage(): Promise<UsageResponse> {
 
 // ---------- Knowledge base APIs ----------
 export async function listKnowledgeBases(): Promise<{ knowledge_bases: KnowledgeBase[] }> {
-  return request<{ knowledge_bases: KnowledgeBase[] }>(`${GATEWAY_BASE}/v1/knowledge-bases`);
+  const res = await request<{ knowledge_bases: KnowledgeBase[] | null }>(
+    `${GATEWAY_BASE}/v1/knowledge-bases`,
+  );
+  return { knowledge_bases: res.knowledge_bases ?? [] };
 }
 
 export async function createKnowledgeBase(input: {
   name: string;
   description?: string;
+  source_kb_id?: string;
 }): Promise<{ knowledge_base: KnowledgeBase }> {
   return request<{ knowledge_base: KnowledgeBase }>(`${GATEWAY_BASE}/v1/knowledge-bases`, {
     method: "POST",
@@ -671,9 +688,11 @@ export async function deleteKnowledgeBase(id: string): Promise<{ success: boolea
 export async function listKnowledgeBasePermissions(
   id: string,
 ): Promise<{ permissions: KnowledgeBasePermission[] }> {
-  return request<{ permissions: KnowledgeBasePermission[] }>(
+  const res = await request<{ permissions: KnowledgeBasePermission[] | null }>(
     `${GATEWAY_BASE}/v1/knowledge-bases/${encodeURIComponent(id)}/permissions`,
   );
+  // gRPC repeated fields decode to nil, so an empty list arrives as JSON null.
+  return { permissions: res.permissions ?? [] };
 }
 
 export async function grantKnowledgeBasePermission(
@@ -763,11 +782,112 @@ export async function validateDag(dag: Dag): Promise<ValidationResult> {
   });
 }
 
-export async function runDag(dag: Dag): Promise<unknown> {
+export async function runDag(dag: Dag, definitionId?: string): Promise<unknown> {
   return request<unknown>(`${WORKFLOW_BASE}/v1/workflows/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ dag, input: { source: "web-console" } }),
+    body: JSON.stringify({
+      dag,
+      definition_id: definitionId || undefined,
+      input: { source: "web-console" },
+    }),
+  });
+}
+
+// Saved workflow definitions go through the gateway so the engine receives the
+// caller's tenant/user headers and RBAC applies.
+
+export async function listWorkflowDefinitions(): Promise<{
+  definitions: WorkflowDefinition[];
+}> {
+  const res = await request<{ definitions: WorkflowDefinition[] | null }>(
+    `${GATEWAY_BASE}/v1/workflows/definitions`,
+  );
+  return { definitions: res.definitions ?? [] };
+}
+
+export async function createWorkflowDefinition(
+  input: WorkflowDefinitionInput,
+): Promise<{ definition: WorkflowDefinition }> {
+  return request<{ definition: WorkflowDefinition }>(
+    `${GATEWAY_BASE}/v1/workflows/definitions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function updateWorkflowDefinition(
+  id: string,
+  input: WorkflowDefinitionInput,
+): Promise<{ definition: WorkflowDefinition }> {
+  return request<{ definition: WorkflowDefinition }>(
+    `${GATEWAY_BASE}/v1/workflows/definitions/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function deleteWorkflowDefinition(
+  id: string,
+): Promise<{ success: boolean; found: boolean }> {
+  return request(`${GATEWAY_BASE}/v1/workflows/definitions/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function publishWorkflowDefinition(
+  id: string,
+): Promise<{ definition: WorkflowDefinition; version: number }> {
+  return request(`${GATEWAY_BASE}/v1/workflows/definitions/${encodeURIComponent(id)}/publish`, {
+    method: "POST",
+  });
+}
+
+export async function unpublishWorkflowDefinition(
+  id: string,
+): Promise<{ definition: WorkflowDefinition }> {
+  return request(`${GATEWAY_BASE}/v1/workflows/definitions/${encodeURIComponent(id)}/unpublish`, {
+    method: "POST",
+  });
+}
+
+export async function listWorkflowDefinitionVersions(
+  id: string,
+): Promise<{ versions: WorkflowDefinitionVersion[] }> {
+  const res = await request<{ versions: WorkflowDefinitionVersion[] | null }>(
+    `${GATEWAY_BASE}/v1/workflows/definitions/${encodeURIComponent(id)}/versions`,
+  );
+  return { versions: res.versions ?? [] };
+}
+
+export async function rollbackWorkflowDefinition(
+  id: string,
+  version: number,
+): Promise<{ definition: WorkflowDefinition; restored_version: number }> {
+  return request(
+    `${GATEWAY_BASE}/v1/workflows/definitions/${encodeURIComponent(id)}/rollback`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version }),
+    },
+  );
+}
+
+export async function duplicateWorkflowDefinition(
+  id: string,
+  name?: string,
+): Promise<{ definition: WorkflowDefinition }> {
+  return request(`${GATEWAY_BASE}/v1/workflows/definitions/${encodeURIComponent(id)}/duplicate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(name ? { name } : {}),
   });
 }
 
@@ -917,9 +1037,12 @@ export async function decideApproval(
 
 export async function listWorkflowRuns(
   limit = 50,
+  definitionId?: string,
 ): Promise<{ runs: WorkflowRunState[] }> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (definitionId) params.set("definition_id", definitionId);
   return request<{ runs: WorkflowRunState[] }>(
-    `${GATEWAY_BASE}/v1/workflows/runs?limit=${limit}`,
+    `${GATEWAY_BASE}/v1/workflows/runs?${params.toString()}`,
   );
 }
 

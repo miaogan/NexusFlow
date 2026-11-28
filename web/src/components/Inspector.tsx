@@ -1,5 +1,6 @@
 import { useState } from "react";
-import type { PipelineNode, SearchResponse, ValidationResult } from "../types";
+import type { PipelineNode, SearchResponse, ValidationResult, WorkflowRunState } from "../types";
+import { Spinner, StatePill } from "./ui";
 
 interface Props {
   selected: PipelineNode | null;
@@ -13,6 +14,8 @@ interface Props {
   onRun: () => void;
   busy: boolean;
   runOutput: string | null;
+  runs?: WorkflowRunState[];
+  runsLoading?: boolean;
 }
 
 export default function Inspector({
@@ -27,6 +30,8 @@ export default function Inspector({
   onRun,
   busy,
   runOutput,
+  runs = [],
+  runsLoading = false,
 }: Props) {
   const [query, setQuery] = useState("三路召回与重排如何工作？");
 
@@ -140,6 +145,36 @@ export default function Inspector({
             </div>
           ) : (
             <p className="text-[11px] text-slate-500">在画布中点击节点查看详情。</p>
+          )}
+        </section>
+
+        <section>
+          <div className="mb-2 flex items-center justify-between">
+            <p className="text-xs font-semibold text-slate-300">运行历史</p>
+            {runsLoading && <Spinner className="h-3 w-3" />}
+          </div>
+          {runs.length === 0 ? (
+            <p className="text-[11px] text-slate-500">当前工作流还没有运行记录。</p>
+          ) : (
+            <ul className="space-y-1.5">
+              {runs.slice(0, 6).map((run) => (
+                <li
+                  key={run.id}
+                  className="rounded-lg border border-white/5 bg-ink-800/50 px-2.5 py-2"
+                >
+                  <div className="flex items-center gap-2">
+                    <StatePill state={run.status} />
+                    <span className="ml-auto text-[9px] text-slate-600">
+                      {run.created_at?.replace("T", " ").slice(5, 16)}
+                    </span>
+                  </div>
+                  <p className="mt-1 truncate text-[9px] text-slate-500">
+                    {run.order?.length ?? 0} 节点 · {run.results?.length ?? 0} 完成
+                    {run.error ? ` · ${run.error}` : ""}
+                  </p>
+                </li>
+              ))}
+            </ul>
           )}
         </section>
       </div>

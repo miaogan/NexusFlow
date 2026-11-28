@@ -321,6 +321,8 @@ type KnowledgeBaseInfo struct {
 	Status         string                 `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"` // ACTIVE / ARCHIVED / DELETING
 	CreatedBy      string                 `protobuf:"bytes,9,opt,name=created_by,json=createdBy,proto3" json:"created_by,omitempty"`
 	EmbeddingModel string                 `protobuf:"bytes,10,opt,name=embedding_model,json=embeddingModel,proto3" json:"embedding_model,omitempty"`
+	SourceKbId     string                 `protobuf:"bytes,11,opt,name=source_kb_id,json=sourceKbId,proto3" json:"source_kb_id,omitempty"` // 非空表示引用型：复用该源知识库的向量集合
+	ReadOnly       bool                   `protobuf:"varint,12,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`        // 引用型知识库不可上传/删除/重建索引
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -423,6 +425,20 @@ func (x *KnowledgeBaseInfo) GetEmbeddingModel() string {
 		return x.EmbeddingModel
 	}
 	return ""
+}
+
+func (x *KnowledgeBaseInfo) GetSourceKbId() string {
+	if x != nil {
+		return x.SourceKbId
+	}
+	return ""
+}
+
+func (x *KnowledgeBaseInfo) GetReadOnly() bool {
+	if x != nil {
+		return x.ReadOnly
+	}
+	return false
 }
 
 type KnowledgeBasePermissionInfo struct {
@@ -778,9 +794,11 @@ func (x *ListKnowledgeBasePermissionsResponse) GetPermissions() []*KnowledgeBase
 }
 
 type CreateKnowledgeBaseRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Description   string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Name        string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Description string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
+	// source_kb_id 非空时创建“引用型知识库”：不复制文件与向量，检索直接复用源库。
+	SourceKbId    string `protobuf:"bytes,3,opt,name=source_kb_id,json=sourceKbId,proto3" json:"source_kb_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -825,6 +843,13 @@ func (x *CreateKnowledgeBaseRequest) GetName() string {
 func (x *CreateKnowledgeBaseRequest) GetDescription() string {
 	if x != nil {
 		return x.Description
+	}
+	return ""
+}
+
+func (x *CreateKnowledgeBaseRequest) GetSourceKbId() string {
+	if x != nil {
+		return x.SourceKbId
 	}
 	return ""
 }
@@ -909,6 +934,110 @@ func (*ListKnowledgeBasesRequest) Descriptor() ([]byte, []int) {
 	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{13}
 }
 
+type ResolveKnowledgeBaseRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveKnowledgeBaseRequest) Reset() {
+	*x = ResolveKnowledgeBaseRequest{}
+	mi := &file_vectorization_v1_identity_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveKnowledgeBaseRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveKnowledgeBaseRequest) ProtoMessage() {}
+
+func (x *ResolveKnowledgeBaseRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_vectorization_v1_identity_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveKnowledgeBaseRequest.ProtoReflect.Descriptor instead.
+func (*ResolveKnowledgeBaseRequest) Descriptor() ([]byte, []int) {
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ResolveKnowledgeBaseRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+type ResolveKnowledgeBaseResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	SourceKbId    string                 `protobuf:"bytes,3,opt,name=source_kb_id,json=sourceKbId,proto3" json:"source_kb_id,omitempty"` // 非空表示引用型知识库，向量位于该源库
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveKnowledgeBaseResponse) Reset() {
+	*x = ResolveKnowledgeBaseResponse{}
+	mi := &file_vectorization_v1_identity_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveKnowledgeBaseResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveKnowledgeBaseResponse) ProtoMessage() {}
+
+func (x *ResolveKnowledgeBaseResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_vectorization_v1_identity_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveKnowledgeBaseResponse.ProtoReflect.Descriptor instead.
+func (*ResolveKnowledgeBaseResponse) Descriptor() ([]byte, []int) {
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ResolveKnowledgeBaseResponse) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ResolveKnowledgeBaseResponse) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ResolveKnowledgeBaseResponse) GetSourceKbId() string {
+	if x != nil {
+		return x.SourceKbId
+	}
+	return ""
+}
+
 type UpdateKnowledgeBaseRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -920,7 +1049,7 @@ type UpdateKnowledgeBaseRequest struct {
 
 func (x *UpdateKnowledgeBaseRequest) Reset() {
 	*x = UpdateKnowledgeBaseRequest{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[14]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -932,7 +1061,7 @@ func (x *UpdateKnowledgeBaseRequest) String() string {
 func (*UpdateKnowledgeBaseRequest) ProtoMessage() {}
 
 func (x *UpdateKnowledgeBaseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[14]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -945,7 +1074,7 @@ func (x *UpdateKnowledgeBaseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateKnowledgeBaseRequest.ProtoReflect.Descriptor instead.
 func (*UpdateKnowledgeBaseRequest) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{14}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *UpdateKnowledgeBaseRequest) GetId() string {
@@ -978,7 +1107,7 @@ type DeleteKnowledgeBaseRequest struct {
 
 func (x *DeleteKnowledgeBaseRequest) Reset() {
 	*x = DeleteKnowledgeBaseRequest{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[15]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -990,7 +1119,7 @@ func (x *DeleteKnowledgeBaseRequest) String() string {
 func (*DeleteKnowledgeBaseRequest) ProtoMessage() {}
 
 func (x *DeleteKnowledgeBaseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[15]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1003,7 +1132,7 @@ func (x *DeleteKnowledgeBaseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteKnowledgeBaseRequest.ProtoReflect.Descriptor instead.
 func (*DeleteKnowledgeBaseRequest) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{15}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *DeleteKnowledgeBaseRequest) GetId() string {
@@ -1022,7 +1151,7 @@ type KnowledgeBaseResponse struct {
 
 func (x *KnowledgeBaseResponse) Reset() {
 	*x = KnowledgeBaseResponse{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[16]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1034,7 +1163,7 @@ func (x *KnowledgeBaseResponse) String() string {
 func (*KnowledgeBaseResponse) ProtoMessage() {}
 
 func (x *KnowledgeBaseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[16]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1047,7 +1176,7 @@ func (x *KnowledgeBaseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KnowledgeBaseResponse.ProtoReflect.Descriptor instead.
 func (*KnowledgeBaseResponse) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{16}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *KnowledgeBaseResponse) GetKnowledgeBase() *KnowledgeBaseInfo {
@@ -1066,7 +1195,7 @@ type ListKnowledgeBasesResponse struct {
 
 func (x *ListKnowledgeBasesResponse) Reset() {
 	*x = ListKnowledgeBasesResponse{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[17]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1078,7 +1207,7 @@ func (x *ListKnowledgeBasesResponse) String() string {
 func (*ListKnowledgeBasesResponse) ProtoMessage() {}
 
 func (x *ListKnowledgeBasesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[17]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1091,7 +1220,7 @@ func (x *ListKnowledgeBasesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListKnowledgeBasesResponse.ProtoReflect.Descriptor instead.
 func (*ListKnowledgeBasesResponse) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{17}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ListKnowledgeBasesResponse) GetKnowledgeBases() []*KnowledgeBaseInfo {
@@ -1110,7 +1239,7 @@ type DeleteKnowledgeBaseResponse struct {
 
 func (x *DeleteKnowledgeBaseResponse) Reset() {
 	*x = DeleteKnowledgeBaseResponse{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[18]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1122,7 +1251,7 @@ func (x *DeleteKnowledgeBaseResponse) String() string {
 func (*DeleteKnowledgeBaseResponse) ProtoMessage() {}
 
 func (x *DeleteKnowledgeBaseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[18]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1135,7 +1264,7 @@ func (x *DeleteKnowledgeBaseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteKnowledgeBaseResponse.ProtoReflect.Descriptor instead.
 func (*DeleteKnowledgeBaseResponse) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{18}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *DeleteKnowledgeBaseResponse) GetSuccess() bool {
@@ -1157,7 +1286,7 @@ type RegisterRequest struct {
 
 func (x *RegisterRequest) Reset() {
 	*x = RegisterRequest{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[19]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1169,7 +1298,7 @@ func (x *RegisterRequest) String() string {
 func (*RegisterRequest) ProtoMessage() {}
 
 func (x *RegisterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[19]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1182,7 +1311,7 @@ func (x *RegisterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterRequest.ProtoReflect.Descriptor instead.
 func (*RegisterRequest) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{19}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *RegisterRequest) GetTenantId() string {
@@ -1222,7 +1351,7 @@ type RegisterResponse struct {
 
 func (x *RegisterResponse) Reset() {
 	*x = RegisterResponse{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[20]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1234,7 +1363,7 @@ func (x *RegisterResponse) String() string {
 func (*RegisterResponse) ProtoMessage() {}
 
 func (x *RegisterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[20]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1247,7 +1376,7 @@ func (x *RegisterResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterResponse.ProtoReflect.Descriptor instead.
 func (*RegisterResponse) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{20}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *RegisterResponse) GetUser() *UserInfo {
@@ -1268,7 +1397,7 @@ type LoginRequest struct {
 
 func (x *LoginRequest) Reset() {
 	*x = LoginRequest{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[21]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1280,7 +1409,7 @@ func (x *LoginRequest) String() string {
 func (*LoginRequest) ProtoMessage() {}
 
 func (x *LoginRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[21]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1293,7 +1422,7 @@ func (x *LoginRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LoginRequest.ProtoReflect.Descriptor instead.
 func (*LoginRequest) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{21}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *LoginRequest) GetTenantId() string {
@@ -1327,7 +1456,7 @@ type LoginResponse struct {
 
 func (x *LoginResponse) Reset() {
 	*x = LoginResponse{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[22]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1339,7 +1468,7 @@ func (x *LoginResponse) String() string {
 func (*LoginResponse) ProtoMessage() {}
 
 func (x *LoginResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[22]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1352,7 +1481,7 @@ func (x *LoginResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LoginResponse.ProtoReflect.Descriptor instead.
 func (*LoginResponse) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{22}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *LoginResponse) GetTokens() *TokenPair {
@@ -1378,7 +1507,7 @@ type RefreshRequest struct {
 
 func (x *RefreshRequest) Reset() {
 	*x = RefreshRequest{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[23]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1390,7 +1519,7 @@ func (x *RefreshRequest) String() string {
 func (*RefreshRequest) ProtoMessage() {}
 
 func (x *RefreshRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[23]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1403,7 +1532,7 @@ func (x *RefreshRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RefreshRequest.ProtoReflect.Descriptor instead.
 func (*RefreshRequest) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{23}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *RefreshRequest) GetRefreshToken() string {
@@ -1422,7 +1551,7 @@ type LogoutRequest struct {
 
 func (x *LogoutRequest) Reset() {
 	*x = LogoutRequest{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[24]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1434,7 +1563,7 @@ func (x *LogoutRequest) String() string {
 func (*LogoutRequest) ProtoMessage() {}
 
 func (x *LogoutRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[24]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1447,7 +1576,7 @@ func (x *LogoutRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogoutRequest.ProtoReflect.Descriptor instead.
 func (*LogoutRequest) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{24}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *LogoutRequest) GetRefreshToken() string {
@@ -1466,7 +1595,7 @@ type LogoutResponse struct {
 
 func (x *LogoutResponse) Reset() {
 	*x = LogoutResponse{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[25]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1478,7 +1607,7 @@ func (x *LogoutResponse) String() string {
 func (*LogoutResponse) ProtoMessage() {}
 
 func (x *LogoutResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[25]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1491,7 +1620,7 @@ func (x *LogoutResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogoutResponse.ProtoReflect.Descriptor instead.
 func (*LogoutResponse) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{25}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *LogoutResponse) GetSuccess() bool {
@@ -1510,7 +1639,7 @@ type ValidateRequest struct {
 
 func (x *ValidateRequest) Reset() {
 	*x = ValidateRequest{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[26]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1522,7 +1651,7 @@ func (x *ValidateRequest) String() string {
 func (*ValidateRequest) ProtoMessage() {}
 
 func (x *ValidateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[26]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1535,7 +1664,7 @@ func (x *ValidateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateRequest.ProtoReflect.Descriptor instead.
 func (*ValidateRequest) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{26}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ValidateRequest) GetAccessToken() string {
@@ -1555,7 +1684,7 @@ type ValidateResponse struct {
 
 func (x *ValidateResponse) Reset() {
 	*x = ValidateResponse{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[27]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1567,7 +1696,7 @@ func (x *ValidateResponse) String() string {
 func (*ValidateResponse) ProtoMessage() {}
 
 func (x *ValidateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[27]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1580,7 +1709,7 @@ func (x *ValidateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateResponse.ProtoReflect.Descriptor instead.
 func (*ValidateResponse) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{27}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ValidateResponse) GetValid() bool {
@@ -1611,7 +1740,7 @@ type CreateUserRequest struct {
 
 func (x *CreateUserRequest) Reset() {
 	*x = CreateUserRequest{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[28]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1623,7 +1752,7 @@ func (x *CreateUserRequest) String() string {
 func (*CreateUserRequest) ProtoMessage() {}
 
 func (x *CreateUserRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[28]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1636,7 +1765,7 @@ func (x *CreateUserRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateUserRequest.ProtoReflect.Descriptor instead.
 func (*CreateUserRequest) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{28}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *CreateUserRequest) GetTenantId() string {
@@ -1690,7 +1819,7 @@ type UserResponse struct {
 
 func (x *UserResponse) Reset() {
 	*x = UserResponse{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[29]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1702,7 +1831,7 @@ func (x *UserResponse) String() string {
 func (*UserResponse) ProtoMessage() {}
 
 func (x *UserResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[29]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1715,7 +1844,7 @@ func (x *UserResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserResponse.ProtoReflect.Descriptor instead.
 func (*UserResponse) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{29}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *UserResponse) GetUser() *UserInfo {
@@ -1735,7 +1864,7 @@ type GetUserRequest struct {
 
 func (x *GetUserRequest) Reset() {
 	*x = GetUserRequest{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[30]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1747,7 +1876,7 @@ func (x *GetUserRequest) String() string {
 func (*GetUserRequest) ProtoMessage() {}
 
 func (x *GetUserRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[30]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1760,7 +1889,7 @@ func (x *GetUserRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserRequest.ProtoReflect.Descriptor instead.
 func (*GetUserRequest) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{30}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *GetUserRequest) GetTenantId() string {
@@ -1789,7 +1918,7 @@ type ListUsersRequest struct {
 
 func (x *ListUsersRequest) Reset() {
 	*x = ListUsersRequest{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[31]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1801,7 +1930,7 @@ func (x *ListUsersRequest) String() string {
 func (*ListUsersRequest) ProtoMessage() {}
 
 func (x *ListUsersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[31]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1814,7 +1943,7 @@ func (x *ListUsersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListUsersRequest.ProtoReflect.Descriptor instead.
 func (*ListUsersRequest) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{31}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ListUsersRequest) GetTenantId() string {
@@ -1855,7 +1984,7 @@ type ListUsersResponse struct {
 
 func (x *ListUsersResponse) Reset() {
 	*x = ListUsersResponse{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[32]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1867,7 +1996,7 @@ func (x *ListUsersResponse) String() string {
 func (*ListUsersResponse) ProtoMessage() {}
 
 func (x *ListUsersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[32]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1880,7 +2009,7 @@ func (x *ListUsersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListUsersResponse.ProtoReflect.Descriptor instead.
 func (*ListUsersResponse) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{32}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ListUsersResponse) GetUsers() []*UserInfo {
@@ -1912,7 +2041,7 @@ type UpdateUserRequest struct {
 
 func (x *UpdateUserRequest) Reset() {
 	*x = UpdateUserRequest{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[33]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1924,7 +2053,7 @@ func (x *UpdateUserRequest) String() string {
 func (*UpdateUserRequest) ProtoMessage() {}
 
 func (x *UpdateUserRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[33]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1937,7 +2066,7 @@ func (x *UpdateUserRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateUserRequest.ProtoReflect.Descriptor instead.
 func (*UpdateUserRequest) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{33}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *UpdateUserRequest) GetTenantId() string {
@@ -1999,7 +2128,7 @@ type DeleteUserRequest struct {
 
 func (x *DeleteUserRequest) Reset() {
 	*x = DeleteUserRequest{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[34]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2011,7 +2140,7 @@ func (x *DeleteUserRequest) String() string {
 func (*DeleteUserRequest) ProtoMessage() {}
 
 func (x *DeleteUserRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[34]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2024,7 +2153,7 @@ func (x *DeleteUserRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteUserRequest.ProtoReflect.Descriptor instead.
 func (*DeleteUserRequest) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{34}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *DeleteUserRequest) GetTenantId() string {
@@ -2050,7 +2179,7 @@ type DeleteUserResponse struct {
 
 func (x *DeleteUserResponse) Reset() {
 	*x = DeleteUserResponse{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[35]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2062,7 +2191,7 @@ func (x *DeleteUserResponse) String() string {
 func (*DeleteUserResponse) ProtoMessage() {}
 
 func (x *DeleteUserResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[35]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2075,7 +2204,7 @@ func (x *DeleteUserResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteUserResponse.ProtoReflect.Descriptor instead.
 func (*DeleteUserResponse) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{35}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *DeleteUserResponse) GetSuccess() bool {
@@ -2093,7 +2222,7 @@ type ListRolesRequest struct {
 
 func (x *ListRolesRequest) Reset() {
 	*x = ListRolesRequest{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[36]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2105,7 +2234,7 @@ func (x *ListRolesRequest) String() string {
 func (*ListRolesRequest) ProtoMessage() {}
 
 func (x *ListRolesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[36]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2118,7 +2247,7 @@ func (x *ListRolesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRolesRequest.ProtoReflect.Descriptor instead.
 func (*ListRolesRequest) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{36}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{38}
 }
 
 type ListRolesResponse struct {
@@ -2130,7 +2259,7 @@ type ListRolesResponse struct {
 
 func (x *ListRolesResponse) Reset() {
 	*x = ListRolesResponse{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[37]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2142,7 +2271,7 @@ func (x *ListRolesResponse) String() string {
 func (*ListRolesResponse) ProtoMessage() {}
 
 func (x *ListRolesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[37]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2155,7 +2284,7 @@ func (x *ListRolesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRolesResponse.ProtoReflect.Descriptor instead.
 func (*ListRolesResponse) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{37}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ListRolesResponse) GetRoles() []*RoleInfo {
@@ -2176,7 +2305,7 @@ type UpsertRoleRequest struct {
 
 func (x *UpsertRoleRequest) Reset() {
 	*x = UpsertRoleRequest{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[38]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2188,7 +2317,7 @@ func (x *UpsertRoleRequest) String() string {
 func (*UpsertRoleRequest) ProtoMessage() {}
 
 func (x *UpsertRoleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[38]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2201,7 +2330,7 @@ func (x *UpsertRoleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpsertRoleRequest.ProtoReflect.Descriptor instead.
 func (*UpsertRoleRequest) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{38}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *UpsertRoleRequest) GetName() string {
@@ -2234,7 +2363,7 @@ type RoleResponse struct {
 
 func (x *RoleResponse) Reset() {
 	*x = RoleResponse{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[39]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2246,7 +2375,7 @@ func (x *RoleResponse) String() string {
 func (*RoleResponse) ProtoMessage() {}
 
 func (x *RoleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[39]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2259,7 +2388,7 @@ func (x *RoleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RoleResponse.ProtoReflect.Descriptor instead.
 func (*RoleResponse) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{39}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *RoleResponse) GetRole() *RoleInfo {
@@ -2278,7 +2407,7 @@ type DeleteRoleRequest struct {
 
 func (x *DeleteRoleRequest) Reset() {
 	*x = DeleteRoleRequest{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[40]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2290,7 +2419,7 @@ func (x *DeleteRoleRequest) String() string {
 func (*DeleteRoleRequest) ProtoMessage() {}
 
 func (x *DeleteRoleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[40]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2303,7 +2432,7 @@ func (x *DeleteRoleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteRoleRequest.ProtoReflect.Descriptor instead.
 func (*DeleteRoleRequest) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{40}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *DeleteRoleRequest) GetName() string {
@@ -2322,7 +2451,7 @@ type DeleteRoleResponse struct {
 
 func (x *DeleteRoleResponse) Reset() {
 	*x = DeleteRoleResponse{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[41]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2334,7 +2463,7 @@ func (x *DeleteRoleResponse) String() string {
 func (*DeleteRoleResponse) ProtoMessage() {}
 
 func (x *DeleteRoleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[41]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2347,7 +2476,7 @@ func (x *DeleteRoleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteRoleResponse.ProtoReflect.Descriptor instead.
 func (*DeleteRoleResponse) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{41}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *DeleteRoleResponse) GetSuccess() bool {
@@ -2365,7 +2494,7 @@ type ListPermissionsRequest struct {
 
 func (x *ListPermissionsRequest) Reset() {
 	*x = ListPermissionsRequest{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[42]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2377,7 +2506,7 @@ func (x *ListPermissionsRequest) String() string {
 func (*ListPermissionsRequest) ProtoMessage() {}
 
 func (x *ListPermissionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[42]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2390,7 +2519,7 @@ func (x *ListPermissionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPermissionsRequest.ProtoReflect.Descriptor instead.
 func (*ListPermissionsRequest) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{42}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{44}
 }
 
 type ListPermissionsResponse struct {
@@ -2402,7 +2531,7 @@ type ListPermissionsResponse struct {
 
 func (x *ListPermissionsResponse) Reset() {
 	*x = ListPermissionsResponse{}
-	mi := &file_vectorization_v1_identity_proto_msgTypes[43]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2414,7 +2543,7 @@ func (x *ListPermissionsResponse) String() string {
 func (*ListPermissionsResponse) ProtoMessage() {}
 
 func (x *ListPermissionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vectorization_v1_identity_proto_msgTypes[43]
+	mi := &file_vectorization_v1_identity_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2427,7 +2556,7 @@ func (x *ListPermissionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPermissionsResponse.ProtoReflect.Descriptor instead.
 func (*ListPermissionsResponse) Descriptor() ([]byte, []int) {
-	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{43}
+	return file_vectorization_v1_identity_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *ListPermissionsResponse) GetPermissions() []*PermissionInfo {
@@ -2466,7 +2595,7 @@ const file_vectorization_v1_identity_proto_rawDesc = "" +
 	"\vdescription\x18\x04 \x01(\tR\vdescription\"D\n" +
 	"\x0ePermissionInfo\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12 \n" +
-	"\vdescription\x18\x02 \x01(\tR\vdescription\"\xa8\x02\n" +
+	"\vdescription\x18\x02 \x01(\tR\vdescription\"\xe7\x02\n" +
 	"\x11KnowledgeBaseInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x12\n" +
@@ -2481,7 +2610,10 @@ const file_vectorization_v1_identity_proto_rawDesc = "" +
 	"\n" +
 	"created_by\x18\t \x01(\tR\tcreatedBy\x12'\n" +
 	"\x0fembedding_model\x18\n" +
-	" \x01(\tR\x0eembeddingModel\"\xe0\x01\n" +
+	" \x01(\tR\x0eembeddingModel\x12 \n" +
+	"\fsource_kb_id\x18\v \x01(\tR\n" +
+	"sourceKbId\x12\x1b\n" +
+	"\tread_only\x18\f \x01(\bR\breadOnly\"\xe0\x01\n" +
 	"\x1bKnowledgeBasePermissionInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x13\n" +
@@ -2514,13 +2646,22 @@ const file_vectorization_v1_identity_proto_rawDesc = "" +
 	"permission\x18\x01 \x01(\v2-.vectorization.v1.KnowledgeBasePermissionInfoR\n" +
 	"permission\"w\n" +
 	"$ListKnowledgeBasePermissionsResponse\x12O\n" +
-	"\vpermissions\x18\x01 \x03(\v2-.vectorization.v1.KnowledgeBasePermissionInfoR\vpermissions\"R\n" +
+	"\vpermissions\x18\x01 \x03(\v2-.vectorization.v1.KnowledgeBasePermissionInfoR\vpermissions\"t\n" +
 	"\x1aCreateKnowledgeBaseRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
-	"\vdescription\x18\x02 \x01(\tR\vdescription\")\n" +
+	"\vdescription\x18\x02 \x01(\tR\vdescription\x12 \n" +
+	"\fsource_kb_id\x18\x03 \x01(\tR\n" +
+	"sourceKbId\")\n" +
 	"\x17GetKnowledgeBaseRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"\x1b\n" +
-	"\x19ListKnowledgeBasesRequest\"b\n" +
+	"\x19ListKnowledgeBasesRequest\"-\n" +
+	"\x1bResolveKnowledgeBaseRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"d\n" +
+	"\x1cResolveKnowledgeBaseResponse\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
+	"\fsource_kb_id\x18\x03 \x01(\tR\n" +
+	"sourceKbId\"b\n" +
 	"\x1aUpdateKnowledgeBaseRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
@@ -2612,13 +2753,14 @@ const file_vectorization_v1_identity_proto_rawDesc = "" +
 	"\x05Login\x12\x1e.vectorization.v1.LoginRequest\x1a\x1f.vectorization.v1.LoginResponse\x12L\n" +
 	"\aRefresh\x12 .vectorization.v1.RefreshRequest\x1a\x1f.vectorization.v1.LoginResponse\x12K\n" +
 	"\x06Logout\x12\x1f.vectorization.v1.LogoutRequest\x1a .vectorization.v1.LogoutResponse\x12Q\n" +
-	"\bValidate\x12!.vectorization.v1.ValidateRequest\x1a\".vectorization.v1.ValidateResponse2\xe3\a\n" +
+	"\bValidate\x12!.vectorization.v1.ValidateRequest\x1a\".vectorization.v1.ValidateResponse2\xda\b\n" +
 	"\x14KnowledgeBaseService\x12l\n" +
 	"\x13CreateKnowledgeBase\x12,.vectorization.v1.CreateKnowledgeBaseRequest\x1a'.vectorization.v1.KnowledgeBaseResponse\x12f\n" +
 	"\x10GetKnowledgeBase\x12).vectorization.v1.GetKnowledgeBaseRequest\x1a'.vectorization.v1.KnowledgeBaseResponse\x12o\n" +
 	"\x12ListKnowledgeBases\x12+.vectorization.v1.ListKnowledgeBasesRequest\x1a,.vectorization.v1.ListKnowledgeBasesResponse\x12l\n" +
 	"\x13UpdateKnowledgeBase\x12,.vectorization.v1.UpdateKnowledgeBaseRequest\x1a'.vectorization.v1.KnowledgeBaseResponse\x12r\n" +
-	"\x13DeleteKnowledgeBase\x12,.vectorization.v1.DeleteKnowledgeBaseRequest\x1a-.vectorization.v1.DeleteKnowledgeBaseResponse\x12\x88\x01\n" +
+	"\x13DeleteKnowledgeBase\x12,.vectorization.v1.DeleteKnowledgeBaseRequest\x1a-.vectorization.v1.DeleteKnowledgeBaseResponse\x12u\n" +
+	"\x14ResolveKnowledgeBase\x12-.vectorization.v1.ResolveKnowledgeBaseRequest\x1a..vectorization.v1.ResolveKnowledgeBaseResponse\x12\x88\x01\n" +
 	"\x1cGrantKnowledgeBasePermission\x125.vectorization.v1.GrantKnowledgeBasePermissionRequest\x1a1.vectorization.v1.KnowledgeBasePermissionResponse\x12\x86\x01\n" +
 	"\x1dRevokeKnowledgeBasePermission\x126.vectorization.v1.RevokeKnowledgeBasePermissionRequest\x1a-.vectorization.v1.DeleteKnowledgeBaseResponse\x12\x8d\x01\n" +
 	"\x1cListKnowledgeBasePermissions\x125.vectorization.v1.ListKnowledgeBasePermissionsRequest\x1a6.vectorization.v1.ListKnowledgeBasePermissionsResponse2\x99\x06\n" +
@@ -2650,7 +2792,7 @@ func file_vectorization_v1_identity_proto_rawDescGZIP() []byte {
 	return file_vectorization_v1_identity_proto_rawDescData
 }
 
-var file_vectorization_v1_identity_proto_msgTypes = make([]protoimpl.MessageInfo, 44)
+var file_vectorization_v1_identity_proto_msgTypes = make([]protoimpl.MessageInfo, 46)
 var file_vectorization_v1_identity_proto_goTypes = []any{
 	(*UserInfo)(nil),                             // 0: vectorization.v1.UserInfo
 	(*TokenPair)(nil),                            // 1: vectorization.v1.TokenPair
@@ -2666,36 +2808,38 @@ var file_vectorization_v1_identity_proto_goTypes = []any{
 	(*CreateKnowledgeBaseRequest)(nil),           // 11: vectorization.v1.CreateKnowledgeBaseRequest
 	(*GetKnowledgeBaseRequest)(nil),              // 12: vectorization.v1.GetKnowledgeBaseRequest
 	(*ListKnowledgeBasesRequest)(nil),            // 13: vectorization.v1.ListKnowledgeBasesRequest
-	(*UpdateKnowledgeBaseRequest)(nil),           // 14: vectorization.v1.UpdateKnowledgeBaseRequest
-	(*DeleteKnowledgeBaseRequest)(nil),           // 15: vectorization.v1.DeleteKnowledgeBaseRequest
-	(*KnowledgeBaseResponse)(nil),                // 16: vectorization.v1.KnowledgeBaseResponse
-	(*ListKnowledgeBasesResponse)(nil),           // 17: vectorization.v1.ListKnowledgeBasesResponse
-	(*DeleteKnowledgeBaseResponse)(nil),          // 18: vectorization.v1.DeleteKnowledgeBaseResponse
-	(*RegisterRequest)(nil),                      // 19: vectorization.v1.RegisterRequest
-	(*RegisterResponse)(nil),                     // 20: vectorization.v1.RegisterResponse
-	(*LoginRequest)(nil),                         // 21: vectorization.v1.LoginRequest
-	(*LoginResponse)(nil),                        // 22: vectorization.v1.LoginResponse
-	(*RefreshRequest)(nil),                       // 23: vectorization.v1.RefreshRequest
-	(*LogoutRequest)(nil),                        // 24: vectorization.v1.LogoutRequest
-	(*LogoutResponse)(nil),                       // 25: vectorization.v1.LogoutResponse
-	(*ValidateRequest)(nil),                      // 26: vectorization.v1.ValidateRequest
-	(*ValidateResponse)(nil),                     // 27: vectorization.v1.ValidateResponse
-	(*CreateUserRequest)(nil),                    // 28: vectorization.v1.CreateUserRequest
-	(*UserResponse)(nil),                         // 29: vectorization.v1.UserResponse
-	(*GetUserRequest)(nil),                       // 30: vectorization.v1.GetUserRequest
-	(*ListUsersRequest)(nil),                     // 31: vectorization.v1.ListUsersRequest
-	(*ListUsersResponse)(nil),                    // 32: vectorization.v1.ListUsersResponse
-	(*UpdateUserRequest)(nil),                    // 33: vectorization.v1.UpdateUserRequest
-	(*DeleteUserRequest)(nil),                    // 34: vectorization.v1.DeleteUserRequest
-	(*DeleteUserResponse)(nil),                   // 35: vectorization.v1.DeleteUserResponse
-	(*ListRolesRequest)(nil),                     // 36: vectorization.v1.ListRolesRequest
-	(*ListRolesResponse)(nil),                    // 37: vectorization.v1.ListRolesResponse
-	(*UpsertRoleRequest)(nil),                    // 38: vectorization.v1.UpsertRoleRequest
-	(*RoleResponse)(nil),                         // 39: vectorization.v1.RoleResponse
-	(*DeleteRoleRequest)(nil),                    // 40: vectorization.v1.DeleteRoleRequest
-	(*DeleteRoleResponse)(nil),                   // 41: vectorization.v1.DeleteRoleResponse
-	(*ListPermissionsRequest)(nil),               // 42: vectorization.v1.ListPermissionsRequest
-	(*ListPermissionsResponse)(nil),              // 43: vectorization.v1.ListPermissionsResponse
+	(*ResolveKnowledgeBaseRequest)(nil),          // 14: vectorization.v1.ResolveKnowledgeBaseRequest
+	(*ResolveKnowledgeBaseResponse)(nil),         // 15: vectorization.v1.ResolveKnowledgeBaseResponse
+	(*UpdateKnowledgeBaseRequest)(nil),           // 16: vectorization.v1.UpdateKnowledgeBaseRequest
+	(*DeleteKnowledgeBaseRequest)(nil),           // 17: vectorization.v1.DeleteKnowledgeBaseRequest
+	(*KnowledgeBaseResponse)(nil),                // 18: vectorization.v1.KnowledgeBaseResponse
+	(*ListKnowledgeBasesResponse)(nil),           // 19: vectorization.v1.ListKnowledgeBasesResponse
+	(*DeleteKnowledgeBaseResponse)(nil),          // 20: vectorization.v1.DeleteKnowledgeBaseResponse
+	(*RegisterRequest)(nil),                      // 21: vectorization.v1.RegisterRequest
+	(*RegisterResponse)(nil),                     // 22: vectorization.v1.RegisterResponse
+	(*LoginRequest)(nil),                         // 23: vectorization.v1.LoginRequest
+	(*LoginResponse)(nil),                        // 24: vectorization.v1.LoginResponse
+	(*RefreshRequest)(nil),                       // 25: vectorization.v1.RefreshRequest
+	(*LogoutRequest)(nil),                        // 26: vectorization.v1.LogoutRequest
+	(*LogoutResponse)(nil),                       // 27: vectorization.v1.LogoutResponse
+	(*ValidateRequest)(nil),                      // 28: vectorization.v1.ValidateRequest
+	(*ValidateResponse)(nil),                     // 29: vectorization.v1.ValidateResponse
+	(*CreateUserRequest)(nil),                    // 30: vectorization.v1.CreateUserRequest
+	(*UserResponse)(nil),                         // 31: vectorization.v1.UserResponse
+	(*GetUserRequest)(nil),                       // 32: vectorization.v1.GetUserRequest
+	(*ListUsersRequest)(nil),                     // 33: vectorization.v1.ListUsersRequest
+	(*ListUsersResponse)(nil),                    // 34: vectorization.v1.ListUsersResponse
+	(*UpdateUserRequest)(nil),                    // 35: vectorization.v1.UpdateUserRequest
+	(*DeleteUserRequest)(nil),                    // 36: vectorization.v1.DeleteUserRequest
+	(*DeleteUserResponse)(nil),                   // 37: vectorization.v1.DeleteUserResponse
+	(*ListRolesRequest)(nil),                     // 38: vectorization.v1.ListRolesRequest
+	(*ListRolesResponse)(nil),                    // 39: vectorization.v1.ListRolesResponse
+	(*UpsertRoleRequest)(nil),                    // 40: vectorization.v1.UpsertRoleRequest
+	(*RoleResponse)(nil),                         // 41: vectorization.v1.RoleResponse
+	(*DeleteRoleRequest)(nil),                    // 42: vectorization.v1.DeleteRoleRequest
+	(*DeleteRoleResponse)(nil),                   // 43: vectorization.v1.DeleteRoleResponse
+	(*ListPermissionsRequest)(nil),               // 44: vectorization.v1.ListPermissionsRequest
+	(*ListPermissionsResponse)(nil),              // 45: vectorization.v1.ListPermissionsResponse
 }
 var file_vectorization_v1_identity_proto_depIdxs = []int32{
 	5,  // 0: vectorization.v1.KnowledgeBasePermissionResponse.permission:type_name -> vectorization.v1.KnowledgeBasePermissionInfo
@@ -2711,52 +2855,54 @@ var file_vectorization_v1_identity_proto_depIdxs = []int32{
 	2,  // 10: vectorization.v1.ListRolesResponse.roles:type_name -> vectorization.v1.RoleInfo
 	2,  // 11: vectorization.v1.RoleResponse.role:type_name -> vectorization.v1.RoleInfo
 	3,  // 12: vectorization.v1.ListPermissionsResponse.permissions:type_name -> vectorization.v1.PermissionInfo
-	19, // 13: vectorization.v1.AuthService.Register:input_type -> vectorization.v1.RegisterRequest
-	21, // 14: vectorization.v1.AuthService.Login:input_type -> vectorization.v1.LoginRequest
-	23, // 15: vectorization.v1.AuthService.Refresh:input_type -> vectorization.v1.RefreshRequest
-	24, // 16: vectorization.v1.AuthService.Logout:input_type -> vectorization.v1.LogoutRequest
-	26, // 17: vectorization.v1.AuthService.Validate:input_type -> vectorization.v1.ValidateRequest
+	21, // 13: vectorization.v1.AuthService.Register:input_type -> vectorization.v1.RegisterRequest
+	23, // 14: vectorization.v1.AuthService.Login:input_type -> vectorization.v1.LoginRequest
+	25, // 15: vectorization.v1.AuthService.Refresh:input_type -> vectorization.v1.RefreshRequest
+	26, // 16: vectorization.v1.AuthService.Logout:input_type -> vectorization.v1.LogoutRequest
+	28, // 17: vectorization.v1.AuthService.Validate:input_type -> vectorization.v1.ValidateRequest
 	11, // 18: vectorization.v1.KnowledgeBaseService.CreateKnowledgeBase:input_type -> vectorization.v1.CreateKnowledgeBaseRequest
 	12, // 19: vectorization.v1.KnowledgeBaseService.GetKnowledgeBase:input_type -> vectorization.v1.GetKnowledgeBaseRequest
 	13, // 20: vectorization.v1.KnowledgeBaseService.ListKnowledgeBases:input_type -> vectorization.v1.ListKnowledgeBasesRequest
-	14, // 21: vectorization.v1.KnowledgeBaseService.UpdateKnowledgeBase:input_type -> vectorization.v1.UpdateKnowledgeBaseRequest
-	15, // 22: vectorization.v1.KnowledgeBaseService.DeleteKnowledgeBase:input_type -> vectorization.v1.DeleteKnowledgeBaseRequest
-	6,  // 23: vectorization.v1.KnowledgeBaseService.GrantKnowledgeBasePermission:input_type -> vectorization.v1.GrantKnowledgeBasePermissionRequest
-	7,  // 24: vectorization.v1.KnowledgeBaseService.RevokeKnowledgeBasePermission:input_type -> vectorization.v1.RevokeKnowledgeBasePermissionRequest
-	8,  // 25: vectorization.v1.KnowledgeBaseService.ListKnowledgeBasePermissions:input_type -> vectorization.v1.ListKnowledgeBasePermissionsRequest
-	28, // 26: vectorization.v1.UserService.CreateUser:input_type -> vectorization.v1.CreateUserRequest
-	30, // 27: vectorization.v1.UserService.GetUser:input_type -> vectorization.v1.GetUserRequest
-	31, // 28: vectorization.v1.UserService.ListUsers:input_type -> vectorization.v1.ListUsersRequest
-	33, // 29: vectorization.v1.UserService.UpdateUser:input_type -> vectorization.v1.UpdateUserRequest
-	34, // 30: vectorization.v1.UserService.DeleteUser:input_type -> vectorization.v1.DeleteUserRequest
-	36, // 31: vectorization.v1.UserService.ListRoles:input_type -> vectorization.v1.ListRolesRequest
-	38, // 32: vectorization.v1.UserService.UpsertRole:input_type -> vectorization.v1.UpsertRoleRequest
-	40, // 33: vectorization.v1.UserService.DeleteRole:input_type -> vectorization.v1.DeleteRoleRequest
-	42, // 34: vectorization.v1.UserService.ListPermissions:input_type -> vectorization.v1.ListPermissionsRequest
-	20, // 35: vectorization.v1.AuthService.Register:output_type -> vectorization.v1.RegisterResponse
-	22, // 36: vectorization.v1.AuthService.Login:output_type -> vectorization.v1.LoginResponse
-	22, // 37: vectorization.v1.AuthService.Refresh:output_type -> vectorization.v1.LoginResponse
-	25, // 38: vectorization.v1.AuthService.Logout:output_type -> vectorization.v1.LogoutResponse
-	27, // 39: vectorization.v1.AuthService.Validate:output_type -> vectorization.v1.ValidateResponse
-	16, // 40: vectorization.v1.KnowledgeBaseService.CreateKnowledgeBase:output_type -> vectorization.v1.KnowledgeBaseResponse
-	16, // 41: vectorization.v1.KnowledgeBaseService.GetKnowledgeBase:output_type -> vectorization.v1.KnowledgeBaseResponse
-	17, // 42: vectorization.v1.KnowledgeBaseService.ListKnowledgeBases:output_type -> vectorization.v1.ListKnowledgeBasesResponse
-	16, // 43: vectorization.v1.KnowledgeBaseService.UpdateKnowledgeBase:output_type -> vectorization.v1.KnowledgeBaseResponse
-	18, // 44: vectorization.v1.KnowledgeBaseService.DeleteKnowledgeBase:output_type -> vectorization.v1.DeleteKnowledgeBaseResponse
-	9,  // 45: vectorization.v1.KnowledgeBaseService.GrantKnowledgeBasePermission:output_type -> vectorization.v1.KnowledgeBasePermissionResponse
-	18, // 46: vectorization.v1.KnowledgeBaseService.RevokeKnowledgeBasePermission:output_type -> vectorization.v1.DeleteKnowledgeBaseResponse
-	10, // 47: vectorization.v1.KnowledgeBaseService.ListKnowledgeBasePermissions:output_type -> vectorization.v1.ListKnowledgeBasePermissionsResponse
-	29, // 48: vectorization.v1.UserService.CreateUser:output_type -> vectorization.v1.UserResponse
-	29, // 49: vectorization.v1.UserService.GetUser:output_type -> vectorization.v1.UserResponse
-	32, // 50: vectorization.v1.UserService.ListUsers:output_type -> vectorization.v1.ListUsersResponse
-	29, // 51: vectorization.v1.UserService.UpdateUser:output_type -> vectorization.v1.UserResponse
-	35, // 52: vectorization.v1.UserService.DeleteUser:output_type -> vectorization.v1.DeleteUserResponse
-	37, // 53: vectorization.v1.UserService.ListRoles:output_type -> vectorization.v1.ListRolesResponse
-	39, // 54: vectorization.v1.UserService.UpsertRole:output_type -> vectorization.v1.RoleResponse
-	41, // 55: vectorization.v1.UserService.DeleteRole:output_type -> vectorization.v1.DeleteRoleResponse
-	43, // 56: vectorization.v1.UserService.ListPermissions:output_type -> vectorization.v1.ListPermissionsResponse
-	35, // [35:57] is the sub-list for method output_type
-	13, // [13:35] is the sub-list for method input_type
+	16, // 21: vectorization.v1.KnowledgeBaseService.UpdateKnowledgeBase:input_type -> vectorization.v1.UpdateKnowledgeBaseRequest
+	17, // 22: vectorization.v1.KnowledgeBaseService.DeleteKnowledgeBase:input_type -> vectorization.v1.DeleteKnowledgeBaseRequest
+	14, // 23: vectorization.v1.KnowledgeBaseService.ResolveKnowledgeBase:input_type -> vectorization.v1.ResolveKnowledgeBaseRequest
+	6,  // 24: vectorization.v1.KnowledgeBaseService.GrantKnowledgeBasePermission:input_type -> vectorization.v1.GrantKnowledgeBasePermissionRequest
+	7,  // 25: vectorization.v1.KnowledgeBaseService.RevokeKnowledgeBasePermission:input_type -> vectorization.v1.RevokeKnowledgeBasePermissionRequest
+	8,  // 26: vectorization.v1.KnowledgeBaseService.ListKnowledgeBasePermissions:input_type -> vectorization.v1.ListKnowledgeBasePermissionsRequest
+	30, // 27: vectorization.v1.UserService.CreateUser:input_type -> vectorization.v1.CreateUserRequest
+	32, // 28: vectorization.v1.UserService.GetUser:input_type -> vectorization.v1.GetUserRequest
+	33, // 29: vectorization.v1.UserService.ListUsers:input_type -> vectorization.v1.ListUsersRequest
+	35, // 30: vectorization.v1.UserService.UpdateUser:input_type -> vectorization.v1.UpdateUserRequest
+	36, // 31: vectorization.v1.UserService.DeleteUser:input_type -> vectorization.v1.DeleteUserRequest
+	38, // 32: vectorization.v1.UserService.ListRoles:input_type -> vectorization.v1.ListRolesRequest
+	40, // 33: vectorization.v1.UserService.UpsertRole:input_type -> vectorization.v1.UpsertRoleRequest
+	42, // 34: vectorization.v1.UserService.DeleteRole:input_type -> vectorization.v1.DeleteRoleRequest
+	44, // 35: vectorization.v1.UserService.ListPermissions:input_type -> vectorization.v1.ListPermissionsRequest
+	22, // 36: vectorization.v1.AuthService.Register:output_type -> vectorization.v1.RegisterResponse
+	24, // 37: vectorization.v1.AuthService.Login:output_type -> vectorization.v1.LoginResponse
+	24, // 38: vectorization.v1.AuthService.Refresh:output_type -> vectorization.v1.LoginResponse
+	27, // 39: vectorization.v1.AuthService.Logout:output_type -> vectorization.v1.LogoutResponse
+	29, // 40: vectorization.v1.AuthService.Validate:output_type -> vectorization.v1.ValidateResponse
+	18, // 41: vectorization.v1.KnowledgeBaseService.CreateKnowledgeBase:output_type -> vectorization.v1.KnowledgeBaseResponse
+	18, // 42: vectorization.v1.KnowledgeBaseService.GetKnowledgeBase:output_type -> vectorization.v1.KnowledgeBaseResponse
+	19, // 43: vectorization.v1.KnowledgeBaseService.ListKnowledgeBases:output_type -> vectorization.v1.ListKnowledgeBasesResponse
+	18, // 44: vectorization.v1.KnowledgeBaseService.UpdateKnowledgeBase:output_type -> vectorization.v1.KnowledgeBaseResponse
+	20, // 45: vectorization.v1.KnowledgeBaseService.DeleteKnowledgeBase:output_type -> vectorization.v1.DeleteKnowledgeBaseResponse
+	15, // 46: vectorization.v1.KnowledgeBaseService.ResolveKnowledgeBase:output_type -> vectorization.v1.ResolveKnowledgeBaseResponse
+	9,  // 47: vectorization.v1.KnowledgeBaseService.GrantKnowledgeBasePermission:output_type -> vectorization.v1.KnowledgeBasePermissionResponse
+	20, // 48: vectorization.v1.KnowledgeBaseService.RevokeKnowledgeBasePermission:output_type -> vectorization.v1.DeleteKnowledgeBaseResponse
+	10, // 49: vectorization.v1.KnowledgeBaseService.ListKnowledgeBasePermissions:output_type -> vectorization.v1.ListKnowledgeBasePermissionsResponse
+	31, // 50: vectorization.v1.UserService.CreateUser:output_type -> vectorization.v1.UserResponse
+	31, // 51: vectorization.v1.UserService.GetUser:output_type -> vectorization.v1.UserResponse
+	34, // 52: vectorization.v1.UserService.ListUsers:output_type -> vectorization.v1.ListUsersResponse
+	31, // 53: vectorization.v1.UserService.UpdateUser:output_type -> vectorization.v1.UserResponse
+	37, // 54: vectorization.v1.UserService.DeleteUser:output_type -> vectorization.v1.DeleteUserResponse
+	39, // 55: vectorization.v1.UserService.ListRoles:output_type -> vectorization.v1.ListRolesResponse
+	41, // 56: vectorization.v1.UserService.UpsertRole:output_type -> vectorization.v1.RoleResponse
+	43, // 57: vectorization.v1.UserService.DeleteRole:output_type -> vectorization.v1.DeleteRoleResponse
+	45, // 58: vectorization.v1.UserService.ListPermissions:output_type -> vectorization.v1.ListPermissionsResponse
+	36, // [36:59] is the sub-list for method output_type
+	13, // [13:36] is the sub-list for method input_type
 	13, // [13:13] is the sub-list for extension type_name
 	13, // [13:13] is the sub-list for extension extendee
 	0,  // [0:13] is the sub-list for field type_name
@@ -2773,7 +2919,7 @@ func file_vectorization_v1_identity_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_vectorization_v1_identity_proto_rawDesc), len(file_vectorization_v1_identity_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   44,
+			NumMessages:   46,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

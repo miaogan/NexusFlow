@@ -22,7 +22,10 @@ from nexusflow_agents.agents.rag.services.llm import (
     start_usage,
 )
 from nexusflow_agents.agents.rag.services.retrieval import RetrievalUnavailable
-from nexusflow_agents.agents.rag.services.store import ConversationNotFound
+from nexusflow_agents.agents.rag.services.store import (
+    ConversationKBError,
+    ConversationNotFound,
+)
 
 router = APIRouter(prefix="/v1", tags=["rag"])
 
@@ -61,6 +64,8 @@ async def chat(
         )
     except ConversationNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ConversationKBError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RetrievalUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     finally:
@@ -107,11 +112,12 @@ async def list_conversations(
     request: Request,
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    kb_id: str | None = Query(None),
     service: ChatService = Depends(service_dep),
 ) -> ConversationListResponse:
     tenant_id, user_id, _ = caller_identity(request)
     return await run_in_threadpool(
-        service.list_conversations, tenant_id, user_id, limit, offset
+        service.list_conversations, tenant_id, user_id, limit, offset, kb_id
     )
 
 

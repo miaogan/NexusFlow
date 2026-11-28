@@ -38,8 +38,8 @@ const STAGES: { label: string; min: number }[] = [
 ];
 
 export default function Tasks() {
-  const { kbID, kbRole } = useOutletContext<LayoutContext>();
-  const canWrite = kbRole === "kb:admin" || kbRole === "kb:editor";
+  const { kbID, kbRole, kbReadOnly } = useOutletContext<LayoutContext>();
+  const canWrite = !kbReadOnly && (kbRole === "kb:admin" || kbRole === "kb:editor");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
   const [loading, setLoading] = useState(false);

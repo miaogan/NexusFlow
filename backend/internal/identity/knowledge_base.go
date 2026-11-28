@@ -34,16 +34,19 @@ const (
 )
 
 var (
-	ErrKnowledgeBaseNotFound = errors.New("knowledge base not found")
-	ErrKnowledgeBaseExists   = errors.New("knowledge base already exists")
-	ErrKnowledgeBaseName     = errors.New("knowledge base name is required")
-	ErrDefaultKnowledgeBase  = errors.New("default knowledge base cannot be deleted")
-	ErrKnowledgeBaseRole     = errors.New("invalid knowledge base role")
-	ErrKnowledgeBaseSubject  = errors.New("invalid knowledge base subject")
+	ErrKnowledgeBaseNotFound   = errors.New("knowledge base not found")
+	ErrKnowledgeBaseExists     = errors.New("knowledge base already exists")
+	ErrKnowledgeBaseName       = errors.New("knowledge base name is required")
+	ErrDefaultKnowledgeBase    = errors.New("default knowledge base cannot be deleted")
+	ErrKnowledgeBaseRole       = errors.New("invalid knowledge base role")
+	ErrKnowledgeBaseSubject    = errors.New("invalid knowledge base subject")
+	ErrKnowledgeBaseReferenced = errors.New("knowledge base is referenced by other knowledge bases")
 )
 
 // KnowledgeBase is a tenant-scoped namespace for files, tasks and retrieval.
-// Columns mirror the enterprise DDL (knowledge_bases).
+// Columns mirror the enterprise DDL (knowledge_bases). SourceKBID non-empty
+// marks a reference namespace: vectors live in the source KB and are reused
+// without re-uploading or re-embedding.
 type KnowledgeBase struct {
 	ID             string         `json:"id"`
 	TenantID       string         `json:"tenant_id"`
@@ -51,6 +54,7 @@ type KnowledgeBase struct {
 	Description    string         `json:"description"`
 	EmbeddingModel string         `json:"embedding_model"`
 	ChunkStrategy  map[string]any `json:"chunk_strategy,omitempty"`
+	SourceKBID     string         `json:"source_kb_id,omitempty"`
 	Status         string         `json:"status"`
 	CreatedBy      string         `json:"created_by"`
 	CreatedAt      time.Time      `json:"created_at"`
@@ -129,10 +133,17 @@ func (s *KnowledgeBaseService) CreateKnowledgeBase(ctx context.Context, req *pb.
 	if createdBy == "" {
 		createdBy = "system"
 	}
+	tenantID := tenantOf(ctx, "")
+	sourceID := strings.TrimSpace(req.GetSourceKbId())
+	if sourceID != "" {
+		if err := s.validateReferenceSource(ctx, tenantID, sourceID); err != nil {
+			return nil, err
+		}
+	}
 	kb, err := s.store.CreateKnowledgeBase(ctx, KnowledgeBase{
-		TenantID: tenantOf(ctx, ""), Name: req.GetName(), Description: req.GetDescription(),
+		TenantID: tenantID, Name: req.GetName(), Description: req.GetDescription(),
 		EmbeddingModel: "default", ChunkStrategy: defaultChunkStrategy(),
-		Status: KBStatusActive, CreatedBy: createdBy,
+		SourceKBID: sourceID, Status: KBStatusActive, CreatedBy: createdBy,
 	})
 	if err != nil {
 		return nil, toStatus(err)
@@ -148,6 +159,34 @@ func (s *KnowledgeBaseService) CreateKnowledgeBase(ctx context.Context, req *pb.
 		}
 	}
 	return &pb.KnowledgeBaseResponse{KnowledgeBase: knowledgeBaseToPB(kb, KBRoleAdmin)}, nil
+}
+
+// validateReferenceSource ensures a reference KB points at an owned KB the
+// caller can actually read, and forbids chaining references.
+func (s *KnowledgeBaseService) validateReferenceSource(ctx context.Context, tenantID, sourceID string) error {
+	if sourceID == DefaultKnowledgeBaseID {
+		if err := s.ensureDefault(ctx, tenantID); err != nil {
+			return toStatus(err)
+		}
+	}
+	src, ok, err := s.store.GetKnowledgeBase(ctx, tenantID, sourceID)
+	if err != nil {
+		return toStatus(err)
+	}
+	if !ok {
+		return status.Errorf(codes.InvalidArgument, "source knowledge base %q not found", sourceID)
+	}
+	if src.SourceKBID != "" {
+		return status.Error(codes.InvalidArgument, "cannot reference another reference knowledge base")
+	}
+	role, err := s.effectiveRole(ctx, tenantID, sourceID)
+	if err != nil {
+		return toStatus(err)
+	}
+	if !RoleAtLeast(role, KBRoleViewer) {
+		return status.Error(codes.PermissionDenied, "read access to the source knowledge base is required")
+	}
+	return nil
 }
 
 func (s *KnowledgeBaseService) GetKnowledgeBase(ctx context.Context, req *pb.GetKnowledgeBaseRequest) (*pb.KnowledgeBaseResponse, error) {
@@ -177,6 +216,33 @@ func (s *KnowledgeBaseService) GetKnowledgeBase(ctx context.Context, req *pb.Get
 		return nil, status.Error(codes.NotFound, ErrKnowledgeBaseNotFound.Error())
 	}
 	return &pb.KnowledgeBaseResponse{KnowledgeBase: knowledgeBaseToPB(kb, role)}, nil
+}
+
+// ResolveKnowledgeBase returns routing metadata without a kb-role check. The
+// gateway calls it only for authenticated API keys after enforcing their
+// knowledge-base allow-list, because API keys are not identity users and
+// therefore have no kb role to resolve.
+func (s *KnowledgeBaseService) ResolveKnowledgeBase(ctx context.Context, req *pb.ResolveKnowledgeBaseRequest) (*pb.ResolveKnowledgeBaseResponse, error) {
+	id := strings.TrimSpace(req.GetId())
+	if id == "" {
+		return nil, status.Error(codes.InvalidArgument, "knowledge base id is required")
+	}
+	tenantID := tenantOf(ctx, "")
+	if id == DefaultKnowledgeBaseID {
+		if err := s.ensureDefault(ctx, tenantID); err != nil {
+			return nil, toStatus(err)
+		}
+	}
+	kb, ok, err := s.store.GetKnowledgeBase(ctx, tenantID, id)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	if !ok {
+		return nil, status.Error(codes.NotFound, ErrKnowledgeBaseNotFound.Error())
+	}
+	return &pb.ResolveKnowledgeBaseResponse{
+		Id: kb.ID, Name: kb.Name, SourceKbId: kb.SourceKBID,
+	}, nil
 }
 
 func (s *KnowledgeBaseService) ListKnowledgeBases(ctx context.Context, _ *pb.ListKnowledgeBasesRequest) (*pb.ListKnowledgeBasesResponse, error) {
@@ -224,6 +290,18 @@ func (s *KnowledgeBaseService) DeleteKnowledgeBase(ctx context.Context, req *pb.
 	tenantID := tenantOf(ctx, "")
 	if err := s.requireRole(ctx, tenantID, req.GetId(), KBRoleAdmin); err != nil {
 		return nil, err
+	}
+	items, err := s.store.ListKnowledgeBases(ctx, tenantID)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	for _, kb := range items {
+		if kb.SourceKBID == req.GetId() {
+			return nil, status.Errorf(
+				codes.FailedPrecondition,
+				"%s: %q still references it", ErrKnowledgeBaseReferenced.Error(), kb.Name,
+			)
+		}
 	}
 	if err := s.store.DeleteKnowledgeBase(ctx, tenantID, req.GetId()); err != nil {
 		return nil, toStatus(err)
@@ -389,6 +467,7 @@ func knowledgeBaseToPB(kb KnowledgeBase, role string) *pb.KnowledgeBaseInfo {
 		Id: kb.ID, TenantId: kb.TenantID, Name: kb.Name, Description: kb.Description,
 		CreatedAt: kb.CreatedAt.Format(time.RFC3339), UpdatedAt: kb.UpdatedAt.Format(time.RFC3339),
 		Role: role, Status: statusValue, CreatedBy: kb.CreatedBy, EmbeddingModel: kb.EmbeddingModel,
+		SourceKbId: kb.SourceKBID, ReadOnly: kb.SourceKBID != "",
 	}
 }
 

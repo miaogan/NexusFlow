@@ -206,7 +206,8 @@ func (g *Gateway) readChatBody(c *gin.Context) ([]byte, bool) {
 	if !requireKBRole(c, role, identity.KBRoleViewer) {
 		return nil, false
 	}
-	req.KBID = kbID
+	// Reference KBs answer from the source collection without re-vectorizing.
+	req.KBID = g.kbIndexID(c, kbID)
 	body, err = json.Marshal(req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "encode chat request: " + err.Error()})

@@ -19,13 +19,15 @@ const (
 
 // RunState is the checkpoint saved when a run suspends on human approval.
 type RunState struct {
-	ID      string         `json:"id"`
-	DAG     DAG            `json:"dag"`
-	Input   map[string]any `json:"input"`
-	Meta    Meta           `json:"meta"`
-	Status  string         `json:"status"`
-	Order   []string       `json:"order,omitempty"`
-	Results []NodeResult   `json:"results,omitempty"`
+	ID  string `json:"id"`
+	DAG DAG    `json:"dag"`
+	// DefinitionID links a run to the saved workflow it was started from.
+	DefinitionID string         `json:"definition_id,omitempty"`
+	Input        map[string]any `json:"input"`
+	Meta         Meta           `json:"meta"`
+	Status       string         `json:"status"`
+	Order        []string       `json:"order,omitempty"`
+	Results      []NodeResult   `json:"results,omitempty"`
 	// Skipped lists nodes pruned by an unchosen condition branch.
 	Skipped     []string       `json:"skipped,omitempty"`
 	Output      map[string]any `json:"output,omitempty"`

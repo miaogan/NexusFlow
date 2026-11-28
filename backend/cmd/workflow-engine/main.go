@@ -54,6 +54,7 @@ func main() {
 			engine, registry,
 			workflow.WithServiceToken(cfg.WorkflowServiceToken),
 			workflow.WithRunStore(runStore),
+			workflow.WithDefinitionStore(workflow.DefinitionStoreFor(runStore)),
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

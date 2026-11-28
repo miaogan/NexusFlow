@@ -48,3 +48,19 @@ def test_list_paginates_newest_first() -> None:
 
     rest, _ = store.list("t1", "u1", 2, 2)
     assert len(rest) == 1
+
+
+def test_list_filters_by_knowledge_base() -> None:
+    store = InMemoryConversationStore()
+    kb_a = store.create("t1", "u1", "question a", "kb-a")
+    kb_b = store.create("t1", "u1", "question b", "kb-b")
+
+    scoped, total = store.list("t1", "u1", 20, 0, "kb-a")
+    assert total == 1
+    assert scoped[0]["id"] == kb_a["id"]
+    assert scoped[0]["kb_id"] == "kb-a"
+
+    # Without a filter the owner still sees the full history.
+    everything, overall = store.list("t1", "u1", 20, 0)
+    assert overall == 2
+    assert {item["id"] for item in everything} == {kb_a["id"], kb_b["id"]}

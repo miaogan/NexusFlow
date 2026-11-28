@@ -20,6 +20,9 @@ service KnowledgeBaseService {
   rpc ListKnowledgeBases(ListKnowledgeBasesRequest) returns (ListKnowledgeBasesResponse);
   rpc UpdateKnowledgeBase(UpdateKnowledgeBaseRequest) returns (KnowledgeBaseResponse);
   rpc DeleteKnowledgeBase(DeleteKnowledgeBaseRequest) returns (DeleteKnowledgeBaseResponse);
+  // 网关内部路由解析：API Key 调用者没有 kb 级角色，需要只读地拿到 source_kb_id，
+  // 以便引用型知识库复用源库向量。该 RPC 不对外暴露。
+  rpc ResolveKnowledgeBase(ResolveKnowledgeBaseRequest) returns (ResolveKnowledgeBaseResponse);
 
   // 知识库级 RBAC：显式绑定用户或角色到 kb:admin / kb:editor / kb:viewer。
   rpc GrantKnowledgeBasePermission(GrantKnowledgeBasePermissionRequest) returns (KnowledgeBasePermissionResponse);
@@ -85,6 +88,8 @@ message KnowledgeBaseInfo {
   string status = 8;           // ACTIVE / ARCHIVED / DELETING
   string created_by = 9;
   string embedding_model = 10;
+  string source_kb_id = 11;    // 非空表示引用型：复用该源知识库的向量集合
+  bool read_only = 12;         // 引用型知识库不可上传/删除/重建索引
 }
 
 message KnowledgeBasePermissionInfo {
@@ -125,6 +130,8 @@ message ListKnowledgeBasePermissionsResponse {
 message CreateKnowledgeBaseRequest {
   string name = 1;
   string description = 2;
+  // source_kb_id 非空时创建“引用型知识库”：不复制文件与向量，检索直接复用源库。
+  string source_kb_id = 3;
 }
 
 message GetKnowledgeBaseRequest {
@@ -132,6 +139,16 @@ message GetKnowledgeBaseRequest {
 }
 
 message ListKnowledgeBasesRequest {}
+
+message ResolveKnowledgeBaseRequest {
+  string id = 1;
+}
+
+message ResolveKnowledgeBaseResponse {
+  string id = 1;
+  string name = 2;
+  string source_kb_id = 3;  // 非空表示引用型知识库，向量位于该源库
+}
 
 message UpdateKnowledgeBaseRequest {
   string id = 1;

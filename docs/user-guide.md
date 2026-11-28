@@ -2,6 +2,8 @@
 
 本指南面向使用 NexusFlow 控制台和 API 的业务与集成人员，覆盖从导入示例数据到日常使用的完整流程。
 
+- 首次使用建议先看 [快速上手](./quickstart.md)
+- 全部文档索引见 [文档中心](./README.md)
 - 部署与运维细节见 [deployment.md](./deployment.md)
 - 系统设计见 [architecture.md](./architecture.md)
 - 开发者命令与实现边界见 [README](../README.md)

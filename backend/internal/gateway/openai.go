@@ -133,7 +133,7 @@ func (g *Gateway) openAIChat(c *gin.Context) {
 
 	payload := ragChatRequest{
 		Message:      message,
-		KBID:         resolvedKB,
+		KBID:         g.kbIndexID(c, resolvedKB),
 		TopK:         req.TopK,
 		SystemPrompt: systemPrompt,
 		Temperature:  req.Temperature,

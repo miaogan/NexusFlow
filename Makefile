@@ -5,7 +5,7 @@ COMPOSE_ENV := $(if $(wildcard .env),--env-file .env,)
 
 .PHONY: proto build test test-go test-py test-agents test-rag test-eval vet fmt web-install web-dev web-build \
 	run-dev-all run-gateway run-workflow run-auth-service run-user-service up down \
-	eval-rag eval-rag-chat judge-rag analyze-feedback seed-demo
+	eval-rag eval-rag-chat judge-rag analyze-feedback seed-demo e2e-demo
 
 proto:
 	protoc -I proto \
@@ -69,6 +69,10 @@ down:
 # Import demo knowledge, accounts and an API key (requires a running stack).
 seed-demo:
 	python3 scripts/seed_demo_data.py
+
+# Walk one document through the whole pipeline and refresh the evidence report.
+e2e-demo:
+	python3 scripts/e2e_demo.py --output docs/e2e-evidence.md
 
 # Offline RAG evaluation (requires a running gateway + query service).
 eval-rag:

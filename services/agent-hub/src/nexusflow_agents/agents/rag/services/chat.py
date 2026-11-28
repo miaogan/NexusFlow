@@ -27,7 +27,11 @@ from nexusflow_agents.agents.rag.services.memory import ConversationMemory, Http
 from nexusflow_agents.agents.rag.services.reasoning import ApprovalPending, ReasoningLoop
 from nexusflow_agents.agents.rag.services.retrieval import RetrievalUnavailable
 from nexusflow_agents.agents.rag.services.skills import SkillRouter
-from nexusflow_agents.agents.rag.services.store import ConversationNotFound, ConversationStore
+from nexusflow_agents.agents.rag.services.store import (
+    ConversationKBError,
+    ConversationNotFound,
+    ConversationStore,
+)
 from nexusflow_agents.agents.rag.services.summary import ConversationSummarizer, HttpSummarizer
 from nexusflow_agents.core.audit import get_audit
 from nexusflow_agents.core.pii import MaskSession, get_pii_shield
@@ -370,8 +374,14 @@ class ChatService:
                 conv = self._store.get(tenant_id, user_id, req.conversation_id)
                 if conv is None:
                     raise ConversationNotFound("conversation not found")
+                if (conv.get("kb_id") or "default") != (req.kb_id or "default"):
+                    raise ConversationKBError(
+                        "conversation belongs to a different knowledge base"
+                    )
             else:
-                conv = self._store.create(tenant_id, user_id, message[:40])
+                conv = self._store.create(
+                    tenant_id, user_id, message[:40], req.kb_id or "default"
+                )
             history, summary = self._prepare_history(conv, tenant_id)
 
         memories = self._memory.recall(
@@ -541,9 +551,19 @@ class ChatService:
                 if conv is None:
                     yield {"type": "error", "error": "conversation not found"}
                     return
+                if (conv.get("kb_id") or "default") != (req.kb_id or "default"):
+                    yield {
+                        "type": "error",
+                        "error": "conversation belongs to a different knowledge base",
+                    }
+                    return
             else:
                 conv = await run_in_threadpool(
-                    self._store.create, tenant_id, user_id, message[:40]
+                    self._store.create,
+                    tenant_id,
+                    user_id,
+                    message[:40],
+                    req.kb_id or "default",
                 )
             history, summary = await run_in_threadpool(
                 self._prepare_history, conv, tenant_id
@@ -759,9 +779,14 @@ class ChatService:
         }
 
     def list_conversations(
-        self, tenant_id: str, user_id: str, limit: int, offset: int
+        self,
+        tenant_id: str,
+        user_id: str,
+        limit: int,
+        offset: int,
+        kb_id: str | None = None,
     ) -> ConversationListResponse:
-        items, total = self._store.list(tenant_id, user_id, limit, offset)
+        items, total = self._store.list(tenant_id, user_id, limit, offset, kb_id)
         return ConversationListResponse(
             conversations=items, total=total, limit=limit, offset=offset
         )
@@ -784,6 +809,7 @@ class ChatService:
         ]
         summary = {
             "id": conv["id"],
+            "kb_id": conv.get("kb_id") or "default",
             "title": conv["title"],
             "message_count": conv.get("message_count") or len(messages),
             "created_at": conv["created_at"],

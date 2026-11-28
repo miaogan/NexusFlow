@@ -1,4 +1,4 @@
-import type { DragEvent } from "react";
+import { useEffect, type DragEvent } from "react";
 import ReactFlow, {
   Background,
   BackgroundVariant,
@@ -23,6 +23,10 @@ interface Props {
   onConnect: OnConnect;
   onSelect: (node: PipelineNode | null) => void;
   onDropNode: (type: string, position: { x: number; y: number }) => void;
+  /** Increment to re-fit the viewport after a programmatic layout change. */
+  fitSignal?: number;
+  /** Published workflows are inspectable but not editable. */
+  readOnly?: boolean;
 }
 
 export default function WorkflowCanvas({
@@ -33,11 +37,22 @@ export default function WorkflowCanvas({
   onConnect,
   onSelect,
   onDropNode,
+  fitSignal = 0,
+  readOnly = false,
 }: Props) {
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, fitView } = useReactFlow();
+
+  useEffect(() => {
+    if (!fitSignal) return;
+    const timer = window.setTimeout(() => {
+      void fitView({ padding: 0.25, duration: 300 });
+    }, 40);
+    return () => window.clearTimeout(timer);
+  }, [fitSignal, fitView]);
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
+    if (readOnly) return;
     const type = event.dataTransfer.getData("application/nexusflow-node");
     if (!type) return;
     const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
@@ -53,6 +68,8 @@ export default function WorkflowCanvas({
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         nodeTypes={nodeTypes}
+        nodesDraggable={!readOnly}
+        nodesConnectable={!readOnly}
         onNodeClick={(_, node) => onSelect(node as PipelineNode)}
         onPaneClick={() => onSelect(null)}
         fitView

@@ -50,6 +50,7 @@ class ChatResponse(BaseModel):
 
 class ConversationSummary(BaseModel):
     id: str
+    kb_id: str = "default"
     title: str
     message_count: int
     created_at: str

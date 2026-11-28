@@ -273,6 +273,17 @@ func (g *Gateway) Router() *gin.Engine {
 	// Workflow DAG validation and execution (proxied to the Go engine).
 	v1.POST("/workflows/validate", RequirePermission("workflow:run"), g.workflowValidate)
 	v1.POST("/workflows/run", RequirePermission("workflow:run"), g.workflowRun)
+	// Saved workflow definitions (create / list / update / delete).
+	v1.GET("/workflows/definitions", RequirePermission("workflow:run"), g.workflowDefinitions)
+	v1.POST("/workflows/definitions", RequirePermission("workflow:run"), g.workflowDefinitionCreate)
+	v1.GET("/workflows/definitions/:id", RequirePermission("workflow:run"), g.workflowDefinitionDetail)
+	v1.PUT("/workflows/definitions/:id", RequirePermission("workflow:run"), g.workflowDefinitionUpdate)
+	v1.DELETE("/workflows/definitions/:id", RequirePermission("workflow:run"), g.workflowDefinitionDelete)
+	v1.POST("/workflows/definitions/:id/publish", RequirePermission("workflow:run"), g.workflowDefinitionPublish)
+	v1.POST("/workflows/definitions/:id/unpublish", RequirePermission("workflow:run"), g.workflowDefinitionUnpublish)
+	v1.GET("/workflows/definitions/:id/versions", RequirePermission("workflow:run"), g.workflowDefinitionVersions)
+	v1.POST("/workflows/definitions/:id/rollback", RequirePermission("workflow:run"), g.workflowDefinitionRollback)
+	v1.POST("/workflows/definitions/:id/duplicate", RequirePermission("workflow:run"), g.workflowDefinitionDuplicate)
 	// Persisted runs and human-in-the-loop approval.
 	v1.GET("/workflows/runs", RequirePermission("workflow:run"), g.workflowRuns)
 	v1.GET("/workflows/runs/:id", RequirePermission("workflow:run"), g.workflowRunDetail)
@@ -388,6 +399,9 @@ func (g *Gateway) uploadJSON(c *gin.Context) {
 	if !requireKBRole(c, role, identity.KBRoleEditor) {
 		return
 	}
+	if !g.requireWritableKB(c) {
+		return
+	}
 	if !g.allowUpload(c, body.FileSize) {
 		return
 	}
@@ -471,6 +485,9 @@ func (g *Gateway) uploadMultipart(c *gin.Context) {
 		return
 	}
 	if !requireKBRole(c, role, identity.KBRoleEditor) {
+		return
+	}
+	if !g.requireWritableKB(c) {
 		return
 	}
 	if !g.allowUpload(c, header.Size) {
@@ -578,7 +595,7 @@ func (g *Gateway) listTasks(c *gin.Context) {
 		Status: c.Query("status"),
 		Limit:  int32(limit),
 		Offset: int32(offset),
-		KbId:   kbID,
+		KbId:   g.kbIndexID(c, kbID),
 	})
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
@@ -612,7 +629,7 @@ func (g *Gateway) getTask(c *gin.Context) {
 		return
 	}
 	ctx, _ := g.callerContext(c)
-	resp, err := g.ingestion.GetTaskStatus(ctx, &pb.GetTaskStatusRequest{TaskId: c.Param("id"), KbId: kbID})
+	resp, err := g.ingestion.GetTaskStatus(ctx, &pb.GetTaskStatusRequest{TaskId: c.Param("id"), KbId: g.kbIndexID(c, kbID)})
 	if err != nil {
 		code, msg := grpcToHTTP(err)
 		c.JSON(code, gin.H{"error": msg})
@@ -640,6 +657,9 @@ func (g *Gateway) deleteTask(c *gin.Context) {
 		return
 	}
 	if !requireKBRole(c, role, identity.KBRoleEditor) {
+		return
+	}
+	if !g.requireWritableKB(c) {
 		return
 	}
 	ctx, _ := g.callerContext(c)
@@ -682,6 +702,9 @@ func (g *Gateway) reindexFile(c *gin.Context) {
 	if !requireKBRole(c, role, identity.KBRoleEditor) {
 		return
 	}
+	if !g.requireWritableKB(c) {
+		return
+	}
 	ctx, _ := g.callerContext(c)
 	resp, err := g.ingestion.ReindexTask(ctx, &pb.ReindexTaskRequest{TaskId: c.Param("id"), KbId: kbID})
 	if err != nil {
@@ -702,6 +725,9 @@ func (g *Gateway) retryTask(c *gin.Context) {
 		return
 	}
 	if !requireKBRole(c, role, identity.KBRoleEditor) {
+		return
+	}
+	if !g.requireWritableKB(c) {
 		return
 	}
 	ctx, _ := g.callerContext(c)
@@ -787,14 +813,16 @@ func (g *Gateway) search(c *gin.Context) {
 		filters[key] = value
 	}
 	ctx, principal := g.callerContext(c)
-	filters["kb_id"] = kbID
+	// Reference KBs read from their source collection; owned KBs read their own.
+	indexID := g.kbIndexID(c, kbID)
+	filters["kb_id"] = indexID
 	filters["tenant_id"] = principal.TenantID
 	resp, err := g.query.Search(ctx, &pb.SearchRequest{
 		Query:       body.Query,
 		Routes:      routes,
 		RerankModel: body.Rerank,
 		FinalTopN:   body.FinalTopN,
-		KbId:        kbID,
+		KbId:        indexID,
 		Filters:     filters,
 	})
 	if err != nil {

@@ -282,6 +282,7 @@ const (
 	KnowledgeBaseService_ListKnowledgeBases_FullMethodName            = "/vectorization.v1.KnowledgeBaseService/ListKnowledgeBases"
 	KnowledgeBaseService_UpdateKnowledgeBase_FullMethodName           = "/vectorization.v1.KnowledgeBaseService/UpdateKnowledgeBase"
 	KnowledgeBaseService_DeleteKnowledgeBase_FullMethodName           = "/vectorization.v1.KnowledgeBaseService/DeleteKnowledgeBase"
+	KnowledgeBaseService_ResolveKnowledgeBase_FullMethodName          = "/vectorization.v1.KnowledgeBaseService/ResolveKnowledgeBase"
 	KnowledgeBaseService_GrantKnowledgeBasePermission_FullMethodName  = "/vectorization.v1.KnowledgeBaseService/GrantKnowledgeBasePermission"
 	KnowledgeBaseService_RevokeKnowledgeBasePermission_FullMethodName = "/vectorization.v1.KnowledgeBaseService/RevokeKnowledgeBasePermission"
 	KnowledgeBaseService_ListKnowledgeBasePermissions_FullMethodName  = "/vectorization.v1.KnowledgeBaseService/ListKnowledgeBasePermissions"
@@ -298,6 +299,9 @@ type KnowledgeBaseServiceClient interface {
 	ListKnowledgeBases(ctx context.Context, in *ListKnowledgeBasesRequest, opts ...grpc.CallOption) (*ListKnowledgeBasesResponse, error)
 	UpdateKnowledgeBase(ctx context.Context, in *UpdateKnowledgeBaseRequest, opts ...grpc.CallOption) (*KnowledgeBaseResponse, error)
 	DeleteKnowledgeBase(ctx context.Context, in *DeleteKnowledgeBaseRequest, opts ...grpc.CallOption) (*DeleteKnowledgeBaseResponse, error)
+	// 网关内部路由解析：API Key 调用者没有 kb 级角色，需要只读地拿到 source_kb_id，
+	// 以便引用型知识库复用源库向量。该 RPC 不对外暴露。
+	ResolveKnowledgeBase(ctx context.Context, in *ResolveKnowledgeBaseRequest, opts ...grpc.CallOption) (*ResolveKnowledgeBaseResponse, error)
 	// 知识库级 RBAC：显式绑定用户或角色到 kb:admin / kb:editor / kb:viewer。
 	GrantKnowledgeBasePermission(ctx context.Context, in *GrantKnowledgeBasePermissionRequest, opts ...grpc.CallOption) (*KnowledgeBasePermissionResponse, error)
 	RevokeKnowledgeBasePermission(ctx context.Context, in *RevokeKnowledgeBasePermissionRequest, opts ...grpc.CallOption) (*DeleteKnowledgeBaseResponse, error)
@@ -362,6 +366,16 @@ func (c *knowledgeBaseServiceClient) DeleteKnowledgeBase(ctx context.Context, in
 	return out, nil
 }
 
+func (c *knowledgeBaseServiceClient) ResolveKnowledgeBase(ctx context.Context, in *ResolveKnowledgeBaseRequest, opts ...grpc.CallOption) (*ResolveKnowledgeBaseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveKnowledgeBaseResponse)
+	err := c.cc.Invoke(ctx, KnowledgeBaseService_ResolveKnowledgeBase_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *knowledgeBaseServiceClient) GrantKnowledgeBasePermission(ctx context.Context, in *GrantKnowledgeBasePermissionRequest, opts ...grpc.CallOption) (*KnowledgeBasePermissionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KnowledgeBasePermissionResponse)
@@ -403,6 +417,9 @@ type KnowledgeBaseServiceServer interface {
 	ListKnowledgeBases(context.Context, *ListKnowledgeBasesRequest) (*ListKnowledgeBasesResponse, error)
 	UpdateKnowledgeBase(context.Context, *UpdateKnowledgeBaseRequest) (*KnowledgeBaseResponse, error)
 	DeleteKnowledgeBase(context.Context, *DeleteKnowledgeBaseRequest) (*DeleteKnowledgeBaseResponse, error)
+	// 网关内部路由解析：API Key 调用者没有 kb 级角色，需要只读地拿到 source_kb_id，
+	// 以便引用型知识库复用源库向量。该 RPC 不对外暴露。
+	ResolveKnowledgeBase(context.Context, *ResolveKnowledgeBaseRequest) (*ResolveKnowledgeBaseResponse, error)
 	// 知识库级 RBAC：显式绑定用户或角色到 kb:admin / kb:editor / kb:viewer。
 	GrantKnowledgeBasePermission(context.Context, *GrantKnowledgeBasePermissionRequest) (*KnowledgeBasePermissionResponse, error)
 	RevokeKnowledgeBasePermission(context.Context, *RevokeKnowledgeBasePermissionRequest) (*DeleteKnowledgeBaseResponse, error)
@@ -431,6 +448,9 @@ func (UnimplementedKnowledgeBaseServiceServer) UpdateKnowledgeBase(context.Conte
 }
 func (UnimplementedKnowledgeBaseServiceServer) DeleteKnowledgeBase(context.Context, *DeleteKnowledgeBaseRequest) (*DeleteKnowledgeBaseResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteKnowledgeBase not implemented")
+}
+func (UnimplementedKnowledgeBaseServiceServer) ResolveKnowledgeBase(context.Context, *ResolveKnowledgeBaseRequest) (*ResolveKnowledgeBaseResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ResolveKnowledgeBase not implemented")
 }
 func (UnimplementedKnowledgeBaseServiceServer) GrantKnowledgeBasePermission(context.Context, *GrantKnowledgeBasePermissionRequest) (*KnowledgeBasePermissionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GrantKnowledgeBasePermission not implemented")
@@ -552,6 +572,24 @@ func _KnowledgeBaseService_DeleteKnowledgeBase_Handler(srv interface{}, ctx cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _KnowledgeBaseService_ResolveKnowledgeBase_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveKnowledgeBaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KnowledgeBaseServiceServer).ResolveKnowledgeBase(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KnowledgeBaseService_ResolveKnowledgeBase_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KnowledgeBaseServiceServer).ResolveKnowledgeBase(ctx, req.(*ResolveKnowledgeBaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _KnowledgeBaseService_GrantKnowledgeBasePermission_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GrantKnowledgeBasePermissionRequest)
 	if err := dec(in); err != nil {
@@ -632,6 +670,10 @@ var KnowledgeBaseService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteKnowledgeBase",
 			Handler:    _KnowledgeBaseService_DeleteKnowledgeBase_Handler,
+		},
+		{
+			MethodName: "ResolveKnowledgeBase",
+			Handler:    _KnowledgeBaseService_ResolveKnowledgeBase_Handler,
 		},
 		{
 			MethodName: "GrantKnowledgeBasePermission",

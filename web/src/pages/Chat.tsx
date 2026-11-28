@@ -92,12 +92,14 @@ export default function Chat() {
 
   const refreshConversations = useCallback(async () => {
     try {
-      const res = await listConversations();
-      setConversations(res.conversations);
+      // History is scoped to the active knowledge base so a conversation from
+      // another corpus never shows up with mismatched citations.
+      const res = await listConversations(20, 0, kbID);
+      setConversations(res.conversations ?? []);
     } catch {
       // Listing is best-effort; chat errors are surfaced separately.
     }
-  }, []);
+  }, [kbID]);
 
   useEffect(() => {
     void refreshConversations();

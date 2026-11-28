@@ -6,7 +6,7 @@
 
 完整设计见 [docs/architecture.md](docs/architecture.md)（系统架构设计文档 V4.0）。
 
-**文档导航**：[用户使用指南](docs/user-guide.md) · [部署与运维](docs/deployment.md) · [系统架构](docs/architecture.md)
+**文档导航**：[快速上手](docs/quickstart.md) · [用户使用指南](docs/user-guide.md) · [文档中心](docs/README.md) · [部署与运维](docs/deployment.md) · [系统架构](docs/architecture.md) · [项目海报](docs/poster.html)
 
 > 说明：设计文档标题为 V4.0，正文部分沿用了 V2.0 的演进叙述（“V2.0 新增 LlamaIndex 服务”等），属于保留的历史上下文，不影响当前架构与代码结构。
 
@@ -221,7 +221,7 @@ make web-dev        # http://localhost:5173
 python scripts/seed_demo_data.py
 ```
 
-详见 [用户使用指南](docs/user-guide.md)。
+详见 [用户使用指南](docs/user-guide.md)；想按步骤快速体验，见 [快速上手](docs/quickstart.md)。
 
 ### 3. 完整容器编排
 

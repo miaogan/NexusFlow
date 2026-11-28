@@ -100,9 +100,9 @@ func (idx *Indexer) Handle(ctx context.Context, msg queue.Message) error {
 	case state.Parsed:
 		start = 0
 	case state.Reindexing:
-		// In-place rebuild: the parsed markdown is re-indexed and chunking
-		// advances straight to CHUNKED.
-		start = 1
+		// In-place rebuild: re-run chunking from the persisted markdown, then
+		// advance CHUNKED -> EMBEDDED -> INDEXED -> COMPLETED.
+		start = 0
 	case state.Chunked:
 		start = 1
 	case state.Embedded:

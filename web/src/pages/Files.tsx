@@ -17,8 +17,8 @@ import {
 } from "../components/ui";
 
 export default function Files() {
-  const { kbID, kbRole } = useOutletContext<LayoutContext>();
-  const canWrite = kbRole === "kb:admin" || kbRole === "kb:editor";
+  const { kbID, kbRole, kbReadOnly } = useOutletContext<LayoutContext>();
+  const canWrite = !kbReadOnly && (kbRole === "kb:admin" || kbRole === "kb:editor");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -98,9 +98,19 @@ export default function Files() {
     <div>
       <PageHeader
         title="文件管理"
-        description="上传异构文件，系统将自动完成解析、切块、向量化与索引"
+        description={
+          kbReadOnly
+            ? "引用型知识库：文件与向量来自源知识库，此处只读"
+            : "上传异构文件，系统将自动完成解析、切块、向量化与索引"
+        }
         actions={<Button variant="ghost" onClick={refresh}>刷新</Button>}
       />
+
+      {kbReadOnly && (
+        <div className="panel mb-4 p-3 text-xs text-sky-300">
+          当前为引用型知识库，检索直接复用源库已向量化的数据；请切换到源知识库上传或删除文件。
+        </div>
+      )}
 
       <Card title="上传文件">
         <div
@@ -127,8 +137,14 @@ export default function Files() {
             <><Spinner className="mb-2" /><p className="text-xs text-slate-400">上传中…</p></>
           ) : !canWrite ? (
             <>
-              <p className="text-sm text-slate-300">当前知识库为只读角色</p>
-              <p className="mt-1 text-[10px] text-slate-500">需要编辑者或管理员权限才能上传文件</p>
+              <p className="text-sm text-slate-300">
+                {kbReadOnly ? "引用型知识库为只读" : "当前知识库为只读角色"}
+              </p>
+              <p className="mt-1 text-[10px] text-slate-500">
+                {kbReadOnly
+                  ? "文件与向量来自源知识库，请切换到源库上传"
+                  : "需要编辑者或管理员权限才能上传文件"}
+              </p>
             </>
           ) : (
             <>

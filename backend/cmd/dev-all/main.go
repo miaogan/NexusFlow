@@ -354,6 +354,7 @@ func main() {
 			wfEngine, wfRegistry,
 			workflow.WithServiceToken(cfg.WorkflowServiceToken),
 			workflow.WithRunStore(wfRunStore),
+			workflow.WithDefinitionStore(workflow.DefinitionStoreFor(wfRunStore)),
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

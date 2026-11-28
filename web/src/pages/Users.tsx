@@ -61,12 +61,8 @@ export default function Users() {
   };
 
   // ----- create user form -----
-  const [uForm, setUForm] = useState({ username: "", password: "", email: "", roles: ["viewer"] as string[] });
-  const toggleUserRole = (name: string) =>
-    setUForm((f) => ({
-      ...f,
-      roles: f.roles.includes(name) ? f.roles.filter((r) => r !== name) : [...f.roles, name],
-    }));
+  const [uForm, setUForm] = useState({ username: "", password: "", email: "", role: "viewer" });
+  const setUserRole = (name: string) => setUForm((f) => ({ ...f, role: name }));
 
   const submitCreateUser = async () => {
     if (!uForm.username.trim() || !uForm.password) return;
@@ -75,9 +71,9 @@ export default function Users() {
         username: uForm.username.trim(),
         password: uForm.password,
         email: uForm.email.trim() || undefined,
-        roles: uForm.roles,
+        roles: [uForm.role],
       });
-      setUForm({ username: "", password: "", email: "", roles: ["viewer"] });
+      setUForm({ username: "", password: "", email: "", role: "viewer" });
       flash("用户已创建");
       await reload(query);
     } catch (e) {
@@ -260,15 +256,18 @@ export default function Users() {
                   className={inputClass}
                 />
                 <div>
-                  <p className="mb-1 text-[10px] text-slate-500">角色</p>
+                  <p className="mb-1 text-[10px] text-slate-500">
+                    角色（单选，互斥）
+                  </p>
                   <div className="flex flex-wrap gap-1.5">
                     {roles.map((r) => (
                       <button
                         key={r.name}
                         type="button"
-                        onClick={() => toggleUserRole(r.name)}
+                        onClick={() => setUserRole(r.name)}
+                        title={r.description || undefined}
                         className={`rounded-md border px-2 py-1 text-[10px] transition ${
-                          uForm.roles.includes(r.name)
+                          uForm.role === r.name
                             ? "border-accent/40 bg-accent/10 text-accent"
                             : "border-white/10 text-slate-400 hover:text-slate-200"
                         }`}
@@ -277,6 +276,9 @@ export default function Users() {
                       </button>
                     ))}
                   </div>
+                  <p className="mt-1 text-[10px] text-slate-600">
+                    一个账号只承载一个角色，权限由该角色的权限点决定。
+                  </p>
                 </div>
                 <Button
                   onClick={submitCreateUser}

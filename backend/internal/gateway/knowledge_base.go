@@ -13,6 +13,8 @@ import (
 type knowledgeBaseReq struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	// SourceKBID creates a reference KB that reuses another KB's vectors.
+	SourceKBID string `json:"source_kb_id"`
 }
 
 type knowledgeBasePermissionReq struct {
@@ -47,7 +49,7 @@ func (g *Gateway) createKnowledgeBase(c *gin.Context) {
 	}
 	ctx, _ := g.callerContext(c)
 	res, err := g.knowledgeBases.CreateKnowledgeBase(ctx, &pb.CreateKnowledgeBaseRequest{
-		Name: body.Name, Description: body.Description,
+		Name: body.Name, Description: body.Description, SourceKbId: body.SourceKBID,
 	})
 	if err != nil {
 		writeIdentityError(c, err)
@@ -147,8 +149,16 @@ func (g *Gateway) listKnowledgeBasePermissions(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"permissions": res.GetPermissions()})
 }
 
+// Context keys recording how a logical KB maps onto vector storage.
+const (
+	ctxKeyKBIndexID  = "gateway.kb.index_id"
+	ctxKeyKBReadOnly = "gateway.kb.read_only"
+)
+
 // resolveKnowledgeBase validates that the requested namespace exists and is
-// visible to the caller, returning the caller's effective kb role.
+// visible to the caller, returning the caller's effective kb role. It also
+// records the KB whose vectors back this namespace: reference KBs reuse their
+// source collection instead of owning one.
 func (g *Gateway) resolveKnowledgeBase(c *gin.Context, rawID string) (string, string, bool) {
 	id := strings.TrimSpace(rawID)
 	// API keys are not users in the identity store, so they carry their own
@@ -167,6 +177,25 @@ func (g *Gateway) resolveKnowledgeBase(c *gin.Context, rawID string) (string, st
 			})
 			return "", "", false
 		}
+		// API keys are not identity users, so they cannot use the role-checked
+		// GetKnowledgeBase path. Resolve routing metadata through the internal
+		// helper after the allow-list check above.
+		indexID := id
+		if g.knowledgeBases != nil {
+			ctx, _ := g.callerContext(c)
+			res, err := g.knowledgeBases.ResolveKnowledgeBase(
+				ctx, &pb.ResolveKnowledgeBaseRequest{Id: id},
+			)
+			if err != nil {
+				writeIdentityError(c, err)
+				return "", "", false
+			}
+			if source := res.GetSourceKbId(); source != "" {
+				indexID = source
+			}
+		}
+		c.Set(ctxKeyKBIndexID, indexID)
+		c.Set(ctxKeyKBReadOnly, indexID != id)
 		return id, identity.KBRoleViewer, true
 	}
 	if g.knowledgeBases == nil {
@@ -182,7 +211,45 @@ func (g *Gateway) resolveKnowledgeBase(c *gin.Context, rawID string) (string, st
 		writeIdentityError(c, err)
 		return "", "", false
 	}
-	return id, res.GetKnowledgeBase().GetRole(), true
+	kb := res.GetKnowledgeBase()
+	indexID := kb.GetSourceKbId()
+	if indexID == "" {
+		indexID = kb.GetId()
+	}
+	c.Set(ctxKeyKBIndexID, indexID)
+	c.Set(ctxKeyKBReadOnly, kb.GetSourceKbId() != "")
+	return id, kb.GetRole(), true
+}
+
+// kbIndexID returns the KB that owns the vector/graph storage for this request.
+func (g *Gateway) kbIndexID(c *gin.Context, fallback string) string {
+	if value, ok := c.Get(ctxKeyKBIndexID); ok {
+		if indexID, _ := value.(string); indexID != "" {
+			return indexID
+		}
+	}
+	return fallback
+}
+
+// kbReadOnly reports whether the active namespace is a reference KB.
+func (g *Gateway) kbReadOnly(c *gin.Context) bool {
+	value, ok := c.Get(ctxKeyKBReadOnly)
+	if !ok {
+		return false
+	}
+	readOnly, _ := value.(bool)
+	return readOnly
+}
+
+// requireWritableKB rejects mutations against reference KBs with a clear error.
+func (g *Gateway) requireWritableKB(c *gin.Context) bool {
+	if !g.kbReadOnly(c) {
+		return true
+	}
+	c.JSON(http.StatusConflict, gin.H{
+		"error": "reference knowledge base is read-only; mutate the source knowledge base instead",
+	})
+	return false
 }
 
 // requireKBRole rejects callers below the minimum kb role with 403.

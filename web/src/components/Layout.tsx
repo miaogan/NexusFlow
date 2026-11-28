@@ -33,7 +33,7 @@ const NAV: NavItem[] = [
   { to: "/sandbox", label: "沙箱 Playground" },
 ];
 
-export type LayoutContext = { kbID: string; kbRole: string };
+export type LayoutContext = { kbID: string; kbRole: string; kbReadOnly: boolean };
 
 export default function Layout() {
   const navigate = useNavigate();
@@ -47,6 +47,7 @@ export default function Layout() {
   const [busy, setBusy] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
+  const [newSource, setNewSource] = useState("");
   const [editID, setEditID] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDesc, setEditDesc] = useState("");
@@ -144,9 +145,14 @@ export default function Layout() {
     setBusy(true);
     setKbError(null);
     try {
-      const res = await createKnowledgeBase({ name: newName.trim(), description: newDesc.trim() });
+      const res = await createKnowledgeBase({
+        name: newName.trim(),
+        description: newDesc.trim(),
+        source_kb_id: newSource || undefined,
+      });
       setNewName("");
       setNewDesc("");
+      setNewSource("");
       await loadKBs();
       if (res.knowledge_base?.id) switchKB(res.knowledge_base.id);
     } catch (e) {
@@ -286,6 +292,14 @@ export default function Layout() {
                     {KB_ROLE_LABELS[activeKB.role] ?? activeKB.role}
                   </span>
                 )}
+                {activeKB?.source_kb_id && (
+                  <span
+                    className="rounded bg-sky-500/10 px-1.5 py-0.5 text-[9px] text-sky-300"
+                    title="引用型知识库：复用源库已向量化的数据，只读"
+                  >
+                    引用 · {kbs.find((kb) => kb.id === activeKB.source_kb_id)?.name ?? activeKB.source_kb_id}
+                  </span>
+                )}
                 {(canWriteKB || activeKB?.role === "kb:admin") && (
                   <Button
                     variant="ghost"
@@ -325,7 +339,13 @@ export default function Layout() {
         </header>
 
         <main className="flex-1 overflow-auto p-6">
-          <Outlet context={{ kbID, kbRole: currentRole } satisfies LayoutContext} />
+          <Outlet
+            context={{
+              kbID,
+              kbRole: currentRole,
+              kbReadOnly: Boolean(activeKB?.source_kb_id),
+            } satisfies LayoutContext}
+          />
         </main>
       </div>
 
@@ -363,6 +383,25 @@ export default function Layout() {
                 placeholder="描述（可选）"
                 className="w-full rounded-lg border border-white/10 bg-ink-950 px-3 py-1.5 text-xs text-slate-200 outline-none focus:border-accent/40"
               />
+              <select
+                value={newSource}
+                onChange={(e) => setNewSource(e.target.value)}
+                className="w-full rounded-lg border border-white/10 bg-ink-950 px-3 py-1.5 text-xs text-slate-200 outline-none focus:border-accent/40"
+              >
+                <option value="">独立知识库（自行上传并向量化）</option>
+                {kbs
+                  .filter((kb) => !kb.source_kb_id)
+                  .map((kb) => (
+                    <option key={kb.id} value={kb.id}>
+                      引用「{kb.name}」的已向量化数据
+                    </option>
+                  ))}
+              </select>
+              {newSource && (
+                <p className="text-[10px] leading-relaxed text-sky-300">
+                  引用型知识库只读：检索与问答直接复用源库向量，不会重复上传或 embedding。
+                </p>
+              )}
               <Button disabled={busy || !newName.trim()} onClick={() => void handleCreate()}>
                 创建
               </Button>
@@ -403,6 +442,11 @@ export default function Layout() {
                           )}
                           {kb.id === "default" && (
                             <span className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] text-slate-500">默认</span>
+                          )}
+                          {kb.source_kb_id && (
+                            <span className="rounded bg-sky-500/10 px-1.5 py-0.5 text-[9px] text-sky-300">
+                              引用 · {kbs.find((item) => item.id === kb.source_kb_id)?.name ?? kb.source_kb_id}
+                            </span>
                           )}
                         </p>
                         <p className="mt-0.5 break-words text-[10px] text-slate-500">

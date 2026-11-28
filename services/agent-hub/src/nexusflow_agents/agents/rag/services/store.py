@@ -20,8 +20,14 @@ class ConversationNotFound(Exception):
     """Raised when a conversation does not exist for the given owner."""
 
 
+class ConversationKBError(Exception):
+    """Raised when a conversation is used from a different knowledge base."""
+
+
 class ConversationStore(Protocol):
-    def create(self, tenant_id: str, user_id: str, title: str) -> dict[str, Any]: ...
+    def create(
+        self, tenant_id: str, user_id: str, title: str, kb_id: str = "default"
+    ) -> dict[str, Any]: ...
 
     def get(
         self, tenant_id: str, user_id: str, conversation_id: str
@@ -40,16 +46,24 @@ class ConversationStore(Protocol):
     ) -> None: ...
 
     def list(
-        self, tenant_id: str, user_id: str, limit: int, offset: int
+        self,
+        tenant_id: str,
+        user_id: str,
+        limit: int,
+        offset: int,
+        kb_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]: ...
 
 
-def _new_conversation(tenant_id: str, user_id: str, title: str) -> dict[str, Any]:
+def _new_conversation(
+    tenant_id: str, user_id: str, title: str, kb_id: str = "default"
+) -> dict[str, Any]:
     ts = _now()
     return {
         "id": uuid.uuid4().hex,
         "tenant_id": tenant_id,
         "user_id": user_id,
+        "kb_id": kb_id or "default",
         "title": title,
         "created_at": ts,
         "updated_at": ts,
@@ -76,6 +90,7 @@ def _new_message(
 
 def _summary(conv: dict[str, Any]) -> dict[str, Any]:
     out = {k: conv[k] for k in ("id", "title", "created_at", "updated_at")}
+    out["kb_id"] = conv.get("kb_id") or "default"
     out["message_count"] = conv.get("message_count") or len(conv.get("messages", []))
     return out
 
@@ -87,8 +102,10 @@ class InMemoryConversationStore:
         self._lock = threading.Lock()
         self._conversations: dict[str, dict[str, Any]] = {}
 
-    def create(self, tenant_id: str, user_id: str, title: str) -> dict[str, Any]:
-        conv = _new_conversation(tenant_id, user_id, title)
+    def create(
+        self, tenant_id: str, user_id: str, title: str, kb_id: str = "default"
+    ) -> dict[str, Any]:
+        conv = _new_conversation(tenant_id, user_id, title, kb_id)
         with self._lock:
             self._conversations[conv["id"]] = conv
         return _summary(conv)
@@ -132,13 +149,20 @@ class InMemoryConversationStore:
             conv["summary_count"] = summary_count
 
     def list(
-        self, tenant_id: str, user_id: str, limit: int, offset: int
+        self,
+        tenant_id: str,
+        user_id: str,
+        limit: int,
+        offset: int,
+        kb_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         with self._lock:
             owned = [
                 c
                 for c in self._conversations.values()
-                if c["tenant_id"] == tenant_id and c["user_id"] == user_id
+                if c["tenant_id"] == tenant_id
+                and c["user_id"] == user_id
+                and (kb_id is None or (c.get("kb_id") or "default") == kb_id)
             ]
             owned.sort(key=lambda c: (c["updated_at"], c["id"]), reverse=True)
             total = len(owned)
@@ -170,6 +194,7 @@ class PostgresConversationStore:
                     id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
+                    kb_id TEXT NOT NULL DEFAULT 'default',
                     title TEXT NOT NULL,
                     summary TEXT NOT NULL DEFAULT '',
                     summary_count INTEGER NOT NULL DEFAULT 0,
@@ -177,6 +202,11 @@ class PostgresConversationStore:
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """
+            )
+            # Isolate history per knowledge base; older rows default to "default".
+            conn.execute(
+                "ALTER TABLE rag_conversations "
+                "ADD COLUMN IF NOT EXISTS kb_id TEXT NOT NULL DEFAULT 'default'"
             )
             # Add the compaction columns to databases created before summaries.
             conn.execute(
@@ -191,6 +221,12 @@ class PostgresConversationStore:
                 """
                 CREATE INDEX IF NOT EXISTS rag_conversations_owner_idx
                 ON rag_conversations (tenant_id, user_id, updated_at DESC)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS rag_conversations_kb_idx
+                ON rag_conversations (tenant_id, user_id, kb_id, updated_at DESC)
                 """
             )
             conn.execute(
@@ -213,16 +249,18 @@ class PostgresConversationStore:
                 """
             )
 
-    def create(self, tenant_id: str, user_id: str, title: str) -> dict[str, Any]:
+    def create(
+        self, tenant_id: str, user_id: str, title: str, kb_id: str = "default"
+    ) -> dict[str, Any]:
         conv_id = uuid.uuid4().hex
         with self._connect() as conn:
             row = conn.execute(
                 """
-                INSERT INTO rag_conversations (id, tenant_id, user_id, title)
-                VALUES (%s, %s, %s, %s)
-                RETURNING id, title, created_at, updated_at
+                INSERT INTO rag_conversations (id, tenant_id, user_id, kb_id, title)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id, kb_id, title, created_at, updated_at
                 """,
-                (conv_id, tenant_id, user_id, title),
+                (conv_id, tenant_id, user_id, kb_id or "default", title),
             ).fetchone()
         return {**_row(row), "message_count": 0}
 
@@ -232,7 +270,7 @@ class PostgresConversationStore:
         with self._connect() as conn:
             conv = conn.execute(
                 """
-                SELECT id, title, summary, summary_count, created_at, updated_at
+                SELECT id, kb_id, title, summary, summary_count, created_at, updated_at
                 FROM rag_conversations
                 WHERE id = %s AND tenant_id = %s AND user_id = %s
                 """,
@@ -297,24 +335,34 @@ class PostgresConversationStore:
             )
 
     def list(
-        self, tenant_id: str, user_id: str, limit: int, offset: int
+        self,
+        tenant_id: str,
+        user_id: str,
+        limit: int,
+        offset: int,
+        kb_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
+        where = "tenant_id = %s AND user_id = %s"
+        params: list[Any] = [tenant_id, user_id]
+        if kb_id:
+            where += " AND kb_id = %s"
+            params.append(kb_id)
         with self._connect() as conn:
             total = conn.execute(
-                "SELECT count(*) AS n FROM rag_conversations WHERE tenant_id = %s AND user_id = %s",
-                (tenant_id, user_id),
+                f"SELECT count(*) AS n FROM rag_conversations WHERE {where}",
+                params,
             ).fetchone()["n"]
             rows = conn.execute(
-                """
-                SELECT c.id, c.title, c.created_at, c.updated_at,
+                f"""
+                SELECT c.id, c.kb_id, c.title, c.created_at, c.updated_at,
                        (SELECT count(*) FROM rag_messages m
                         WHERE m.conversation_id = c.id) AS message_count
                 FROM rag_conversations c
-                WHERE c.tenant_id = %s AND c.user_id = %s
+                WHERE {where}
                 ORDER BY c.updated_at DESC, c.id DESC
                 LIMIT %s OFFSET %s
                 """,
-                (tenant_id, user_id, limit, offset),
+                [*params, limit, offset],
             ).fetchall()
         return [{**_row(r), "message_count": int(r["message_count"])} for r in rows], int(
             total
@@ -324,6 +372,7 @@ class PostgresConversationStore:
 def _row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": row["id"],
+        "kb_id": row.get("kb_id") or "default",
         "title": row["title"],
         "created_at": _iso(row["created_at"]),
         "updated_at": _iso(row["updated_at"]),

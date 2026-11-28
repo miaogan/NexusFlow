@@ -62,6 +62,41 @@ var runStoreSchema = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_wf_approvals_pending
 		ON workflow_approvals (tenant_id, decision, created_at DESC)`,
+	`CREATE TABLE IF NOT EXISTS workflow_definitions (
+		id              VARCHAR(64) PRIMARY KEY,
+		tenant_id       VARCHAR(64) NOT NULL,
+		name            VARCHAR(200) NOT NULL,
+		description     TEXT NOT NULL DEFAULT '',
+		category        VARCHAR(32) NOT NULL DEFAULT '',
+		dag             JSONB NOT NULL DEFAULT '{}'::jsonb,
+		layout          JSONB NOT NULL DEFAULT '{}'::jsonb,
+		created_by      VARCHAR(64) NOT NULL DEFAULT '',
+		created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+	`ALTER TABLE workflow_definitions
+		ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'draft'`,
+	`ALTER TABLE workflow_definitions
+		ADD COLUMN IF NOT EXISTS version INT NOT NULL DEFAULT 0`,
+	`ALTER TABLE workflow_definitions
+		ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ`,
+	`CREATE INDEX IF NOT EXISTS idx_wf_definitions_tenant
+		ON workflow_definitions (tenant_id, updated_at DESC)`,
+	`CREATE TABLE IF NOT EXISTS workflow_definition_versions (
+		definition_id   VARCHAR(64) NOT NULL,
+		tenant_id       VARCHAR(64) NOT NULL,
+		version         INT NOT NULL,
+		name            VARCHAR(200) NOT NULL,
+		description     TEXT NOT NULL DEFAULT '',
+		category        VARCHAR(32) NOT NULL DEFAULT '',
+		dag             JSONB NOT NULL DEFAULT '{}'::jsonb,
+		layout          JSONB NOT NULL DEFAULT '{}'::jsonb,
+		created_by      VARCHAR(64) NOT NULL DEFAULT '',
+		published_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		PRIMARY KEY (definition_id, version)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_wf_versions_tenant
+		ON workflow_definition_versions (tenant_id, definition_id, version DESC)`,
 }
 
 // PostgresRunStore persists workflow checkpoints and their human-approval

@@ -197,6 +197,7 @@ export interface ChatResponse {
 
 export interface ConversationSummary {
   id: string;
+  kb_id?: string;
   title: string;
   message_count: number;
   created_at: string;
@@ -273,6 +274,9 @@ export interface KnowledgeBase {
   status?: string;
   created_by?: string;
   embedding_model?: string;
+  /** Non-empty for reference KBs: the source KB that owns files and vectors. */
+  source_kb_id?: string;
+  read_only?: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -343,7 +347,8 @@ export interface SubAgentSandboxSummary {
 export interface SubAgentRecord {
   name: string;
   tenant_id: string;
-  kind: "http" | "sandbox";
+  /** `local` marks the hub's built-in read-only agents. */
+  kind: "http" | "sandbox" | "local";
   capabilities: string[];
   endpoint: string;
   priority: number;
@@ -535,6 +540,48 @@ export interface AuditEvent {
   decision: string;
   status: string;
   detail: Record<string, unknown>;
+}
+
+export interface WorkflowLayoutPoint {
+  x: number;
+  y: number;
+}
+
+export interface WorkflowDefinition {
+  id: string;
+  tenant_id: string;
+  name: string;
+  description?: string;
+  category?: string;
+  dag: Dag;
+  layout?: Record<string, WorkflowLayoutPoint>;
+  status: "draft" | "published";
+  version: number;
+  published_at?: string | null;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkflowDefinitionVersion {
+  definition_id: string;
+  tenant_id: string;
+  version: number;
+  name: string;
+  description?: string;
+  category?: string;
+  dag: Dag;
+  layout?: Record<string, WorkflowLayoutPoint>;
+  created_by?: string;
+  published_at: string;
+}
+
+export interface WorkflowDefinitionInput {
+  name: string;
+  description?: string;
+  category?: string;
+  dag: Dag;
+  layout?: Record<string, WorkflowLayoutPoint>;
 }
 
 export type { Edge };

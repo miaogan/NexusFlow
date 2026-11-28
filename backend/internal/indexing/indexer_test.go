@@ -134,6 +134,29 @@ func TestIndexer_ResumesFromPartialState(t *testing.T) {
 	}
 }
 
+// A reindex must start at CHUNKED: the state machine does not allow
+// REINDEXING -> EMBEDDED, so skipping chunking would dead-letter the task.
+func TestIndexer_ReindexingStartsFromChunking(t *testing.T) {
+	st, _ := state.NewStore("memory", "")
+	seedTask(t, st, "task-1", "t1", state.Completed)
+	if _, err := st.Transition(context.Background(), "task-1", state.Reindexing, ""); err != nil {
+		t.Fatalf("transition to REINDEXING: %v", err)
+	}
+	idx := &stubIndexer{}
+	i := New(idx, st, slog.Default())
+	payload, _ := json.Marshal(parsedEvent{TaskID: "task-1", TenantID: "t1", Markdown: "# hi"})
+	if err := i.Handle(context.Background(), queue.Message{Payload: payload}); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	task, _, _ := st.Get(context.Background(), "task-1")
+	if task.State != state.Completed {
+		t.Fatalf("state = %s, want COMPLETED", task.State)
+	}
+	if idx.calls != 1 {
+		t.Fatalf("index calls = %d, want 1", idx.calls)
+	}
+}
+
 type captureEvents struct {
 	events []webhook.Event
 }

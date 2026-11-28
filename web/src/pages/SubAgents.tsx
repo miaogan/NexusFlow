@@ -47,6 +47,32 @@ function errMsg(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+const HTTP_EXAMPLE = `{
+  "name": "expense.agent",
+  "kind": "http",
+  "capabilities": ["agent.call"],
+  "endpoint": "http://my-agent:9000/v1/call",
+  "skills": ["expense.approval"],
+  "priority": 100,
+  "timeout_ms": 5000,
+  "risk": "read"
+}`;
+
+const SANDBOX_EXAMPLE = `{
+  "name": "chart.agent",
+  "kind": "sandbox",
+  "capabilities": ["agent.call"],
+  "skills": ["chart.render"],
+  "priority": 120,
+  "risk": "execute",
+  "sandbox": {
+    "runtime": "python",
+    "timeout_seconds": 10,
+    "packages": ["numpy"],
+    "code": "import json, sys\\ninp = json.load(sys.stdin)\\nprint(json.dumps({'echo': inp}))"
+  }
+}`;
+
 function splitCSV(value: string): string[] {
   return value
     .split(",")
@@ -70,8 +96,16 @@ export default function SubAgents() {
   const [testing, setTesting] = useState(false);
 
   const current = useMemo(
-    () => agents.find((agent) => agent.name === selected) ?? null,
+    () => agents.find((agent) => agent.name === selected && agent.tenant_id) ?? null,
     [agents, selected],
+  );
+  const builtins = useMemo(
+    () => agents.filter((agent) => !agent.tenant_id || agent.kind === "local"),
+    [agents],
+  );
+  const customAgents = useMemo(
+    () => agents.filter((agent) => agent.tenant_id && agent.kind !== "local"),
+    [agents],
   );
 
   const reload = useCallback(async () => {
@@ -79,8 +113,15 @@ export default function SubAgents() {
     setError(null);
     try {
       const [agentRes, skillRes] = await Promise.all([listSubAgents(), listSkills()]);
-      setAgents(agentRes.agents);
-      setSkills(skillRes.skills);
+      // Empty repeated fields arrive as JSON null; normalize before rendering.
+      setAgents(
+        (agentRes.agents ?? []).map((agent) => ({
+          ...agent,
+          capabilities: agent.capabilities ?? [],
+          skills: agent.skills ?? [],
+        })),
+      );
+      setSkills(skillRes.skills ?? []);
     } catch (error_) {
       setError(errMsg(error_));
     } finally {
@@ -101,7 +142,7 @@ export default function SubAgents() {
     setSelected(agent.name);
     setForm({
       name: agent.name,
-      kind: agent.kind,
+      kind: agent.kind === "sandbox" ? "sandbox" : "http",
       capabilities: agent.capabilities.join(", "),
       skills: agent.skills.join(", "),
       endpoint: agent.endpoint,
@@ -208,8 +249,8 @@ export default function SubAgents() {
   return (
     <div>
       <PageHeader
-        title="自定义 SubAgent"
-        description="按租户注册 HTTP / Sandbox Agent，供动态技能路由与在线调试使用"
+        title="SubAgent 管理"
+        description="内置 Agent 只读展示；按标准注册 HTTP / Sandbox Agent，供动态技能路由与在线调试"
         actions={
           <>
             <Button variant="ghost" onClick={() => void reload()} disabled={loading || busy}>
@@ -231,20 +272,58 @@ export default function SubAgents() {
       {notice && <div className="panel mb-4 p-3 text-xs text-emerald-300">{notice}</div>}
 
       <div className="grid gap-4 xl:grid-cols-[1fr,1.1fr]">
-        <Card
-          title={`SubAgent · ${agents.length}`}
-          action={loading ? <Spinner className="h-3 w-3" /> : undefined}
-        >
-          {agents.length === 0 && !loading ? (
-            <EmptyState
-              title="暂无自定义 SubAgent"
-              hint="点击“新建”注册 HTTP Agent 或 Sandbox Agent；内置 Agent 不在此列表。"
-            />
-          ) : (
-            <ul className="space-y-2">
-              {agents
-                .filter((agent) => agent.tenant_id)
-                .map((agent) => (
+        <div className="space-y-4">
+          <Card title={`内置 Agent · ${builtins.length}`}>
+            <p className="mb-3 text-[10px] leading-relaxed text-slate-500">
+              由 agent-hub 启动时注册，供意图识别、摘要与记忆链路使用；只读，不可编辑或删除。
+            </p>
+            {builtins.length === 0 ? (
+              <p className="text-xs text-slate-500">agent-hub 未开启内置 Agent。</p>
+            ) : (
+              <ul className="space-y-2">
+                {builtins.map((agent) => (
+                  <li
+                    key={`builtin/${agent.name}`}
+                    className="rounded-lg border border-white/5 bg-white/[0.02] p-3"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-medium text-slate-200">{agent.name}</span>
+                      <Tag>{agent.kind}</Tag>
+                      <span className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] text-slate-400">
+                        内置 · 只读
+                      </span>
+                      <span className="ml-auto text-[9px] text-slate-500">
+                        risk {agent.risk} · priority {agent.priority}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {agent.capabilities.map((capability) => (
+                        <span
+                          key={capability}
+                          className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] text-slate-400"
+                        >
+                          {capability}
+                        </span>
+                      ))}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+
+          <Card
+            title={`自定义 SubAgent · ${customAgents.length}`}
+            action={loading ? <Spinner className="h-3 w-3" /> : undefined}
+          >
+            {customAgents.length === 0 && !loading ? (
+              <EmptyState
+                title="暂无自定义 SubAgent"
+                hint="点击“新建”注册 HTTP Agent 或 Sandbox Agent；内置 Agent 不在此列表。"
+              />
+            ) : (
+              <ul className="space-y-2">
+                {customAgents.map((agent) => (
                   <li
                     key={`${agent.tenant_id}/${agent.name}`}
                     className={`cursor-pointer rounded-lg border p-3 transition ${
@@ -299,7 +378,8 @@ export default function SubAgents() {
                 ))}
             </ul>
           )}
-        </Card>
+          </Card>
+        </div>
 
         <div className="space-y-4">
           <Card
@@ -530,6 +610,41 @@ export default function SubAgents() {
                 ))}
               </ul>
             )}
+          </Card>
+
+          <Card title="创建标准与示例">
+            <ol className="list-decimal space-y-1 pl-4 text-[10px] leading-relaxed text-slate-400">
+              <li>
+                命名使用小写字母、数字和点（如 <code>expense.agent</code>），同租户内唯一；
+                <code>local.*</code> 为内置保留前缀。
+              </li>
+              <li>
+                <code>capabilities</code> 至少一个，需与调用方声明一致（如
+                <code>agent.call</code>）；<code>skills</code> 决定动态技能路由，priority 越小越优先。
+              </li>
+              <li>
+                HTTP Agent：<code>endpoint</code> 必须是可访问的 POST JSON 地址，返回{" "}
+                <code>{'{"ok":true,"data":{}}'}</code>，默认 5s 超时。
+              </li>
+              <li>
+                Sandbox Agent：runtime 支持 python / node，超时不超过 60s，代码从 stdin 读取
+                JSON、向 stdout 输出 JSON。
+              </li>
+              <li>
+                写入受 <code>AGENT_HUB_DYNAMIC_REGISTRATION</code> 控制；内置{" "}
+                <code>local.*</code> 只读，不能覆盖或删除。
+              </li>
+            </ol>
+            <div className="mt-3 space-y-2">
+              <p className="text-[10px] uppercase tracking-wider text-slate-500">HTTP 示例</p>
+              <pre className="max-h-52 overflow-auto rounded-lg border border-white/5 bg-ink-950 p-3 text-[10px] leading-relaxed text-slate-300">
+                {HTTP_EXAMPLE}
+              </pre>
+              <p className="text-[10px] uppercase tracking-wider text-slate-500">Sandbox 示例</p>
+              <pre className="max-h-56 overflow-auto rounded-lg border border-white/5 bg-ink-950 p-3 text-[10px] leading-relaxed text-slate-300">
+                {SANDBOX_EXAMPLE}
+              </pre>
+            </div>
           </Card>
         </div>
       </div>

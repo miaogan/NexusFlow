@@ -12,7 +12,7 @@ import (
 )
 
 const knowledgeBaseColumns = `id, tenant_id, name, description, embedding_model,
-	chunk_strategy, status, created_by, created_at, updated_at`
+	chunk_strategy, source_kb_id, status, created_by, created_at, updated_at`
 
 const kbPermissionColumns = `id, tenant_id, kb_id, subject_type, subject_id, permission, created_at`
 
@@ -45,10 +45,10 @@ func (s *PostgresStore) CreateKnowledgeBase(ctx context.Context, kb KnowledgeBas
 	}
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO knowledge_bases
-		 (id, tenant_id, name, description, embedding_model, chunk_strategy, status, created_by, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		 (id, tenant_id, name, description, embedding_model, chunk_strategy, source_kb_id, status, created_by, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		kb.ID, kb.TenantID, kb.Name, kb.Description, kb.EmbeddingModel,
-		strategy, kb.Status, kb.CreatedBy, kb.CreatedAt, kb.UpdatedAt,
+		strategy, kb.SourceKBID, kb.Status, kb.CreatedBy, kb.CreatedAt, kb.UpdatedAt,
 	)
 	if isUniqueViolation(err) {
 		return KnowledgeBase{}, ErrKnowledgeBaseExists
@@ -197,7 +197,7 @@ func scanKnowledgeBase(scanner rowScanner) (KnowledgeBase, error) {
 	)
 	if err := scanner.Scan(
 		&kb.ID, &kb.TenantID, &kb.Name, &kb.Description, &kb.EmbeddingModel,
-		&strategy, &kb.Status, &kb.CreatedBy, &kb.CreatedAt, &kb.UpdatedAt,
+		&strategy, &kb.SourceKBID, &kb.Status, &kb.CreatedBy, &kb.CreatedAt, &kb.UpdatedAt,
 	); err != nil {
 		return KnowledgeBase{}, err
 	}

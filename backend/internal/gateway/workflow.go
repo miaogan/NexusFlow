@@ -96,6 +96,65 @@ func (g *Gateway) workflowRuns(c *gin.Context) {
 	g.proxyWorkflow(c, http.MethodGet, path)
 }
 
+// Saved workflow definitions share the same tenant headers as runs so the
+// engine can scope each tenant's library.
+
+func (g *Gateway) workflowDefinitions(c *gin.Context) {
+	g.proxyWorkflow(c, http.MethodGet, "/v1/workflows/definitions")
+}
+
+func (g *Gateway) workflowDefinitionCreate(c *gin.Context) {
+	g.proxyWorkflow(c, http.MethodPost, "/v1/workflows/definitions")
+}
+
+func (g *Gateway) workflowDefinitionDetail(c *gin.Context) {
+	g.proxyWorkflow(
+		c, http.MethodGet, "/v1/workflows/definitions/"+url.PathEscape(c.Param("id")),
+	)
+}
+
+func (g *Gateway) workflowDefinitionUpdate(c *gin.Context) {
+	g.proxyWorkflow(
+		c, http.MethodPut, "/v1/workflows/definitions/"+url.PathEscape(c.Param("id")),
+	)
+}
+
+func (g *Gateway) workflowDefinitionDelete(c *gin.Context) {
+	g.proxyWorkflow(
+		c, http.MethodDelete, "/v1/workflows/definitions/"+url.PathEscape(c.Param("id")),
+	)
+}
+
+func (g *Gateway) workflowDefinitionPublish(c *gin.Context) {
+	g.proxyWorkflow(
+		c, http.MethodPost, "/v1/workflows/definitions/"+url.PathEscape(c.Param("id"))+"/publish",
+	)
+}
+
+func (g *Gateway) workflowDefinitionUnpublish(c *gin.Context) {
+	g.proxyWorkflow(
+		c, http.MethodPost, "/v1/workflows/definitions/"+url.PathEscape(c.Param("id"))+"/unpublish",
+	)
+}
+
+func (g *Gateway) workflowDefinitionVersions(c *gin.Context) {
+	g.proxyWorkflow(
+		c, http.MethodGet, "/v1/workflows/definitions/"+url.PathEscape(c.Param("id"))+"/versions",
+	)
+}
+
+func (g *Gateway) workflowDefinitionRollback(c *gin.Context) {
+	g.proxyWorkflow(
+		c, http.MethodPost, "/v1/workflows/definitions/"+url.PathEscape(c.Param("id"))+"/rollback",
+	)
+}
+
+func (g *Gateway) workflowDefinitionDuplicate(c *gin.Context) {
+	g.proxyWorkflow(
+		c, http.MethodPost, "/v1/workflows/definitions/"+url.PathEscape(c.Param("id"))+"/duplicate",
+	)
+}
+
 func (g *Gateway) workflowRunDetail(c *gin.Context) {
 	g.proxyWorkflow(
 		c, http.MethodGet, "/v1/workflows/runs/"+url.PathEscape(c.Param("id")),
