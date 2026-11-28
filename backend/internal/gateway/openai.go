@@ -14,6 +14,13 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/identity"
 )
 
+const (
+	// maxOpenAIMaxTokens matches the hub's ChatRequest upper bound.
+	maxOpenAIMaxTokens = 32768
+	// maxOpenAISystemChars matches the hub's system_prompt length limit.
+	maxOpenAISystemChars = 8000
+)
+
 // openAIMessage accepts either a plain string or a content-part array, which
 // covers the text-only subset used by OpenAI-compatible clients.
 type openAIMessage struct {
@@ -22,13 +29,16 @@ type openAIMessage struct {
 }
 
 type openAIChatRequest struct {
-	Model          string            `json:"model"`
-	Messages       []openAIMessage   `json:"messages"`
-	Stream         bool              `json:"stream"`
-	Metadata       map[string]string `json:"metadata"`
-	KBID           string            `json:"kb_id"`
-	ConversationID string            `json:"conversation_id"`
-	TopK           int               `json:"top_k"`
+	Model               string            `json:"model"`
+	Messages            []openAIMessage   `json:"messages"`
+	Stream              bool              `json:"stream"`
+	Metadata            map[string]string `json:"metadata"`
+	KBID                string            `json:"kb_id"`
+	ConversationID      string            `json:"conversation_id"`
+	TopK                int               `json:"top_k"`
+	Temperature         *float64          `json:"temperature"`
+	MaxTokens           *int              `json:"max_tokens"`
+	MaxCompletionTokens *int              `json:"max_completion_tokens"`
 }
 
 type openAIHistoryMessage struct {
@@ -45,6 +55,9 @@ type ragChatRequest struct {
 	TopK           int                    `json:"top_k,omitempty"`
 	History        []openAIHistoryMessage `json:"history,omitempty"`
 	Stateless      bool                   `json:"stateless,omitempty"`
+	SystemPrompt   string                 `json:"system_prompt,omitempty"`
+	Temperature    *float64               `json:"temperature,omitempty"`
+	MaxTokens      int                    `json:"max_tokens,omitempty"`
 }
 
 type openAIUpstreamResponse struct {
@@ -66,9 +79,24 @@ func (g *Gateway) openAIChat(c *gin.Context) {
 	if !ok {
 		return
 	}
-	message, history, ok := openAIHistory(req.Messages)
+	message, history, systemPrompt, ok := openAIHistory(req.Messages)
 	if !ok {
 		writeOpenAIError(c, http.StatusBadRequest, "messages must contain a non-empty user message", "invalid_request_error")
+		return
+	}
+	if req.Temperature != nil && (*req.Temperature < 0 || *req.Temperature > 2) {
+		writeOpenAIError(c, http.StatusBadRequest, "temperature must be between 0 and 2", "invalid_request_error")
+		return
+	}
+	maxTokens := 0
+	hasMaxTokens := false
+	if req.MaxTokens != nil {
+		maxTokens, hasMaxTokens = *req.MaxTokens, true
+	} else if req.MaxCompletionTokens != nil {
+		maxTokens, hasMaxTokens = *req.MaxCompletionTokens, true
+	}
+	if hasMaxTokens && (maxTokens < 1 || maxTokens > maxOpenAIMaxTokens) {
+		writeOpenAIError(c, http.StatusBadRequest, fmt.Sprintf("max_tokens must be between 1 and %d", maxOpenAIMaxTokens), "invalid_request_error")
 		return
 	}
 	if !g.allowQuery(c) {
@@ -90,7 +118,14 @@ func (g *Gateway) openAIChat(c *gin.Context) {
 		return
 	}
 
-	payload := ragChatRequest{Message: message, KBID: resolvedKB, TopK: req.TopK}
+	payload := ragChatRequest{
+		Message:      message,
+		KBID:         resolvedKB,
+		TopK:         req.TopK,
+		SystemPrompt: systemPrompt,
+		Temperature:  req.Temperature,
+		MaxTokens:    maxTokens,
+	}
 	if req.ConversationID != "" {
 		// A caller-managed conversation reuses the hub store.
 		payload.ConversationID = req.ConversationID
@@ -105,10 +140,10 @@ func (g *Gateway) openAIChat(c *gin.Context) {
 	}
 
 	if req.Stream {
-		g.openAIStream(c, req, message, history, body)
+		g.openAIStream(c, req, body)
 		return
 	}
-	g.openAIComplete(c, req, message, history, body)
+	g.openAIComplete(c, req, promptTokens(message, history, systemPrompt), body)
 }
 
 func (g *Gateway) readOpenAIBody(c *gin.Context) (openAIChatRequest, bool) {
@@ -126,9 +161,10 @@ func (g *Gateway) readOpenAIBody(c *gin.Context) (openAIChatRequest, bool) {
 	return req, true
 }
 
-// openAIHistory picks the last user message and flattens prior user/assistant
-// turns into the hub's history field.
-func openAIHistory(messages []openAIMessage) (string, []openAIHistoryMessage, bool) {
+// openAIHistory picks the last user message, flattens prior user/assistant
+// turns into the hub's history field, and joins system prompts into
+// system_prompt so callers can steer the RAG assistant.
+func openAIHistory(messages []openAIMessage) (string, []openAIHistoryMessage, string, bool) {
 	last := -1
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "user" && openAIContentText(messages[i].Content) != "" {
@@ -137,25 +173,51 @@ func openAIHistory(messages []openAIMessage) (string, []openAIHistoryMessage, bo
 		}
 	}
 	if last < 0 {
-		return "", nil, false
+		return "", nil, "", false
 	}
 
 	history := make([]openAIHistoryMessage, 0, last)
+	var systems []string
 	for _, m := range messages[:last] {
-		if m.Role != "user" && m.Role != "assistant" {
-			continue
-		}
 		text := openAIContentText(m.Content)
 		if text == "" {
 			continue
 		}
-		history = append(history, openAIHistoryMessage{Role: m.Role, Content: text})
+		switch m.Role {
+		case "system", "developer":
+			systems = append(systems, text)
+		case "user", "assistant":
+			history = append(history, openAIHistoryMessage{Role: m.Role, Content: text})
+		}
 	}
 	const maxHistory = 50
 	if len(history) > maxHistory {
 		history = history[len(history)-maxHistory:]
 	}
-	return openAIContentText(messages[last].Content), history, true
+	return openAIContentText(messages[last].Content), history, joinSystemPrompt(systems), true
+}
+
+// joinSystemPrompt concatenates system messages, capped to the hub's limit.
+func joinSystemPrompt(systems []string) string {
+	if len(systems) == 0 {
+		return ""
+	}
+	joined := strings.TrimSpace(strings.Join(systems, "\n\n"))
+	runes := []rune(joined)
+	if len(runes) > maxOpenAISystemChars {
+		joined = string(runes[:maxOpenAISystemChars])
+	}
+	return joined
+}
+
+// promptTokens estimates prompt usage including any caller-supplied system
+// prompt, which the hub prepends to the model input.
+func promptTokens(message string, history []openAIHistoryMessage, systemPrompt string) int {
+	total := approxTokens(message) + approxTokens(systemPrompt)
+	for _, h := range history {
+		total += approxTokens(h.Content)
+	}
+	return total
 }
 
 // openAIContentText extracts text from a string or content-part array.
@@ -186,8 +248,7 @@ func openAIContentText(raw json.RawMessage) string {
 func (g *Gateway) openAIComplete(
 	c *gin.Context,
 	req openAIChatRequest,
-	message string,
-	history []openAIHistoryMessage,
+	promptTokenCount int,
 	body []byte,
 ) {
 	resp, err := g.rag.do(c, http.MethodPost, "/v1/chat", body)
@@ -210,10 +271,7 @@ func (g *Gateway) openAIComplete(
 	}
 	g.recordQuery(c)
 
-	promptTokens := approxTokens(message)
-	for _, h := range history {
-		promptTokens += approxTokens(h.Content)
-	}
+	promptTokens := promptTokenCount
 	completionTokens := approxTokens(out.Answer)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -244,8 +302,6 @@ func (g *Gateway) openAIComplete(
 func (g *Gateway) openAIStream(
 	c *gin.Context,
 	req openAIChatRequest,
-	message string,
-	history []openAIHistoryMessage,
 	body []byte,
 ) {
 	resp, err := g.rag.do(c, http.MethodPost, "/v1/chat/stream", body)

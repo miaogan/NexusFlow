@@ -14,10 +14,23 @@ from nexusflow_agents.agents.rag.schemas import (
     ConversationListResponse,
 )
 from nexusflow_agents.agents.rag.services.chat import ChatService
+from nexusflow_agents.agents.rag.services.llm import (
+    GenerationOptions,
+    reset_generation_options,
+    set_generation_options,
+)
 from nexusflow_agents.agents.rag.services.retrieval import RetrievalUnavailable
 from nexusflow_agents.agents.rag.services.store import ConversationNotFound
 
 router = APIRouter(prefix="/v1", tags=["rag"])
+
+
+def generation_options(req: ChatRequest) -> GenerationOptions:
+    return GenerationOptions(
+        system_prompt=req.system_prompt or "",
+        temperature=req.temperature,
+        max_tokens=req.max_tokens,
+    )
 
 
 def caller_identity(request: Request) -> tuple[str, str, str | None]:
@@ -38,6 +51,7 @@ async def chat(
     service: ChatService = Depends(service_dep),
 ) -> ChatResponse:
     tenant_id, user_id, auth_header = caller_identity(request)
+    token = set_generation_options(generation_options(req))
     try:
         return await run_in_threadpool(
             service.chat, req, tenant_id, user_id, auth_header
@@ -46,6 +60,8 @@ async def chat(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RetrievalUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    finally:
+        reset_generation_options(token)
 
 
 @router.post("/chat/stream")
@@ -57,6 +73,7 @@ async def chat_stream(
     tenant_id, user_id, auth_header = caller_identity(request)
 
     async def event_source():
+        token = set_generation_options(generation_options(req))
         try:
             async for event in service.chat_stream(
                 req, tenant_id, user_id, auth_header
@@ -65,6 +82,8 @@ async def chat_stream(
         except Exception as exc:  # noqa: BLE001 - keep the stream well-formed
             payload = json.dumps({"type": "error", "error": str(exc)}, ensure_ascii=False)
             yield f"data: {payload}\n\n"
+        finally:
+            reset_generation_options(token)
 
     return StreamingResponse(
         event_source(),

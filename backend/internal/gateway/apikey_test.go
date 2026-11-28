@@ -120,7 +120,7 @@ func TestOpenAICompletionsWithAPIKey(t *testing.T) {
 
 	plain, _ := createTestKey(t, store, nil, []string{apikey.ScopeChatCompletions, apikey.ScopeSearchUse})
 
-	body := `{"model":"gpt-test","messages":[{"role":"user","content":"first"},{"role":"assistant","content":"reply"},{"role":"user","content":"hi"}]}`
+	body := `{"model":"gpt-test","temperature":0.3,"max_tokens":256,"messages":[{"role":"system","content":"be terse"},{"role":"user","content":"first"},{"role":"assistant","content":"reply"},{"role":"user","content":"hi"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/openai/chat/completions", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+plain)
 	rec := httptest.NewRecorder()
@@ -134,6 +134,15 @@ func TestOpenAICompletionsWithAPIKey(t *testing.T) {
 	}
 	if received["kb_id"] != "default" {
 		t.Fatalf("kb_id = %v", received["kb_id"])
+	}
+	if received["system_prompt"] != "be terse" {
+		t.Fatalf("system_prompt = %v", received["system_prompt"])
+	}
+	if received["temperature"] != 0.3 {
+		t.Fatalf("temperature = %v", received["temperature"])
+	}
+	if received["max_tokens"] != float64(256) {
+		t.Fatalf("max_tokens = %v", received["max_tokens"])
 	}
 	history, _ := received["history"].([]any)
 	if len(history) != 2 {
@@ -199,6 +208,30 @@ func TestOpenAIStreamWithAPIKey(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stream missing %q: %s", want, out)
+		}
+	}
+}
+
+func TestOpenAIRejectsInvalidSamplingParams(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := apikey.NewMemoryStore()
+	g := newAPIKeyGateway(t, store)
+	g.rag = newRAGProxy("http://127.0.0.1:1")
+	plain, _ := createTestKey(t, store, nil, []string{apikey.ScopeChatCompletions})
+
+	cases := []string{
+		`{"messages":[{"role":"user","content":"hi"}],"temperature":2.5}`,
+		`{"messages":[{"role":"user","content":"hi"}],"max_tokens":50000}`,
+		`{"messages":[{"role":"user","content":"hi"}],"max_tokens":-1}`,
+		`{"messages":[{"role":"user","content":"hi"}],"max_tokens":0}`,
+	}
+	for _, body := range cases {
+		req := httptest.NewRequest(http.MethodPost, "/v1/openai/chat/completions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+plain)
+		rec := httptest.NewRecorder()
+		g.Router().ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d body=%s", body, rec.Code, rec.Body.String())
 		}
 	}
 }

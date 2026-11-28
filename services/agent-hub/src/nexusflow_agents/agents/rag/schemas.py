@@ -18,6 +18,11 @@ class ChatRequest(BaseModel):
     # opt out of conversation persistence.
     history: list[ChatMessage] | None = Field(default=None, max_length=50)
     stateless: bool = False
+    # OpenAI-compatible generation controls. system_prompt is appended to the
+    # built-in assistant prompt; sampling values are forwarded to the model.
+    system_prompt: str | None = Field(default=None, max_length=8000)
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    max_tokens: int | None = Field(default=None, ge=1, le=32768)
 
 
 class Citation(BaseModel):
