@@ -111,6 +111,37 @@ func TestHumanApprovalRejectsRun(t *testing.T) {
 	}
 }
 
+func TestWorkflowRunsAreTenantScoped(t *testing.T) {
+	handler, store := newApprovalHandler()
+	store.Save(&RunState{ID: "run-a", Meta: Meta{TenantID: "t1"}, Status: string(RunSucceeded)})
+	store.Save(&RunState{ID: "run-b", Meta: Meta{TenantID: "t2"}, Status: string(RunSucceeded)})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/workflows/runs", nil)
+	req.Header.Set("x-tenant-id", "t1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d", rec.Code)
+	}
+	var body struct {
+		Runs []RunState `json:"runs"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Runs) != 1 || body.Runs[0].ID != "run-a" {
+		t.Fatalf("runs = %+v", body.Runs)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/workflows/runs/run-b", nil)
+	req.Header.Set("x-tenant-id", "t1")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant detail status = %d", rec.Code)
+	}
+}
+
 // TestConcurrentApprovalsOnlyOneWins guards the multi-replica guarantee: the
 // atomic transition lets exactly one decision resume the run.
 func TestConcurrentApprovalsOnlyOneWins(t *testing.T) {

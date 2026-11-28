@@ -398,4 +398,129 @@ export interface SubAgentCallResult {
   attempts?: number;
 }
 
+// ---------- API Keys ----------
+
+export interface APIKey {
+  id: string;
+  tenant_id: string;
+  name: string;
+  key_prefix: string;
+  allowed_kb_ids: string[];
+  scopes: string[];
+  rate_limit_rpm: number;
+  status: string;
+  expires_at?: string | null;
+  last_used_at?: string | null;
+  created_by: string;
+  created_at: string;
+}
+
+export interface APIKeyListResponse {
+  api_keys: APIKey[];
+  count: number;
+}
+
+export interface CreateAPIKeyInput {
+  name: string;
+  allowed_kb_ids?: string[];
+  scopes?: string[];
+  rate_limit_rpm?: number;
+  expires_in_days?: number;
+}
+
+export interface CreateAPIKeyResponse {
+  api_key: APIKey;
+  key: string;
+}
+
+// ---------- Webhooks ----------
+
+export interface WebhookSubscription {
+  id: string;
+  tenant_id: string;
+  name: string;
+  target_url: string;
+  events: string[];
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  tenant_id: string;
+  webhook_id: string;
+  event_type: string;
+  payload: unknown;
+  attempt_count: number;
+  http_status: number;
+  response_body: string;
+  status: string;
+  next_retry_at?: string | null;
+  created_at: string;
+}
+
+export interface CreateWebhookInput {
+  name: string;
+  target_url: string;
+  events?: string[];
+  secret?: string;
+  is_active?: boolean;
+}
+
+export interface CreateWebhookResponse {
+  webhook: WebhookSubscription;
+  secret: string;
+}
+
+// ---------- Approvals & workflow runs ----------
+
+export interface ToolApproval {
+  id: string;
+  tool: string;
+  args: Record<string, unknown>;
+  risk: string;
+  tenant_id: string;
+  user_id: string;
+  trace_id: string;
+  status: "pending" | "approved" | "rejected" | string;
+  reason: string;
+  decided_by: string;
+  created_at: number;
+  decided_at: number;
+  expires_at: number;
+}
+
+export interface WorkflowNodeResult {
+  node_id: string;
+  output?: Record<string, unknown>;
+  duration: number;
+  error?: string;
+}
+
+export interface WorkflowRunMeta {
+  TenantID: string;
+  UserID: string;
+  TraceID: string;
+  RequestID: string;
+}
+
+export interface WorkflowRunState {
+  id: string;
+  dag: Dag;
+  input?: Record<string, unknown>;
+  meta: WorkflowRunMeta;
+  status: string;
+  order?: string[];
+  results?: WorkflowNodeResult[];
+  skipped?: string[];
+  output?: Record<string, unknown>;
+  pending_node?: string;
+  error?: string;
+  approved_by?: string;
+  approval_reason?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export type { Edge };

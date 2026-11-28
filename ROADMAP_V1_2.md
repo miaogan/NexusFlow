@@ -27,9 +27,9 @@
 * **[x] Task 3.2**: 扩展真机冒烟测试并同步项目文档 (`scripts/smoke_test.py`)。
   * 交付：冒烟脚本新增 Agent Hub `/readyz`、`/v1/agents`、`/v1/skills` 检查；README、架构、部署、`.env.example`、Compose/K8s 同步 SubAgent 管理、技能路由与权限说明。
 
-## 后续待办（未开始）
+## 后续能力（已交付）
 
-> v1.2.0 的三阶段目标已全部交付。以下能力未纳入本版本，拆解与验收标准统一维护在 [ROADMAP_V1_1_V1_5.md](ROADMAP_V1_1_V1_5.md)，按编号执行即可。
+> v1.2.0 的三阶段目标已全部交付；原顺延的 Milestone 5 能力也已在 [ROADMAP_V1_1_V1_5.md](ROADMAP_V1_1_V1_5.md) 中完成。
 
-* **Task 5.1 对外服务**：租户级 API Key 签发/吊销/作用域，以及 OpenAI 兼容 `/v1/openai/chat/completions`。
-* **Task 5.2 生态集成**：Webhook 订阅（HMAC 签名、指数退避、投递日志）；MCP Server 已交付，Webhook 未开始。
+* **[x] Task 5.1 对外服务**：租户级 API Key 签发/吊销/作用域，以及 OpenAI 兼容 `/v1/openai/chat/completions`。
+* **[x] Task 5.2 生态集成**：Webhook 订阅（HMAC 签名、指数退避、投递日志）与标准 MCP Server（`POST /mcp`）。

@@ -99,7 +99,16 @@ func NewHTTPHandler(engine *Engine, registry *Registry, opts ...HTTPOption) http
 			return
 		}
 		limit, _ := strconv.Atoi(c.Query("limit"))
-		c.JSON(http.StatusOK, gin.H{"runs": options.store.List(limit)})
+		meta := requestMeta(c)
+		runs := options.store.List(limit)
+		// Runs are tenant-scoped: never leak another tenant's executions.
+		filtered := make([]*RunState, 0, len(runs))
+		for _, run := range runs {
+			if run.Meta.TenantID == "" || run.Meta.TenantID == meta.TenantID {
+				filtered = append(filtered, run)
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"runs": filtered})
 	})
 	v1.GET("/runs/:id", func(c *gin.Context) {
 		if options.store == nil {
@@ -108,6 +117,11 @@ func NewHTTPHandler(engine *Engine, registry *Registry, opts ...HTTPOption) http
 		}
 		state, ok := options.store.Get(c.Param("id"))
 		if !ok {
+			c.JSON(http.StatusNotFound, gin.H{"error": "run not found"})
+			return
+		}
+		meta := requestMeta(c)
+		if state.Meta.TenantID != "" && meta.TenantID != state.Meta.TenantID {
 			c.JSON(http.StatusNotFound, gin.H{"error": "run not found"})
 			return
 		}

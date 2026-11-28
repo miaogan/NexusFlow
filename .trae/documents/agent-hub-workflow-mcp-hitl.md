@@ -21,7 +21,7 @@ Agent Hub 已完成单容器与星型调度，但目前仍是固定能力（inte
 | P1 双向联动 | 已完成 | Go `agent` 节点、`ExecutionContext` 身份元数据、Gateway `/v1/workflows/*` 代理、服务令牌、Hub `workflow.run` 工具 | `/v1/call` 的 agent 分支恒可用；tool 分支需 `AGENT_HUB_TOOLS_ENABLED` |
 | P2 推理循环 | 已完成 | `ReasoningLoop`（预算/重复检测/失败回退）、`tool_call` / `tool_result` / `approval_required` SSE、`ChatService` 集成 | 推理模式的最终回答以单个 `token` 事件下发 |
 | P3 MCP 与契约 | 已完成 | `POST /mcp`（initialize / tools/list / tools/call）、MCP Client、`mcp.<server>.<tool>`、动态注册复用同一 Schema | HTTP JSON-RPC；SSE / stdio 传输未实现 |
-| P4 人机协同 | 已完成 | `ApprovalService`、高风险工具 202 + `approval_id`、审批 API、`human_approval` 节点、`RunStore`、runs / approve / resume | 运行、审批与审计当前为进程内存储；Postgres 表待接入 |
+| P4 人机协同 | 已完成 | `ApprovalService`、高风险工具 202 + `approval_id`、审批 API、`human_approval` 节点、`RunStore`、runs / approve / resume、Web `/approvals` | Postgres 运行/审批/审计已接入；节点级 `EventSink` 仍未实现 |
 | P5 安全护栏 | 已完成 | 风险分级、JSON Schema、输出截断、预算 429、审计、工具结果不可信包裹、sandbox 权限与 local 后端生产保护 | 审计为进程内环形缓冲；PII 脱敏不属于本期 |
 
 各阶段保留旧路径：关闭开关即回到 `retrieve → generate` 与同步 `/v1/workflows/run`。实现细节以本文件后续章节 + 代码为准，环境变量名以下表为准。
@@ -97,8 +97,8 @@ Agent Hub 已完成单容器与星型调度，但目前仍是固定能力（inte
 ### Workflow 人工节点
 
 - `engine.go` 增加 `RunOptions{Meta, RunID, Store, Resume, Approved...}`；新增 `human_approval` 节点，返回 `WAITING_APPROVAL` 并保存 `ExecutionContext` 快照。`EventSink` 暂未实现（列入后续）。
-- `workflow/http.go` 增加 runs / approve / reject / resume；已实现 `MemoryRunStore`，`workflow_executions` / `workflow_approvals` 待接入（Task 3.3）。
-- Gateway 已增加审批代理（`/v1/approvals*`、`/v1/workflows/runs*`）；Web 审批收件箱与 run 时间线待补；重复审批返回 409。
+- `workflow/http.go` 增加 runs / approve / reject / resume；`MemoryRunStore` 与 Postgres `RunStore`（`workflow_executions` / `workflow_approvals`）均已接入，跨副本审批通过行锁 + 状态 CAS 保证只生效一次。
+- Gateway 已增加审批代理（`/v1/approvals*`、`/v1/workflows/runs*`）；Web 审批中心（工具审批收件箱 + 工作流运行时间线）已交付于 `/approvals`；重复审批返回 409。
 
 验证：Agent 高风险工具无审批返回 202，批准后重放恢复；Workflow 挂起 → 审批 → 同一进程内恢复。跨进程重启恢复需先接入 Postgres `RunStore`。
 
@@ -107,7 +107,7 @@ Agent Hub 已完成单容器与星型调度，但目前仍是固定能力（inte
 - 工具风险分级：`read / write / execute / external`；参数 JSON Schema、输出大小/敏感字段截断。
 - Sandbox：`sandbox:execute` 权限挂到 Gateway；`SANDBOX_BACKEND=local` 仅开发且显式开启；egress 默认拒绝；TTL 上限 5 分钟。
 - 预算：每轮 token/工具调用/总时限；`/v1/call` 工具预算/时限超限返回 429，推理循环超限停止并回退普通生成。
-- 审计：进程内 `AuditLog` 记录 tool、risk、decision、tenant、trace，`GET /v1/audit` 查询；`audit_logs` 表待接入（Task 3.3）。
+- 审计：进程内 `AuditLog` 记录 tool、risk、decision、tenant、trace，`GET /v1/audit` 查询；`AGENT_HUB_AUDIT_DRIVER=postgres` 时落库 `audit_logs`（Task 3.3 已交付）。
 - Prompt 注入：工具结果显式标记为不可信数据，禁止覆盖 system 指令。
 
 验证：无 token 401、越权 403、高风险未审批 202、超预算 429、审计可查询。

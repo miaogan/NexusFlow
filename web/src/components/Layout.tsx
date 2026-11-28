@@ -115,13 +115,18 @@ export default function Layout() {
 
   if (!ready) return null;
 
-  const nav = hasPermission("user:read")
-    ? [
-        ...NAV,
-        { to: "/subagents", label: "SubAgent 管理" },
-        { to: "/users", label: "用户管理" },
-      ]
-    : NAV;
+  const nav = [
+    ...NAV,
+    ...(hasPermission("workflow:run") ? [{ to: "/approvals", label: "审批中心" }] : []),
+    ...(hasPermission("user:read")
+      ? [
+          { to: "/subagents", label: "SubAgent 管理" },
+          { to: "/users", label: "用户管理" },
+        ]
+      : []),
+    ...(hasPermission("apikey:write") ? [{ to: "/api-keys", label: "API Key" }] : []),
+    ...(hasPermission("webhook:write") ? [{ to: "/webhooks", label: "Webhook" }] : []),
+  ];
 
   const handleLogout = () => {
     clearAuth();

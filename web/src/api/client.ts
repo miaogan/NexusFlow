@@ -1,9 +1,15 @@
 import type {
+  APIKey,
+  APIKeyListResponse,
   AuthUser,
   ChatResponse,
   Citation,
   ConversationDetail,
   ConversationListResponse,
+  CreateAPIKeyInput,
+  CreateAPIKeyResponse,
+  CreateWebhookInput,
+  CreateWebhookResponse,
   Dag,
   IntentInfo,
   JwtClaims,
@@ -22,12 +28,16 @@ import type {
   SubAgentRecord,
   TaskDetail,
   TaskListResponse,
+  ToolApproval,
   Trace,
   TraceListResponse,
   UploadResult,
   UsageResponse,
   UserListResponse,
   ValidationResult,
+  WebhookDelivery,
+  WebhookSubscription,
+  WorkflowRunState,
 } from "../types";
 
 const GATEWAY_BASE = import.meta.env.VITE_GATEWAY_URL ?? "/api";
@@ -758,4 +768,118 @@ export async function runDag(dag: Dag): Promise<unknown> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ dag, input: { source: "web-console" } }),
   });
+}
+
+// ---------- API keys ----------
+
+export async function listAPIKeys(): Promise<APIKeyListResponse> {
+  return request<APIKeyListResponse>(`${GATEWAY_BASE}/v1/api-keys`);
+}
+
+export async function createAPIKey(
+  input: CreateAPIKeyInput,
+): Promise<CreateAPIKeyResponse> {
+  return request<CreateAPIKeyResponse>(`${GATEWAY_BASE}/v1/api-keys`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function revokeAPIKey(id: string): Promise<{ api_key: APIKey }> {
+  return request<{ api_key: APIKey }>(
+    `${GATEWAY_BASE}/v1/api-keys/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
+// ---------- Webhooks ----------
+
+export async function listWebhooks(): Promise<{
+  webhooks: WebhookSubscription[];
+  count: number;
+}> {
+  return request(`${GATEWAY_BASE}/v1/webhooks`);
+}
+
+export async function createWebhook(
+  input: CreateWebhookInput,
+): Promise<CreateWebhookResponse> {
+  return request<CreateWebhookResponse>(`${GATEWAY_BASE}/v1/webhooks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteWebhook(
+  id: string,
+): Promise<{ success: boolean; id: string }> {
+  return request(`${GATEWAY_BASE}/v1/webhooks/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listWebhookDeliveries(
+  id: string,
+  limit = 50,
+): Promise<{ deliveries: WebhookDelivery[]; count: number }> {
+  return request(
+    `${GATEWAY_BASE}/v1/webhooks/${encodeURIComponent(id)}/deliveries?limit=${limit}`,
+  );
+}
+
+// ---------- Approvals & workflow runs ----------
+
+export async function listApprovals(
+  status = "",
+): Promise<{ approvals: ToolApproval[] }> {
+  const params = status ? `?status=${encodeURIComponent(status)}` : "";
+  return request<{ approvals: ToolApproval[] }>(
+    `${GATEWAY_BASE}/v1/approvals${params}`,
+  );
+}
+
+export async function decideApproval(
+  id: string,
+  decision: "approve" | "reject",
+  reason = "",
+): Promise<ToolApproval> {
+  return request<ToolApproval>(
+    `${GATEWAY_BASE}/v1/approvals/${encodeURIComponent(id)}/decide`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision, reason }),
+    },
+  );
+}
+
+export async function listWorkflowRuns(
+  limit = 50,
+): Promise<{ runs: WorkflowRunState[] }> {
+  return request<{ runs: WorkflowRunState[] }>(
+    `${GATEWAY_BASE}/v1/workflows/runs?limit=${limit}`,
+  );
+}
+
+export async function getWorkflowRun(id: string): Promise<WorkflowRunState> {
+  return request<WorkflowRunState>(
+    `${GATEWAY_BASE}/v1/workflows/runs/${encodeURIComponent(id)}`,
+  );
+}
+
+export async function decideWorkflowRun(
+  id: string,
+  decision: "approve" | "reject",
+  reason = "",
+): Promise<unknown> {
+  return request<unknown>(
+    `${GATEWAY_BASE}/v1/workflows/runs/${encodeURIComponent(id)}/approve`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision, reason }),
+    },
+  );
 }
