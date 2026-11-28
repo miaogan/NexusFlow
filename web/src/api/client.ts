@@ -1,6 +1,7 @@
 import type {
   APIKey,
   APIKeyListResponse,
+  AuditEvent,
   AuthUser,
   ChatResponse,
   Citation,
@@ -865,6 +866,27 @@ export async function replayWebhookDelivery(
     `${GATEWAY_BASE}/v1/webhooks/${encodeURIComponent(id)}/deliveries/${encodeURIComponent(deliveryId)}/replay`,
     { method: "POST" },
   );
+}
+
+export interface AuditQuery {
+  limit?: number;
+  action?: string;
+  decision?: string;
+  since?: string;
+  until?: string;
+}
+
+export async function listAudit(
+  query: AuditQuery = {},
+): Promise<{ events: AuditEvent[] }> {
+  const params = new URLSearchParams();
+  if (query.limit) params.set("limit", String(query.limit));
+  if (query.action?.trim()) params.set("action", query.action.trim());
+  if (query.decision?.trim()) params.set("decision", query.decision.trim());
+  if (query.since?.trim()) params.set("since", query.since.trim());
+  if (query.until?.trim()) params.set("until", query.until.trim());
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return request<{ events: AuditEvent[] }>(`${GATEWAY_BASE}/v1/audit${suffix}`);
 }
 
 // ---------- Approvals & workflow runs ----------

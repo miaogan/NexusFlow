@@ -523,4 +523,18 @@ export interface WorkflowRunState {
   updated_at: string;
 }
 
+export interface AuditEvent {
+  id: string;
+  ts: number;
+  action: string;
+  tenant_id: string;
+  user_id: string;
+  trace_id: string;
+  resource: string;
+  risk: string;
+  decision: string;
+  status: string;
+  detail: Record<string, unknown>;
+}
+
 export type { Edge };

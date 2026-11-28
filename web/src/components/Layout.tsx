@@ -118,6 +118,7 @@ export default function Layout() {
   const nav = [
     ...NAV,
     ...(hasPermission("workflow:run") ? [{ to: "/approvals", label: "审批中心" }] : []),
+    ...(hasPermission("trace:read") ? [{ to: "/audit", label: "审计日志" }] : []),
     ...(hasPermission("user:read")
       ? [
           { to: "/subagents", label: "SubAgent 管理" },

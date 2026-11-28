@@ -11,6 +11,7 @@ import Login from "./pages/Login";
 import Users from "./pages/Users";
 import SubAgents from "./pages/SubAgents";
 import Approvals from "./pages/Approvals";
+import Audit from "./pages/Audit";
 import ApiKeys from "./pages/ApiKeys";
 import Webhooks from "./pages/Webhooks";
 
@@ -26,6 +27,7 @@ export default function App() {
         <Route path="/chat" element={<Chat />} />
         <Route path="/workflow" element={<Workflow />} />
         <Route path="/approvals" element={<Approvals />} />
+        <Route path="/audit" element={<Audit />} />
         <Route path="/sandbox" element={<Sandbox />} />
         <Route path="/subagents" element={<SubAgents />} />
         <Route path="/users" element={<Users />} />
