@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nexusflow/nexusflow/backend/internal/config"
+	"github.com/nexusflow/nexusflow/backend/internal/connector"
 	"github.com/nexusflow/nexusflow/backend/internal/feedback"
 	"github.com/nexusflow/nexusflow/backend/internal/gateway"
 	"github.com/nexusflow/nexusflow/backend/internal/identity"
@@ -207,6 +208,9 @@ func main() {
 	if cfg.WorkflowHITL {
 		wfRegistry.Register(workflow.HumanApprovalNode{})
 	}
+	// Control flow: condition branches and bounded concurrent loops.
+	wfRegistry.Register(workflow.ConditionNode{})
+	wfRegistry.Register(workflow.NewLoopNode(wfRegistry, logger))
 	wfEngine := workflow.NewEngine(wfRegistry, logger)
 	wfRunStore, closeRunStore := workflow.NewRunStore(
 		ctx, cfg.WorkflowRunStoreDriver, cfg.WorkflowRunDatabaseURL,
@@ -294,6 +298,7 @@ func main() {
 		gateway.WithKnowledgeBases(pb.NewKnowledgeBaseServiceClient(userConn)),
 		gateway.WithRAGAgent(cfg.RAGAgentURL, cfg.AgentHubToken),
 		gateway.WithWorkflow(cfg.WorkflowTarget, cfg.WorkflowServiceToken),
+		gateway.WithConnectors(cfg.ConnectorTarget),
 		gateway.WithFeedbackStore(feedbackStore),
 		gateway.WithMetering(meterStore, metering.Quota{
 			MaxStorageBytes: cfg.QuotaMaxStorageBytes,
@@ -322,6 +327,25 @@ func main() {
 	}
 	go func() {
 		errCh <- httpserver.Serve(ctx, wfSrv, logger)
+	}()
+
+	connCipher := connector.NewCipher(cfg.ConnectorEncryptionKey)
+	if connCipher == nil {
+		logger.Warn("CONNECTOR_ENCRYPTION_KEY is empty; connector configs are stored as plaintext")
+	}
+	connStore := connector.NewStore(ctx, cfg.ConnectorDriver, cfg.ConnectorDatabaseURL, connCipher)
+	if closer, ok := connStore.(interface{ Close() error }); ok {
+		defer func() { _ = closer.Close() }()
+	}
+	connSvc := connector.NewService(connStore, ingestSvc, logger,
+		connector.WebSource{}, connector.S3Source{}, connector.DBSource{})
+	connSrv := &http.Server{
+		Addr:              cfg.IngestionHTTPAddr,
+		Handler:           connector.NewHandler(connSvc),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go func() {
+		errCh <- httpserver.Serve(ctx, connSrv, logger)
 	}()
 
 	select {

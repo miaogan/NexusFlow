@@ -116,7 +116,7 @@ V4.0 在接入层进一步拆出 Auth Service 与 User Service：JWT 的签发�
 | Auth Service | Go | 注册 / 登录 / 刷新 / 校验，签发与验证 JWT | 轻量无状态 |
 | User Service | Go | 租户隔离的用户 CRUD、角色与权限点管理（RBAC） | 轻量，需共享存储 |
 | Workflow Engine | Go | 解析 DAG，按依赖调度节点，维护执行上下文 | CPU 中等，需状态存储 |
-| Ingestion Service | Go | 接收上传，写对象存储与元数据，投递任务 | I/O 密集 |
+| Ingestion Service | Go | 接收上传与外部连接器同步，写对象存储与元数据，投递任务 | I/O 密集 |
 | Processing Worker | Go | 消费任务，调用 MinerU 解析，产出 Markdown | I/O+等待，异步解析 |
 | LlamaIndex Service | Python | 语义/层级切块、索引构建、调用 Embedding API 并写向量库 | CPU+网络，可水平扩展 |
 | Query Service | Go | 多路召回并行编排、RRF 融合、Cross-Encoder 重排与问答入口 | I/O+网络，无状态，可水平扩展 |
@@ -248,11 +248,15 @@ PENDING -> FETCHED -> PARSING -> PARSED
 
 上传事件中的对象 URL 仅允许映射到 `OBJECT_STORE_BASE` 下的 key，再从共享 `OBJECT_STORE_DIR` 读取，包含来源与目录穿越校验，因此解析服务不依赖 MinIO 可达性。PDF/DOCX/HTML 由 MinerU 原生解析；MinerU 4.x 不接收的 TXT/Markdown 直接保留原文，避免真实解析模式下破坏既有文本上传能力。最终 Markdown 统一作为 LlamaIndex 切块的输入。
 
-### 6.2 切块与索引（下沉至 LlamaIndex）
+### 6.2 外部数据源连接器
+
+`internal/connector` 提供统一的 `Source` 契约（发现 → 拉取 → 入库 → 游标），内置三类实现：`web_crawler` 抓取种子页面并按同站链接扩展，`s3_bucket` 通过 S3 兼容协议按对象 key 续传，`db_query` 只读 SELECT 按 OFFSET 分页并把行序列化为 Markdown。同步由 ingestion 的 `RegisterContent` 落对象存储并创建普通任务，复用 MinerU → LlamaIndex 链路；内容 SHA-256 作为幂等键，未变化文档返回既有任务。连接器定义与游标存入 `data_connectors`（`CONNECTOR_DRIVER=postgres`），配置使用 AES-256-GCM 加密，`sync_cursor` 保存已抓 URL 集合、S3 last_key 或 SQL offset，拉取失败时保留旧游标以便断点续传。`web_crawler` 默认拒绝私网/回环地址与重定向到私网的请求，`allow_private` 可显式放开。
+
+### 6.3 切块与索引（下沉至 LlamaIndex）
 
 V2.0 将切块从 Go 迁移至 LlamaIndex 服务。LlamaIndex 按标题层级与语义边界进行结构化切分，表格与公式保留在文本块中，图片以 `image_urls` 元数据随所在块返回，使 RAG 检索时可精准命中表格或公式，并在引用中展示对应图表。
 
-### 6.3 限流与背压
+### 6.4 限流与背压
 
 调用 MinerU 与外部 Embedding API 时必须引入令牌桶限流（Go 侧用 golang.org/x/time/rate，Python 侧用 asyncio + 信号量或 aiolimiter）。当外部接口返回 429 时，触发背压机制暂停从队列拉取新任务，避免雪崩与更严厉的限流。
 
@@ -295,7 +299,13 @@ V2.0 将切块从 Go 迁移至 LlamaIndex 服务。LlamaIndex 按标题层级与
 | HTTP/Webhook 节点 | 引擎 POST 上游数据至用户外部服务 | 完全隔离、语言无关 | 需用户自行部署、有网络延迟 |
 | 代码沙箱节点 | 引擎经沙箱执行用户代码片段 | 即写即用、体验佳、强隔离 | 需沙箱基础设施、安全要求高 |
 
-得益于 OpenSandbox 的成熟能力，代码沙箱节点的实施成本大幅降低，因此本系统采用以代码沙箱节点为主的方案。高级用户还可在沙箱内直接调用预装的 LlamaIndex 库，编写自定义检索策略。
+得益于 OpenSandbox 的成熟能力，代码沙箱节点的实施成本大幅降低，因此本系统采用以代码沙箱节点为主的方案。高级用户还可在沙箱内直接预装 LlamaIndex 库，编写自定义检索策略。
+
+### 8.1 控制流节点
+
+- `condition`：从执行上下文读取 `field`（支持 `${node.field}` / `node.field` / 字面量），按 `equals` / `not_equals` / `in` / `contains`（缺省按真值）判定，输出 `branch` 与 `then` / `else` 目标。引擎裁剪“从被丢弃目标可达且从选中目标不可达”的节点，写入 `skipped`；同时被两条分支汇聚的节点仍会执行。`then` / `else` 必须是该节点下游，校验阶段拒绝非法引用。
+- `loop`：从 `items`（或 `items_from` 变量名）读取数组，按 `max_concurrency`（默认 4、上限 16）并发执行 `sub_dag`；每项输入为 `item` / `index`，map 元素同时展开字段。输出 `count` / `failed` / `results`，默认任一元素失败即整体失败，`continue_on_error` 可保留部分成功结果。子图复用同一 `Engine.Validate`，禁止嵌套 loop；子 run 不单独持久化。
+- 跳过集合随 `RunState` 持久化，审批挂起恢复后仍保持相同的分支语义。
 
 ## 9. OpenSandbox 沙箱集成方案
 

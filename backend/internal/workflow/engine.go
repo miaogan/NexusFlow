@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -83,6 +84,7 @@ type RunResult struct {
 	DAG     string         `json:"dag"`
 	Order   []string       `json:"order"`
 	Results []NodeResult   `json:"results"`
+	Skipped []string       `json:"skipped,omitempty"`
 	Output  map[string]any `json:"output"`
 }
 
@@ -130,6 +132,21 @@ func (e *Engine) Validate(dag *DAG) ([]string, error) {
 		}
 		adj[edge.From] = append(adj[edge.From], edge.To)
 		indeg[edge.To]++
+	}
+
+	// Control-flow nodes carry references and nested DAGs, so their config is
+	// validated here where the full graph (and adjacency) is available.
+	for _, n := range dag.Nodes {
+		switch n.Type {
+		case "condition":
+			if err := e.validateCondition(n, adj); err != nil {
+				return nil, err
+			}
+		case "loop":
+			if err := e.validateLoop(n); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	order := make([]string, 0, len(ids))
@@ -201,6 +218,7 @@ func (e *Engine) RunWithOptions(
 	}
 
 	completed := make(map[string]bool, len(dag.Nodes))
+	skipped := make(map[string]bool, len(dag.Nodes))
 	ec := NewExecutionContext(input)
 	result := &RunResult{
 		DAG:    dag.Name,
@@ -215,9 +233,13 @@ func (e *Engine) RunWithOptions(
 		state := opts.Resume
 		result.RunID = state.ID
 		result.Results = append(result.Results, state.Results...)
+		result.Skipped = append(result.Skipped, state.Skipped...)
 		ec = NewExecutionContext(state.Output)
 		for _, res := range state.Results {
 			completed[res.NodeID] = true
+		}
+		for _, id := range state.Skipped {
+			skipped[id] = true
 		}
 		// Keep the original input available to downstream nodes.
 		for key, value := range state.Input {
@@ -231,12 +253,12 @@ func (e *Engine) RunWithOptions(
 	ready := make([]string, 0, len(specs))
 	scheduled := make(map[string]bool, len(specs))
 	for id := range specs {
-		if completed[id] {
+		if completed[id] || skipped[id] {
 			continue
 		}
 		pending := 0
 		for _, edge := range dag.Edges {
-			if edge.To == id && !completed[edge.From] {
+			if edge.To == id && !completed[edge.From] && !skipped[edge.From] {
 				pending++
 			}
 		}
@@ -312,13 +334,23 @@ func (e *Engine) RunWithOptions(
 			result.Results = append(result.Results, res)
 			e.logger.Info("node completed", "dag", dag.Name, "node", id, "duration", res.Duration)
 			completed[id] = true
+			if specs[id].Type == "condition" {
+				if err := applyConditionBranch(specs, adj, res.Output, skipped, completed); err != nil {
+					result.Output = ec.Snapshot()
+					result.Status = string(RunFailed)
+					result.Skipped = skippedIDs(skipped)
+					e.save(opts, result, dag, input, err.Error())
+					return result, err
+				}
+				result.Skipped = skippedIDs(skipped)
+			}
 			for _, child := range adj[id] {
-				if completed[child] {
+				if completed[child] || skipped[child] {
 					continue
 				}
 				pending := false
 				for _, edge := range dag.Edges {
-					if edge.To == child && !completed[edge.From] {
+					if edge.To == child && !completed[edge.From] && !skipped[edge.From] {
 						pending = true
 						break
 					}
@@ -333,17 +365,19 @@ func (e *Engine) RunWithOptions(
 		if waiting != "" {
 			result.Status = string(RunWaitingApproval)
 			result.Output = ec.Snapshot()
+			result.Skipped = skippedIDs(skipped)
 			e.saveWithPending(opts, result, dag, input, waiting)
 			e.logger.Info("run waiting for approval", "dag", dag.Name, "node", waiting, "run", result.RunID)
 			return result, nil
 		}
 	}
 
-	if len(completed) != len(specs) {
+	if len(completed)+len(skipped) != len(specs) {
 		return result, fmt.Errorf("dag execution incomplete")
 	}
 	result.Status = string(RunSucceeded)
 	result.Output = ec.Snapshot()
+	result.Skipped = skippedIDs(skipped)
 	e.save(opts, result, dag, input, "")
 	return result, nil
 }
@@ -398,6 +432,7 @@ func (e *Engine) state(
 		Status:         result.Status,
 		Order:          result.Order,
 		Results:        result.Results,
+		Skipped:        append([]string(nil), result.Skipped...),
 		Output:         result.Output,
 		PendingNode:    pending,
 		Error:          errText,
@@ -406,4 +441,114 @@ func (e *Engine) state(
 		CreatedAt:      created,
 		UpdatedAt:      now,
 	}
+}
+
+// reachable returns every node reachable from start (including start).
+func reachable(adj map[string][]string, start string) map[string]bool {
+	out := map[string]bool{start: true}
+	stack := []string{start}
+	for len(stack) > 0 {
+		id := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		for _, child := range adj[id] {
+			if !out[child] {
+				out[child] = true
+				stack = append(stack, child)
+			}
+		}
+	}
+	return out
+}
+
+func skippedIDs(skipped map[string]bool) []string {
+	out := make([]string, 0, len(skipped))
+	for id, ok := range skipped {
+		if ok {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// applyConditionBranch prunes the branch the condition did not choose. A node
+// is skipped when it is reachable from the discarded target but not from the
+// chosen target, so a join node fed by both branches still runs.
+func applyConditionBranch(
+	specs map[string]NodeSpec,
+	adj map[string][]string,
+	output map[string]any,
+	skipped map[string]bool,
+	completed map[string]bool,
+) error {
+	branch, _ := output["branch"].(string)
+	thenID, _ := output["then"].(string)
+	elseID, _ := output["else"].(string)
+	chosen, discarded := thenID, elseID
+	if branch == "else" {
+		chosen, discarded = elseID, thenID
+	}
+	if chosen == "" || discarded == "" {
+		return nil
+	}
+	if _, ok := specs[chosen]; !ok {
+		return fmt.Errorf("condition target %q does not exist", chosen)
+	}
+	if _, ok := specs[discarded]; !ok {
+		return fmt.Errorf("condition target %q does not exist", discarded)
+	}
+	keep := reachable(adj, chosen)
+	for id := range reachable(adj, discarded) {
+		if keep[id] || completed[id] {
+			continue
+		}
+		skipped[id] = true
+	}
+	return nil
+}
+
+func (e *Engine) validateCondition(n NodeSpec, adj map[string][]string) error {
+	downstream := reachable(adj, n.ID)
+	for _, key := range []string{"then", "else"} {
+		target, _ := n.Config[key].(string)
+		if target == "" {
+			continue
+		}
+		if target == n.ID {
+			return fmt.Errorf("node %s: condition %s cannot target itself", n.ID, key)
+		}
+		if !downstream[target] {
+			return fmt.Errorf("node %s: condition %s target %q must be downstream", n.ID, key, target)
+		}
+	}
+	return nil
+}
+
+func (e *Engine) validateLoop(n NodeSpec) error {
+	if _, ok := n.Config["items"]; !ok {
+		if _, hasFrom := n.Config["items_from"]; !hasFrom {
+			return fmt.Errorf("node %s: loop requires config.items or config.items_from", n.ID)
+		}
+	}
+	raw, ok := n.Config["sub_dag"]
+	if !ok {
+		return fmt.Errorf("node %s: loop requires config.sub_dag", n.ID)
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("node %s: encode sub_dag: %w", n.ID, err)
+	}
+	var sub DAG
+	if err := json.Unmarshal(encoded, &sub); err != nil {
+		return fmt.Errorf("node %s: invalid sub_dag: %w", n.ID, err)
+	}
+	for _, inner := range sub.Nodes {
+		if inner.Type == "loop" {
+			return fmt.Errorf("node %s: nested loop is not supported", n.ID)
+		}
+	}
+	if _, err := e.Validate(&sub); err != nil {
+		return fmt.Errorf("node %s: sub_dag: %w", n.ID, err)
+	}
+	return nil
 }

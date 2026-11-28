@@ -83,7 +83,7 @@ flowchart TB
 分层职责：
 
 - **接入层**：Gateway 统一鉴权（JWT → tenant_id + 权限点）、租户级限流、trace 透传；Auth / User 服务负责签发令牌、管理账号与全局角色，并按知识库解析 `kb:admin` / `kb:editor` / `kb:viewer` 权限；Metering 负责租户用量与配额。
-- **编排调度层**：Workflow Engine 解析 DAG、按依赖并发调度；Ingestion 接收上传、级联删除并投递任务，Reindex 复用已持久化的解析产物。
+- **编排调度层**：Workflow Engine 解析 DAG、按依赖并发调度；Ingestion 接收上传、连接器增量同步、级联删除并投递任务，Reindex 复用已持久化的解析产物。
 - **执行加工层**：Processing Worker 调用 MinerU 解析并把 Markdown 持久化为 `tenant/kb/parsed/<task>.md`；LlamaIndex Service 负责语义/层级切块、索引与 Embedding；Sandbox Execution 经 OpenSandbox 执行自定义代码。
 - **检索问答层**：Query Service 并行多路召回，RRF 融合，Cross-Encoder 重排，任一非核心路失败 Fail-open；Agent Hub 作为星型调度中心，按 capability 路由到 intent / summary / memory，经 Gateway 复用统一检索链路。
 - **存储层**：RabbitMQ/Kafka 消息与 DLQ、MinIO 原文件与解析产物、Qdrant 文档向量（dense/sparse）与记忆向量（dense）、PostgreSQL 身份/反馈/会话/记忆正文、Redis 任务状态、计量与令牌吊销。
@@ -96,7 +96,7 @@ flowchart TB
 | Auth Service | Go | `backend/cmd/auth-service` | 9096 | 注册 / 登录 / 刷新 / 校验，签发 JWT |
 | User Service | Go | `backend/cmd/user-service` | 9097 | 用户 CRUD、角色与权限（RBAC）管理 |
 | Workflow Engine | Go | `backend/cmd/workflow-engine` | 8081 | DAG 校验与调度执行 |
-| Ingestion Service | Go | `backend/cmd/ingestion` | 9095 | 上传登记、状态查询、任务投递 |
+| Ingestion Service | Go | `backend/cmd/ingestion` | 9095（Connector API 9098） | 上传登记、连接器同步、状态查询、任务投递 |
 | Processing Worker | Go | `backend/cmd/processing-worker` | 9092 | 消费任务、调用 MinerU、发布解析结果 |
 | Sandbox Execution | Go | `backend/cmd/sandbox-execution` | 9093 | 自定义代码节点强隔离执行 |
 | Query Service | Go | `backend/cmd/query-service` | 9094 | 多路召回、RRF、重排、流式回答 |
@@ -286,7 +286,11 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 
 **文档治理**：`DELETE /v1/files/{id}` 级联清理对象存储、Qdrant 分片与图谱缓存，并回退租户计量；索引清理失败时保留任务记录以便重试。`POST /v1/files/{id}/reindex` 复用已持久化的 Markdown 原地重建：分片使用确定性 UUID 覆盖写，新点写入后再删除旧点，检索侧无空窗；升级前上传的历史文档没有解析产物，需重新上传后才能重建。
 
+**外部连接器**（`backend/internal/connector`）：统一 `Source` 契约（发现 → 拉取 → 入库 → 游标），内置 `web_crawler`（同站链接、页数/大小上限、默认拒绝私网）、`s3_bucket`（S3 兼容 endpoint，按对象 key 续传）与 `db_query`（只读 SELECT + OFFSET 分页，行转 Markdown）。同步经 ingestion `RegisterContent` 落对象存储并创建普通任务，内容 SHA-256 幂等去重；配置与游标存入 `data_connectors`（`CONNECTOR_DRIVER=postgres`），配置以 AES-256-GCM 加密，HTTP 响应中凭据统一脱敏。
+
 **DAG 引擎**（`backend/internal/workflow`）：校验节点类型、引用完整性与环路，按拓扑层级并发执行就绪节点，上游输出写入共享 `ExecutionContext`。
+
+**控制流节点**：`condition` 按 `field`（`${node.field}` / `node.field` / 字面量）与 `equals` / `not_equals` / `in` / `contains`（缺省真值判断）选择 `then` / `else` 分支；引擎跳过“从被丢弃目标可达且从选中目标不可达”的节点，汇聚节点仍会执行，结果返回 `skipped` 列表。`loop` 对 `items`（或 `items_from`）逐元素并发执行 `sub_dag`（`max_concurrency` 默认 4、上限 16），每项输入为 `item` / `index`，聚合 `count` / `failed` / `results`；默认任一元素失败即整体失败，`continue_on_error=true` 可收集部分结果。`then` / `else` 必须是 condition 的下游，嵌套 loop 在 `/v1/workflows/validate` 阶段拒绝。
 
 **NL2SQL 节点**（`type: "nl2sql"`）：配置 `sql` 直接执行，或用 `sql_from` 引用上游输出（如 `query.sql`）；配置 `question` / `question_from` 且启用 `NL2SQL_LLM_*` 时由 LLM 生成 SQL。内置只读护栏：只允许单条 `SELECT` / `WITH ... SELECT`，剔除注释与尾分号，拒绝堆叠语句、DDL/DML 关键字、`SELECT INTO` 与 `FOR UPDATE`；执行时统一包裹 `LIMIT`（`NL2SQL_MAX_ROWS`，默认 200）并受 `NL2SQL_TIMEOUT` 约束。数据库连接由 `NL2SQL_DATABASE_URL` 注入，生产应使用 SELECT-only 角色。
 
@@ -340,6 +344,9 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 | GET | `/v1/usage` | `usage:read` | 租户用量、配额与余量 |
 | DELETE | `/v1/files/:id` | `file:delete` + `kb:editor` | 级联删除对象、向量与任务 |
 | POST | `/v1/files/:id/reindex` | `task:write` + `kb:editor` | 从已解析内容重建索引 |
+| GET/POST | `/v1/connectors` | `kb:write` | 外部数据源连接器列表 / 创建（配置加密存储） |
+| GET/DELETE | `/v1/connectors/:id` | `kb:write` | 连接器详情（密钥脱敏） / 删除 |
+| POST | `/v1/connectors/:id/sync` | `kb:write` | 手动增量同步，返回创建/跳过/失败计数 |
 
 首次启动会自动种子管理员：`admin / admin123`（可用 `SEED_ADMIN_*` 覆盖）。控制台 `/login` 登录后，`admin` 可在"用户管理"页创建账号、分配角色、启停用户，并新建自定义角色。未登录可点"以匿名身份浏览"（需 `ALLOW_ANONYMOUS=true`），匿名身份仅有 `search:use`，可使用检索与智能问答，但无任何管理权限。
 

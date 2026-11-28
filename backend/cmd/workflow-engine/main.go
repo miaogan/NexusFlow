@@ -35,6 +35,9 @@ func main() {
 	if cfg.WorkflowHITL {
 		registry.Register(workflow.HumanApprovalNode{})
 	}
+	// Control flow: condition branches and bounded concurrent loops.
+	registry.Register(workflow.ConditionNode{})
+	registry.Register(workflow.NewLoopNode(registry, logger))
 	engine := workflow.NewEngine(registry, logger)
 	runStore, closeRunStore := workflow.NewRunStore(
 		ctx, cfg.WorkflowRunStoreDriver, cfg.WorkflowRunDatabaseURL,

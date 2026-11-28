@@ -1,6 +1,6 @@
 # NexusFlow v1.1.0 – v1.5.0 企业级能力演进方案（ROADMAP_V1_1_V1_5）
 
-> **定位**：本文件是面向 v1.1.0 至 v1.5.0 的能力演进方案，共 5 个 Milestone、11 个结构化任务；已交付 5 个，其余 6 个为当前待做项。
+> **定位**：本文件是面向 v1.1.0 至 v1.5.0 的能力演进方案，共 5 个 Milestone、11 个结构化任务；已交付 7 个，其余 4 个为当前待做项。
 > **2026-11-27 增补**：Agent Hub × Workflow × MCP × HITL 已按规划文档 `.trae/documents/agent-hub-workflow-mcp-hitl.md` 交付；Task 3.2 完成（运行状态持久化由 Task 3.3 补齐），Task 5.2 的 MCP Server 部分提前落地，其余任务状态不变。
 > **v1.2.0 已交付**：自定义 SubAgent（存储 + 多租户注册表 + SandboxAgentExecutor + 动态技能路由 + `/subagents` 控制台）已按 [ROADMAP_V1_2.md](ROADMAP_V1_2.md) Milestone 1–3 完成。本文件 Milestone 2（多模态、Connector）未能进入该版本，顺延为待做项，其原 v1.2.0 版本标签不再使用。
 > **与 `ROADMAP_V1_1.md` 的关系**：`ROADMAP_V1_1.md` 是上一轮已执行完毕的交付清单（知识库实体、级联删除、配额计量、K8s HPA，对应提交 c880e64 / 44b9284 / 9bc2c01 / a244bd7）。本文件在此基础上重新规划更完整的企业级能力，Milestone 1 为增量升级。
@@ -11,8 +11,6 @@
 
 | 任务 | 内容 | 状态 | 现状与前置 |
 | --- | --- | --- | --- |
-| Task 2.2 | 统一 Connector 框架（web_crawler / s3_bucket / db_query） | 未开始 | 顺延；无代码基础 |
-| Task 3.1 | DAG 条件分支（condition）与并发迭代（loop）节点 | 未开始 | 现有拓扑校验与调度可直接扩展 |
 | Task 4.1 | PII 双向脱敏 + 合规审计检索 | 未开始 | 工具/审批审计已持久化到 `audit_logs`；PII 识别脱敏与按时间检索/保留策略待实现 |
 | Task 4.2 | LLM 多模型路由网关 + 租户级配额 | 未开始 | 可复用 `internal/metering`（memory / Redis） |
 | Task 5.1 | API Key 鉴权 + OpenAI 兼容端点 | 未开始 | 需与现有 JWT 并存，作用域可绑定知识库 |
@@ -32,22 +30,26 @@
 
 ---
 
-## Milestone 2: 多模态与外部数据源连接器（Task 2.1 已交付，2.2 待做）
+## Milestone 2: 多模态与外部数据源连接器（已全部交付）
 
 * **[x] Task 2.1: 释放 MinerU 图文多模态解析能力，在 RAG 问答中支持图文联合检索、图表缩略图渲染与点击放大**
   * 解析层保留 MinerU 输出的图片与版面信息，切块时建立图-文关联；检索结果返回图表资源引用，问答链路注入图片摘要；前端支持缩略图展示与点击放大。
   * 交付情况：MinerU 结果 ZIP 中的图片由 `mineru.ParseDocument` 提取（单图 8MB、总量 32MB、最多 64 张），Worker 落盘到 `<tenant>/<kb>/parsed/<task>/images/` 并把 Markdown 图片链接改写为 `/v1/media?key=...`；Gateway 新增 `GET /v1/media`（`search:use`，仅允许本租户 `parsed/*/images` 下的图片扩展名）；LlamaIndex 切块把 `image_urls` 写入节点 metadata 并随检索结果返回；Chat 上下文按 chunk 注入“本段配图”摘要；控制台检索结果与问答引用展示缩略图，点击全屏放大。
   * 边界：本期只复用 MinerU 的 Markdown 版面结构，未接入独立 layout JSON；图片以鉴权接口读取（前端 fetch 带 Bearer 转 blob），不走公开对象存储。
 
-* **[ ] Task 2.2: 内置统一 Connector 框架与开箱即用连接器，支持 web_crawler、s3_bucket 及 db_query 的增量同步与去重**
+* **[x] Task 2.2: 内置统一 Connector 框架与开箱即用连接器，支持 web_crawler、s3_bucket 及 db_query 的增量同步与去重**
   * 抽象统一的 Connector 接口（发现 → 拉取 → 解析 → 入库 → 游标持久化），内置网页抓取、S3 桶与数据库查询三类连接器；以内容哈希与外部主键去重，按游标增量同步，失败可断点续传。
+  * 交付情况：新增 `internal/connector`（`Source` 接口 + `web_crawler` / `s3_bucket` / `db_query` 实现），游标分别使用已抓 URL 集合、S3 对象 key 与 SQL OFFSET；`data_connectors` 支持 memory / Postgres 持久化，配置以 AES-256-GCM 加密，同步状态记录 `IDLE / SYNCING / ERROR` 与 `last_error`。同步时通过 ingestion 的 `RegisterContent` 写入对象存储并创建普通任务，沿用 MinerU → LlamaIndex 链路；内容 SHA-256 作为幂等键，未变化文档自动跳过。Gateway 新增 `GET/POST /v1/connectors`、`GET/DELETE /v1/connectors/{id}`、`POST /v1/connectors/{id}/sync`（`kb:write`）。
+  * 边界：`db_query` 为只读 SELECT + OFFSET 分页，要求稳定 `ORDER BY`；`web_crawler` 默认拒绝私网/回环地址（`allow_private` 可放开），单页上限 5MB、最多 100 页；S3 单对象上限 20MB。`schedule_cron` 仅保存配置，定时触发留给后续调度器。
 
 ---
 
-## Milestone 3: 高级工作流控制流与人工介入（v1.3.0）
+## Milestone 3: 高级工作流控制流与人工介入（已全部交付）
 
-* **[ ] Task 3.1: 升级 DAG 引擎，支持基于上下文的条件分支（condition）节点与并发迭代批处理（loop）节点**
+* **[x] Task 3.1: 升级 DAG 引擎，支持基于上下文的条件分支（condition）节点与并发迭代批处理（loop）节点**
   * 条件节点按上游上下文结果选择分支；loop 节点对集合元素并发执行子图并聚合输出；保持现有拓扑校验、层级并发与失败语义不回退。
+  * 交付情况：新增 `condition` 节点（`field` 支持 `${node.field}` / `node.field` / 字面量，运算符 `equals` / `not_equals` / `in` / `contains`，缺省按真值判断），输出 `branch` 并按配置的 `then` / `else` 目标裁剪未选分支；引擎以“从被丢弃目标可达且从选中目标不可达”计算跳过集合，汇聚节点仍会执行，结果新增 `skipped` 字段并随 `RunState` 持久化。新增 `loop` 节点（`items` / `items_from`、`max_concurrency` 默认 4 上限 16、`continue_on_error`），对每个元素以 `item` / `index`（map 元素同时展开字段）并发执行 `sub_dag`，聚合 `count` / `failed` / `results`；子图校验复用 `Engine.Validate`，禁止嵌套 loop。
+  * 边界：`condition` 的 `then` / `else` 必须是该节点下游（`/v1/workflows/validate` 校验），未选分支节点不再出现在 `results` 而进入 `skipped`；`loop` 子图运行不单独持久化，父 run 失败即整体失败（除非 `continue_on_error`）。控制流节点已注册到独立 workflow-engine 与 dev-all，`/v1/nodes` 可见。
 
 * **[x] Task 3.2: 引入工作流人工介入机制（Human-in-the-Loop），支持 human_approval 审批挂起、上下文快照持久化及审批恢复**
   * 审批节点触发后持久化执行上下文并挂起实例；提供查询待办、批准/驳回接口；审批通过后从快照恢复继续执行，驳回则按失败或指定分支收尾。

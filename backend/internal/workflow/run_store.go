@@ -19,13 +19,15 @@ const (
 
 // RunState is the checkpoint saved when a run suspends on human approval.
 type RunState struct {
-	ID          string         `json:"id"`
-	DAG         DAG            `json:"dag"`
-	Input       map[string]any `json:"input"`
-	Meta        Meta           `json:"meta"`
-	Status      string         `json:"status"`
-	Order       []string       `json:"order,omitempty"`
-	Results     []NodeResult   `json:"results,omitempty"`
+	ID      string         `json:"id"`
+	DAG     DAG            `json:"dag"`
+	Input   map[string]any `json:"input"`
+	Meta    Meta           `json:"meta"`
+	Status  string         `json:"status"`
+	Order   []string       `json:"order,omitempty"`
+	Results []NodeResult   `json:"results,omitempty"`
+	// Skipped lists nodes pruned by an unchosen condition branch.
+	Skipped     []string       `json:"skipped,omitempty"`
 	Output      map[string]any `json:"output,omitempty"`
 	PendingNode string         `json:"pending_node,omitempty"`
 	Error       string         `json:"error,omitempty"`
@@ -129,6 +131,7 @@ func cloneRun(state *RunState) *RunState {
 	clone := *state
 	clone.Order = append([]string(nil), state.Order...)
 	clone.Results = append([]NodeResult(nil), state.Results...)
+	clone.Skipped = append([]string(nil), state.Skipped...)
 	if state.Output != nil {
 		clone.Output = make(map[string]any, len(state.Output))
 		for k, v := range state.Output {
