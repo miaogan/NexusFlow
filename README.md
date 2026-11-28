@@ -291,7 +291,7 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 
 **文档治理**：`DELETE /v1/files/{id}` 级联清理对象存储、Qdrant 分片与图谱缓存，并回退租户计量；索引清理失败时保留任务记录以便重试。`POST /v1/files/{id}/reindex` 复用已持久化的 Markdown 原地重建：分片使用确定性 UUID 覆盖写，新点写入后再删除旧点，检索侧无空窗；升级前上传的历史文档没有解析产物，需重新上传后才能重建。
 
-**外部连接器**（`backend/internal/connector`）：统一 `Source` 契约（发现 → 拉取 → 入库 → 游标），内置 `web_crawler`（同站链接、页数/大小上限、默认拒绝私网）、`s3_bucket`（S3 兼容 endpoint，按对象 key 续传）与 `db_query`（只读 SELECT + OFFSET 分页，行转 Markdown）。同步经 ingestion `RegisterContent` 落对象存储并创建普通任务，内容 SHA-256 幂等去重；配置与游标存入 `data_connectors`（`CONNECTOR_DRIVER=postgres`），配置以 AES-256-GCM 加密，HTTP 响应中凭据统一脱敏。
+**外部连接器**（`backend/internal/connector`）：统一 `Source` 契约（发现 → 拉取 → 入库 → 游标），内置 `web_crawler`（同站链接、页数/大小上限、默认拒绝私网）、`s3_bucket`（S3 兼容 endpoint，按对象 key 续传）与 `db_query`（只读 SELECT + OFFSET 分页，行转 Markdown）。同步经 ingestion `RegisterContent` 落对象存储并创建普通任务，内容 SHA-256 幂等去重；配置与游标存入 `data_connectors`（`CONNECTOR_DRIVER=postgres`），配置以 AES-256-GCM 加密，HTTP 响应中凭据统一脱敏。`schedule_cron` 为 5 字段标准 cron（分/时/日/月/周），由内置调度器按 `CONNECTOR_SCHEDULER_INTERVAL` 评估；ingestion 多副本通过 `connector_schedule_claims` 抢占同一分钟的 run，避免重复同步。
 
 **DAG 引擎**（`backend/internal/workflow`）：校验节点类型、引用完整性与环路，按拓扑层级并发执行就绪节点，上游输出写入共享 `ExecutionContext`。
 
@@ -402,7 +402,7 @@ flowchart LR
 - **工具契约与通用调用**（`AGENT_HUB_TOOLS_ENABLED`）：`ToolSpec{input/output schema, risk, timeout, requires_approval}` 与 `CallEnvelope{tenant,user,trace,request,approval,deadline,budget}` 统一；`POST /v1/call` 的 agent 分支始终可用，tool 分支需开启该开关；`GET /v1/tools` 列出工具。
 - **多轮自助推理**（`AGENT_HUB_REASONING_ENABLED`）：LLM `bind_tools` 后循环 `plan → tool_call → observe → answer`；受 `MAX_TURNS` / 工具调用数 / Token / 总时限预算约束，重复 `tool+args` 自动抑制，工具失败交回模型决策，预算耗尽回退原生成。
 - **DAG 双向联动**（`AGENT_HUB_WORKFLOW_ENABLED` / `WORKFLOW_AGENT_NODE`）：DAG 新增 `agent` 节点调用 Hub `/v1/call`；Hub 的 `workflow.run` 工具经网关（携带用户身份）或服务令牌触发 DAG。`x-tenant-id` / `x-trace-id` / deadline 全程透传；网关 `/v1/workflows/*` 统一要求 `workflow:run`。
-- **MCP**（`AGENT_HUB_MCP_ENABLED`）：`POST /mcp` 提供 HTTP JSON-RPC；`GET /mcp/sse` + `POST /mcp/messages?session_id=...` 提供 HTTP+SSE 传输；本地 stdio 通过 `python -m nexusflow_agents.mcp.stdio` 使用（newline-delimited JSON-RPC，日志走 stderr）。三种传输统一支持 `initialize` / `tools/*` / `resources/*` / `prompts/*`：资源暴露 `nexusflow://agents`、`nexusflow://skills`、`nexusflow://tools`（含单条模板），提示词提供 `rag_answer`、`summarize`、`intent_classify`。`AGENT_HUB_MCP_SERVERS=name=url,...` 接入外部 MCP，工具注册为 `mcp.<server>.<tool>`。外部工具默认需审批，sandbox 默认不对外暴露。
+- **MCP**（`AGENT_HUB_MCP_ENABLED`）：`POST /mcp` 为 Streamable HTTP（JSON 或 `Accept: text/event-stream` 单次 SSE 响应），`initialize` 返回 `Mcp-Session-Id`；`GET /mcp` 复用该会话接收服务端通知，`DELETE /mcp` 结束会话。另保留 `GET /mcp/sse` + `POST /mcp/messages?session_id=...` 旧版 HTTP+SSE 传输，本地 stdio 通过 `python -m nexusflow_agents.mcp.stdio` 使用（newline-delimited JSON-RPC，日志走 stderr）。所有传输统一支持 `initialize` / `tools/*` / `resources/*` / `prompts/*`：资源暴露 `nexusflow://agents`、`nexusflow://skills`、`nexusflow://tools`（含单条模板），`resources/subscribe` 后 `GET /mcp` 会在快照变化时推送 `notifications/resources/updated`；提示词提供 `rag_answer`、`summarize`、`intent_classify`。`AGENT_HUB_MCP_SERVERS=name=url,...` 接入外部 MCP，工具注册为 `mcp.<server>.<tool>`。外部工具默认需审批，sandbox 默认不对外暴露。
 - **人机协同**（`AGENT_HUB_HITL_ENABLED` / `HITL_ENABLED`）：高风险工具不执行，返回 202 + `approval_id`，由 `POST /v1/approvals/{id}/decide` 批准/拒绝后重试；DAG 的 `human_approval` 节点使 run 进入 `WAITING_APPROVAL` 并落盘检查点，经 `/v1/workflows/runs/{id}/approve|resume` 恢复，重复审批返回 409。`WORKFLOW_RUN_STORE_DRIVER=postgres` 时运行与审批写入 `workflow_executions` / `workflow_approvals`，跨副本共享且审批只生效一次。
 - **安全护栏**：工具风险分级（`read/write/execute/external`）、入参 JSON Schema、输出截断、预算超限 429、工具与审批审计（`GET /v1/audit`），工具结果以不可信数据包裹以防提示注入；网关侧 `/v1/sandbox/execute` 要求 `sandbox:execute`。
 - **PII 脱敏**（`RAG_PII_ENABLED`）：提示词、历史、检索片段、摘要、记忆与纠正答案在进入模型前替换为稳定占位符（`{{EMAIL_1}}` / `{{PHONE_1}}` 等，支持邮箱、手机号、身份证、银行卡与 IPv4）；检索仍使用原始 query，保证按手机号/邮箱检索可用。回复默认保持脱敏并对模型新生成的 PII 再次脱敏，`RAG_PII_RESTORE_OUTPUT=true` 可还原。每次命中会写入 `pii.mask` 审计事件（类型与数量），可按租户与时间检索。
@@ -426,8 +426,9 @@ flowchart LR
 | `GET /v1/tools` | `AGENT_HUB_TOOLS_ENABLED` 或 `AGENT_HUB_WORKFLOW_ENABLED` | 工具契约列表 |
 | `POST /v1/agents/{name}/call` | `search:use`；sandbox agent 另需 `sandbox:execute` | Gateway 调用自定义 SubAgent |
 | `GET /v1/skills` | Hub 内部 | 租户可见技能（供 Intent/Router 使用） |
-| `POST /mcp` | `AGENT_HUB_MCP_ENABLED` | MCP Server（HTTP JSON-RPC）：initialize / tools / resources / prompts |
-| `GET /mcp/sse`、`POST /mcp/messages?session_id=` | `AGENT_HUB_MCP_ENABLED` | MCP Server（HTTP+SSE 传输） |
+| `POST /mcp` | `AGENT_HUB_MCP_ENABLED` | MCP Server（Streamable HTTP）：initialize / tools / resources / prompts，可返回 JSON 或 SSE |
+| `GET /mcp`、`DELETE /mcp` | `AGENT_HUB_MCP_ENABLED` | Streamable HTTP 通知流（`resources/subscribe` 更新） / 结束会话 |
+| `GET /mcp/sse`、`POST /mcp/messages?session_id=` | `AGENT_HUB_MCP_ENABLED` | MCP Server（旧版 HTTP+SSE 传输） |
 | `python -m nexusflow_agents.mcp.stdio` | `AGENT_HUB_MCP_ENABLED` | MCP Server（stdio 传输，本地进程） |
 | `GET/POST /v1/api-keys`、`DELETE /v1/api-keys/{id}` | `apikey:write` | 签发 / 列出 / 吊销租户 API Key（明文仅创建时返回） |
 | `POST /v1/openai/chat/completions` | API Key `chat:completions` 或 JWT `search:use` | OpenAI 兼容问答（流式 / 非流式，引用透传；支持 `system`、`temperature`、`max_tokens`） |
@@ -659,6 +660,6 @@ make up / down     # 容器编排启停
 - 用户与角色支持三种存储：`memory`（dev-all 单进程默认）、`redis`（`IDENTITY_DRIVER=redis`）与 `postgres`（`IDENTITY_DRIVER=postgres` + `IDENTITY_DATABASE_URL`），后两者供独立部署的 Auth / User 服务跨进程共享；postgres 启动时自动建表并复用内置角色种子。Compose 真机冒烟已验证自动建表、种子管理员登录及 Gateway 身份读取。
 - 登出通过令牌吊销名单即时生效：JWT 携带 `jti`，登出时将该 id 写入 `TOKEN_BLACKLIST_DRIVER`（`memory` 单进程 / `redis` 供 gateway 与 auth-service 共享）并设置剩余有效期 TTL；网关在每次鉴权时拦截已吊销的 access token，auth-service 在 validate/refresh 时拒绝已吊销的 refresh token。Redis 不可用时自动降级为内存名单并告警。
 - 工具调用、审批、审计与工作流运行状态默认仍为进程内实现（`ToolService` / `ApprovalService` / `AuditLog` / `MemoryRunStore`），重启会丢失；生产多副本按需开启 `AGENT_HUB_APPROVAL_DRIVER=postgres`、`AGENT_HUB_AUDIT_DRIVER=postgres`（`AGENT_HUB_STATE_DATABASE_URL`）与 `WORKFLOW_RUN_STORE_DRIVER=postgres`（`WORKFLOW_RUN_DATABASE_URL`），分别落库 `agent_approvals` / `audit_logs` 与 `workflow_executions` / `workflow_approvals`。`audit_logs` 建议按月分区并配置保留策略。
-- MCP 支持 HTTP JSON-RPC（`POST /mcp`）、HTTP+SSE（`GET /mcp/sse` + `POST /mcp/messages`）与 stdio（`python -m nexusflow_agents.mcp.stdio`）三种传输，均复用同一套分发：`initialize`、`tools/list|call`、`resources/list|templates/list|read`、`prompts/list|get`。资源为只读视图（`nexusflow://agents`、`nexusflow://skills`、`nexusflow://tools` 及单条模板），提示词为 Hub 内置模板（`rag_answer` / `summarize` / `intent_classify`）。`resources/subscribe` 与变更推送未实现；外部工具默认 `risk=external` 且需审批，`sandbox.execute` 默认不通过 MCP 暴露（`AGENT_HUB_MCP_ALLOW_SANDBOX` 显式开启）。
-- 推理模式为保证工具循环的确定性，最终回答以单个 `token` 事件下发，`tool_call` / `tool_result` 逐条下发；预算耗尽或工具异常会回退到普通生成。
+- MCP 支持 Streamable HTTP（`POST /mcp`，可返回 JSON 或单次 SSE；`GET /mcp` 通知流；`DELETE /mcp` 结束会话）、旧版 HTTP+SSE（`GET /mcp/sse` + `POST /mcp/messages`）与 stdio（`python -m nexusflow_agents.mcp.stdio`），均复用同一套分发：`initialize`、`tools/list|call`、`resources/list|templates/list|read|subscribe|unsubscribe`、`prompts/list|get`。资源为只读视图（`nexusflow://agents`、`nexusflow://skills`、`nexusflow://tools` 及单条模板），订阅后由 `GET /mcp` 轮询快照并推送 `notifications/resources/updated`；提示词为 Hub 内置模板（`rag_answer` / `summarize` / `intent_classify`）。`resources/listChanged` 主动推送未实现，会话与订阅为进程内存储（多副本需粘性会话）；外部工具默认 `risk=external` 且需审批，`sandbox.execute` 默认不通过 MCP 暴露（`AGENT_HUB_MCP_ALLOW_SANDBOX` 显式开启）。
+- 推理模式的生成轮按 token 增量下发，工具调用阶段的内容会被抑制；`tool_call` / `tool_result` 逐条下发。预算耗尽或工具异常回退普通生成时，最终回答仍以单个 `token` 事件下发。
 - 审批重试：Chat 请求携带 `approval_id` 重放同一问题；`/v1/call` 通过 `envelope.approval_id` 重放；DAG 审批使用 `/v1/workflows/runs/{id}/approve|resume`。

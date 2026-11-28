@@ -261,7 +261,7 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 - 定义与游标：`CONNECTOR_DRIVER=memory|postgres`；Postgres 需 `CONNECTOR_DATABASE_URL`，启动幂等创建 `data_connectors`。数据库不可用时回退内存并告警。
 - 配置加密：生产必须设置 `CONNECTOR_ENCRYPTION_KEY`（AES-256-GCM）；为空时以 `plain:` 前缀存明文，仅限本地开发。
 - 三类连接器：`web_crawler`（urls / max_depth / max_pages / allow_private）、`s3_bucket`（endpoint / bucket / prefix / region / access_key / secret_key / use_ssl / max_objects）、`db_query`（dsn / sql / id_column / batch_size）。`db_query` 只允许单条 SELECT，建议使用 SELECT-only 角色并提供稳定 `ORDER BY`。
-- 同步为手动触发（`POST .../sync`）；`schedule_cron` 仅保存配置，定时调度留给后续调度器。同步通过 ingestion 创建普通任务，可在“任务中心”查看解析与索引进度。
+- 同步：手动触发 `POST .../sync`；`schedule_cron` 使用 5 字段标准 cron（分 时 日 月 周），由 ingestion 内置调度器按 `CONNECTOR_SCHEDULER_INTERVAL`（默认 30s）评估，单个 run 超时由 `CONNECTOR_SYNC_TIMEOUT` 控制（默认 10m）。`CONNECTOR_SCHEDULER_ENABLED=false` 可关闭。多副本通过 `connector_schedule_claims` 按「连接器 + 分钟」抢占，只有第一个副本执行；旧 claim 自动清理。同步通过 ingestion 创建普通任务，可在“任务中心”查看解析与索引进度。
 
 **LLM 网关**
 
@@ -310,10 +310,10 @@ if not hmac.compare_digest(expected, request.headers["X-NexusFlow-Signature"]):
 
 **MCP**
 
-- Server 传输：HTTP JSON-RPC `POST /mcp`、HTTP+SSE `GET /mcp/sse` + `POST /mcp/messages?session_id=...`、本地 stdio `python -m nexusflow_agents.mcp.stdio`；网关不代理，建议仅在内网暴露并设置 `AGENT_HUB_ADMIN_TOKEN` 保护。SSE 会话保存在进程内，多副本必须使用粘性会话。
+- Server 传输：Streamable HTTP `POST /mcp`（JSON 或 `Accept: text/event-stream` 单次 SSE）、`GET /mcp`（服务端通知流）、`DELETE /mcp`（结束会话，`Mcp-Session-Id` 标识）；旧版 HTTP+SSE `GET /mcp/sse` + `POST /mcp/messages?session_id=...`；本地 stdio `python -m nexusflow_agents.mcp.stdio`。网关不代理，建议仅在内网暴露并设置 `AGENT_HUB_ADMIN_TOKEN` 保护。会话与订阅保存在进程内，多副本必须使用粘性会话。
 - `AGENT_HUB_MCP_SERVERS=name=url,...` 在启动时连接外部 MCP；不可达只记录告警并跳过，不影响 Hub 启动。
 - 外部工具注册为 `mcp.<server>.<tool>`，默认 `risk=external` 且需审批；`sandbox.execute` 默认不暴露，确需开放时设置 `AGENT_HUB_MCP_ALLOW_SANDBOX=true`。
-- 三种传输均支持 `initialize`、`tools/list|call`、`resources/list|templates/list|read`、`prompts/list|get`。资源为只读：`nexusflow://agents` / `nexusflow://skills` / `nexusflow://tools`（支持 `nexusflow://agents/{name}`、`nexusflow://tools/{name}`）；提示词为 `rag_answer` / `summarize` / `intent_classify`。`resources/subscribe` 与变更推送未实现。
+- 所有传输均支持 `initialize`、`tools/list|call`、`resources/list|templates/list|read|subscribe|unsubscribe`、`prompts/list|get`。资源为只读：`nexusflow://agents` / `nexusflow://skills` / `nexusflow://tools`（支持 `nexusflow://agents/{name}`、`nexusflow://tools/{name}`）；`resources/subscribe` 后 `GET /mcp` 会在快照变化时推送 `notifications/resources/updated`。提示词为 `rag_answer` / `summarize` / `intent_classify`。`resources/listChanged` 主动推送未实现。
 
 **审计**
 
