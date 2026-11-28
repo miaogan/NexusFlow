@@ -40,7 +40,7 @@ class PIIGraph:
         ]
 
     def generate(
-        self, query, history, chunks, summary="", memories=None, corrected=None
+        self, query, history, chunks, summary="", memories=None, corrected=None, tenant_id=""
     ) -> str:
         self.prompt_message = query
         self.prompt_chunks = chunks
@@ -50,7 +50,7 @@ class PIIGraph:
         raise AssertionError("PII mode must retrieve before generating")
 
     async def stream_answer(
-        self, query, history, chunks, summary="", memories=None, corrected=None
+        self, query, history, chunks, summary="", memories=None, corrected=None, tenant_id=""
     ):
         self.prompt_message = query
         self.prompt_chunks = chunks

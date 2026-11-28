@@ -28,6 +28,7 @@ class GeneratorLike(Protocol):
         summary: str = "",
         memories: list[str] | None = None,
         corrected: list[dict[str, Any]] | None = None,
+        tenant_id: str = "",
     ) -> str: ...
 
     def astream(
@@ -38,6 +39,7 @@ class GeneratorLike(Protocol):
         summary: str = "",
         memories: list[str] | None = None,
         corrected: list[dict[str, Any]] | None = None,
+        tenant_id: str = "",
     ) -> AsyncIterator[str]: ...
 
     def generate_intent(
@@ -47,6 +49,7 @@ class GeneratorLike(Protocol):
         history: list[dict[str, str]],
         summary: str = "",
         memories: list[str] | None = None,
+        tenant_id: str = "",
     ) -> str: ...
 
     def astream_intent(
@@ -56,6 +59,7 @@ class GeneratorLike(Protocol):
         history: list[dict[str, str]],
         summary: str = "",
         memories: list[str] | None = None,
+        tenant_id: str = "",
     ) -> AsyncIterator[str]: ...
 
 
@@ -147,6 +151,7 @@ class ChatGraph:
             summary=state.get("summary") or "",
             memories=state.get("memories") or [],
             corrected=state.get("corrected") or [],
+            tenant_id=state.get("tenant_id") or "",
         )
         return {"answer": answer, "citations": self.citations(chunks)}
 
@@ -158,6 +163,7 @@ class ChatGraph:
         summary: str = "",
         memories: list[str] | None = None,
         corrected: list[dict[str, Any]] | None = None,
+        tenant_id: str = "",
     ) -> str:
         """Generation step exposed for callers that retrieve separately (PII
         shielding needs the original query for retrieval and a masked prompt)."""
@@ -168,6 +174,7 @@ class ChatGraph:
             summary=summary,
             memories=memories,
             corrected=corrected,
+            tenant_id=tenant_id,
         )
 
     async def stream_answer(
@@ -178,6 +185,7 @@ class ChatGraph:
         summary: str = "",
         memories: list[str] | None = None,
         corrected: list[dict[str, Any]] | None = None,
+        tenant_id: str = "",
     ) -> AsyncIterator[str]:
         async for piece in self._generator.astream(
             query,
@@ -186,6 +194,7 @@ class ChatGraph:
             summary=summary,
             memories=memories,
             corrected=corrected,
+            tenant_id=tenant_id,
         ):
             yield piece
 
@@ -196,9 +205,10 @@ class ChatGraph:
         history: list[dict[str, str]],
         summary: str = "",
         memories: list[str] | None = None,
+        tenant_id: str = "",
     ) -> str:
         return self._generator.generate_intent(
-            intent, message, history, summary=summary, memories=memories
+            intent, message, history, summary=summary, memories=memories, tenant_id=tenant_id
         )
 
     async def stream_intent_answer(
@@ -208,9 +218,10 @@ class ChatGraph:
         history: list[dict[str, str]],
         summary: str = "",
         memories: list[str] | None = None,
+        tenant_id: str = "",
     ) -> AsyncIterator[str]:
         async for piece in self._generator.astream_intent(
-            intent, message, history, summary=summary, memories=memories
+            intent, message, history, summary=summary, memories=memories, tenant_id=tenant_id
         ):
             yield piece
 

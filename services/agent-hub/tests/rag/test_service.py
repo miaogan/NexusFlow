@@ -53,17 +53,19 @@ class FakeStreamGraph:
         ]
 
     async def stream_answer(
-        self, query, history, chunks, summary="", memories=None, corrected=None
+        self, query, history, chunks, summary="", memories=None, corrected=None, tenant_id=""
     ):
         self.stream_corrected = corrected
         for piece in ("hello ", "world"):
             yield piece
 
-    def generate_intent(self, intent, message, history, summary="", memories=None):
+    def generate_intent(
+        self, intent, message, history, summary="", memories=None, tenant_id=""
+    ):
         return f"{intent} answer"
 
     async def stream_intent_answer(
-        self, intent, message, history, summary="", memories=None
+        self, intent, message, history, summary="", memories=None, tenant_id=""
     ):
         for piece in ("chat ", "reply"):
             yield piece

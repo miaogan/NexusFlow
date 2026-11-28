@@ -50,6 +50,17 @@ data:
   # PII shielding at the LLM boundary (replies stay masked unless restored).
   RAG_PII_ENABLED: "false"
   RAG_PII_RESTORE_OUTPUT: "false"
+  # LLM router: OpenAI-compatible primary/backup with breaker + token quota.
+  LLM_GATEWAY_ADDR: ":8082"
+  LLM_PRIMARY_BASE_URL: ""
+  LLM_PRIMARY_MODEL: ""
+  LLM_BACKUP_BASE_URL: ""
+  LLM_BACKUP_MODEL: ""
+  LLM_DAILY_TOKEN_LIMIT: "0"
+  LLM_QUOTA_DRIVER: "redis"
+  LLM_BREAKER_THRESHOLD: "3"
+  LLM_BREAKER_COOLDOWN: "30s"
+  LLM_UPSTREAM_TIMEOUT: "120s"
   # Single-container star hub: RAG chat plus in-process intent/summary/memory.
   AGENT_HUB_ROLE: "all"
   AGENT_HUB_MODE: "local"
@@ -113,6 +124,9 @@ stringData:
   AGENT_HUB_ADMIN_TOKEN: ""
   # AES-GCM key for connector configs at rest; empty stores plaintext (dev only).
   CONNECTOR_ENCRYPTION_KEY: ""
+  # LLM router upstream credentials (empty disables the corresponding route).
+  LLM_PRIMARY_API_KEY: ""
+  LLM_BACKUP_API_KEY: ""
   LLAMAINDEX_EMBEDDING_API_KEY: ""
   RAG_LLM_BASE_URL: ""
   RAG_LLM_API_KEY: ""
@@ -888,3 +902,58 @@ spec:
   ports:
     - port: 80
       targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-gateway
+  namespace: nexusflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: llm-gateway
+  template:
+    metadata:
+      labels:
+        app: llm-gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+    spec:
+      containers:
+        - name: llm-gateway
+          image: ghcr.io/nexusflow/llm-gateway:4.0.0
+          ports:
+            - containerPort: 8082
+            - containerPort: 9100
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secret
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8082
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-gateway
+  namespace: nexusflow
+spec:
+  selector:
+    app: llm-gateway
+  ports:
+    - port: 8082
+      targetPort: 8082

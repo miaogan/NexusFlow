@@ -408,6 +408,7 @@ class ChatService:
                     summary=masked_summary,
                     memories=masked_memories,
                     corrected=masked_corrected,
+                    tenant_id=tenant_id,
                 )
                 citations = self._graph.citations(chunks)
                 trace_id = retrieved.get("trace_id")
@@ -435,6 +436,7 @@ class ChatService:
                 masked_history,
                 summary=masked_summary,
                 memories=masked_memories,
+                tenant_id=tenant_id,
             )
             citations = []
             trace_id = None
@@ -561,6 +563,7 @@ class ChatService:
                     masked_history,
                     summary=masked_summary,
                     memories=masked_memories,
+                    tenant_id=tenant_id,
                 ):
                     intent_parts.append(piece)
                     yield {"type": "token", "content": piece}
@@ -663,6 +666,7 @@ class ChatService:
                     summary=masked_summary,
                     memories=masked_memories,
                     corrected=masked_corrected,
+                    tenant_id=tenant_id,
                 ):
                     parts.append(piece)
                     yield {"type": "token", "content": piece}

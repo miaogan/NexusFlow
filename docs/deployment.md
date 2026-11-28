@@ -229,6 +229,10 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 | `WORKFLOW_RUN_STORE_DRIVER` | memory | 工作流运行与审批存储：memory / postgres |
 | `RAG_PII_ENABLED` | false | 提示词/上下文 PII 脱敏（邮箱、手机号、身份证、银行卡、IPv4） |
 | `RAG_PII_RESTORE_OUTPUT` | false | 回复还原原始 PII；默认保持脱敏 |
+| `LLM_PRIMARY_BASE_URL` / `LLM_BACKUP_BASE_URL` | 空 | OpenAI 兼容主/备上游；为空则网关返回 502 |
+| `LLM_DAILY_TOKEN_LIMIT` | 0 | 每租户每日 token 上限，0 为不限 |
+| `LLM_QUOTA_DRIVER` | memory | token 计数存储：memory / redis（多副本） |
+| `LLM_BREAKER_THRESHOLD` / `LLM_BREAKER_COOLDOWN` | 3 / 30s | 熔断阈值与冷却时间 |
 
 - 自定义 SubAgent 注册表：`AGENT_HUB_REGISTRY_DRIVER=memory|postgres`；Postgres 模式需 `AGENT_HUB_REGISTRY_DATABASE_URL`，启动时幂等创建 `custom_agents` 并加载该租户的自定义 Agent。写接口仍受 `AGENT_HUB_DYNAMIC_REGISTRATION` 控制。
 - 审批与审计持久化：`AGENT_HUB_APPROVAL_DRIVER` / `AGENT_HUB_AUDIT_DRIVER=postgres` 时需 `AGENT_HUB_STATE_DATABASE_URL`，启动幂等创建 `agent_approvals` / `audit_logs`；数据库不可用时记录告警并回退内存，不影响 Hub 启动。
@@ -258,6 +262,14 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 - 配置加密：生产必须设置 `CONNECTOR_ENCRYPTION_KEY`（AES-256-GCM）；为空时以 `plain:` 前缀存明文，仅限本地开发。
 - 三类连接器：`web_crawler`（urls / max_depth / max_pages / allow_private）、`s3_bucket`（endpoint / bucket / prefix / region / access_key / secret_key / use_ssl / max_objects）、`db_query`（dsn / sql / id_column / batch_size）。`db_query` 只允许单条 SELECT，建议使用 SELECT-only 角色并提供稳定 `ORDER BY`。
 - 同步为手动触发（`POST .../sync`）；`schedule_cron` 仅保存配置，定时调度留给后续调度器。同步通过 ingestion 创建普通任务，可在“任务中心”查看解析与索引进度。
+
+**LLM 网关**
+
+- 服务入口：`POST /v1/chat/completions`（支持 `stream=true` 的 SSE 透传）与 `/v1/embeddings`，健康检查 `GET /healthz`。
+- 接入方式：把 `RAG_LLM_BASE_URL`、`INTENT_LLM_BASE_URL`、`SUMMARY_LLM_BASE_URL`、`MEMORY_LLM_BASE_URL` 指向 `http://llm-gateway:8082/v1`；RAG 生成会携带 `x-tenant-id`。
+- 主备与熔断：`LLM_PRIMARY_*` 与 `LLM_BACKUP_*` 可只配一个；网络错误、429、5xx 自动切换，连续失败达到 `LLM_BREAKER_THRESHOLD` 后冷却 `LLM_BREAKER_COOLDOWN`。
+- 配额：`LLM_DAILY_TOKEN_LIMIT > 0` 时按租户 + UTC 日预扣 token，超限前置返回 `429 quota_exceeded`；多副本部署使用 `LLM_QUOTA_DRIVER=redis`。
+- 客户端若未设置 `max_tokens`，按 512 预留额度，响应后按实际 `usage.total_tokens` 修正。
 
 **审批**
 

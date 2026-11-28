@@ -120,6 +120,7 @@ V4.0 在接入层进一步拆出 Auth Service 与 User Service：JWT 的签发�
 | Processing Worker | Go | 消费任务，调用 MinerU 解析，产出 Markdown | I/O+等待，异步解析 |
 | LlamaIndex Service | Python | 语义/层级切块、索引构建、调用 Embedding API 并写向量库 | CPU+网络，可水平扩展 |
 | Query Service | Go | 多路召回并行编排、RRF 融合、Cross-Encoder 重排与问答入口 | I/O+网络，无状态，可水平扩展 |
+| LLM Gateway | Go | OpenAI 兼容 LLM 路由：主备切换、熔断、租户 token 配额 | I/O+网络，无状态，可水平扩展 |
 | Agent Hub | Python | 星型调度 RAG 对话与 intent / summary / memory；默认单容器，可 `ROLE` 拆分 | CPU+网络，可水平扩展 |
 | Sandbox Execution Service | Go | 经 OpenSandbox 执行自定义代码节点 | 隔离执行，短时生命周期 |
 
@@ -260,6 +261,10 @@ V2.0 将切块从 Go 迁移至 LlamaIndex 服务。LlamaIndex 按标题层级与
 ### 6.4 限流与背压
 
 调用 MinerU 与外部 Embedding API 时必须引入令牌桶限流（Go 侧用 golang.org/x/time/rate，Python 侧用 asyncio + 信号量或 aiolimiter）。当外部接口返回 429 时，触发背压机制暂停从队列拉取新任务，避免雪崩与更严厉的限流。
+
+### 6.5 LLM 路由网关
+
+`backend/internal/llmgateway` 提供 OpenAI 兼容的 `/v1/chat/completions`（含 SSE）与 `/v1/embeddings`，供 RAG、Intent、Summary、Memory 等 Agent 统一接入。请求按顺序尝试主/备通道，网络错误、429 与 5xx 触发切换；同一通道连续失败达到阈值后进入冷却（熔断），冷却期内直接跳过。配额按 `x-tenant-id` 与 UTC 日聚合，调用前以「提示词长度估算 + max_tokens」原子预留每日 token，超限返回 `429 quota_exceeded`，响应后按实际 usage 修正预留值；计数可存内存或 Redis（`LLM_QUOTA_DRIVER`），多副本共享。Agent Hub 的 RAG 生成会把租户写入 `x-tenant-id` 请求头，实现租户级计量。
 
 ## 7. 动态节点弹性伸缩
 

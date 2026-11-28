@@ -99,6 +99,7 @@ flowchart TB
 | Ingestion Service | Go | `backend/cmd/ingestion` | 9095（Connector API 9098） | 上传登记、连接器同步、状态查询、任务投递 |
 | Processing Worker | Go | `backend/cmd/processing-worker` | 9092 | 消费任务、调用 MinerU、发布解析结果 |
 | Sandbox Execution | Go | `backend/cmd/sandbox-execution` | 9093 | 自定义代码节点强隔离执行 |
+| LLM Gateway | Go | `backend/cmd/llm-gateway` | 8082 | OpenAI 兼容路由：主备切换、熔断、租户 token 配额 |
 | Query Service | Go | `backend/cmd/query-service` | 9094 | 多路召回、RRF、重排、流式回答 |
 | LlamaIndex Service | Python | `services/llamaindex` | 8000 | 切块、索引、Embedding、检索策略 |
 | Agent Hub | Python | `services/agent-hub` | 8001（拆分 8002–8004） | 星型调度 + RAG 多轮问答；默认单容器内置 intent / summary / memory，可用 `ROLE` 拆分 |
@@ -120,6 +121,7 @@ flowchart TB
 │   │   ├── metering/              # 租户用量计量与配额（memory / Redis）
 │   │   ├── state/                 # 状态机（memory / Redis）
 │   │   ├── queue/                 # 消息总线（memory / RabbitMQ）
+│   │   ├── llmgateway/            # OpenAI 兼容路由：主备切换、熔断、token 配额
 │   │   └── platform/              # 日志、指标、HTTP/gRPC 服务封装
 │   └── pb/                        # protoc 生成代码
 ├── services/llamaindex/           # FastAPI + LlamaIndex 数据加工服务
@@ -392,6 +394,7 @@ flowchart LR
 - **人机协同**（`AGENT_HUB_HITL_ENABLED` / `HITL_ENABLED`）：高风险工具不执行，返回 202 + `approval_id`，由 `POST /v1/approvals/{id}/decide` 批准/拒绝后重试；DAG 的 `human_approval` 节点使 run 进入 `WAITING_APPROVAL` 并落盘检查点，经 `/v1/workflows/runs/{id}/approve|resume` 恢复，重复审批返回 409。`WORKFLOW_RUN_STORE_DRIVER=postgres` 时运行与审批写入 `workflow_executions` / `workflow_approvals`，跨副本共享且审批只生效一次。
 - **安全护栏**：工具风险分级（`read/write/execute/external`）、入参 JSON Schema、输出截断、预算超限 429、工具与审批审计（`GET /v1/audit`），工具结果以不可信数据包裹以防提示注入；网关侧 `/v1/sandbox/execute` 要求 `sandbox:execute`。
 - **PII 脱敏**（`RAG_PII_ENABLED`）：提示词、历史、检索片段、摘要、记忆与纠正答案在进入模型前替换为稳定占位符（`{{EMAIL_1}}` / `{{PHONE_1}}` 等，支持邮箱、手机号、身份证、银行卡与 IPv4）；检索仍使用原始 query，保证按手机号/邮箱检索可用。回复默认保持脱敏并对模型新生成的 PII 再次脱敏，`RAG_PII_RESTORE_OUTPUT=true` 可还原。每次命中会写入 `pii.mask` 审计事件（类型与数量），可按租户与时间检索。
+- **LLM 网关**（`backend/internal/llmgateway`）：OpenAI 兼容 `POST /v1/chat/completions`（含 SSE）与 `/v1/embeddings`，按主/备通道自动切换，连续失败触发熔断（阈值/冷却可配）；按 `x-tenant-id` 累计每日 token，超限前置返回 `429 quota_exceeded`，预留额度原子扣减并在响应后按实际 usage 修正。把 `RAG_LLM_BASE_URL` 等指向 `http://llm-gateway:8082/v1` 即可复用；RAG 生成会透传租户头。
 - **图文多模态**：MinerU 结果 ZIP 中的图片由 Worker 提取并落盘到 `<tenant>/<kb>/parsed/<task>/images/`，Markdown 图片链接改写为 `/v1/media`；切块把 `image_urls` 写入节点 metadata，检索结果与问答引用返回配图，控制台展示缩略图并支持点击放大。
 
 新增 / 变更接口：

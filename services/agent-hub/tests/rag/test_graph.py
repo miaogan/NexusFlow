@@ -37,7 +37,9 @@ class FakeGenerator:
         self.memories: list[str] | None = None
         self.corrected: list[dict[str, Any]] | None = None
 
-    def generate(self, query, history, chunks, summary="", memories=None, corrected=None):
+    def generate(
+        self, query, history, chunks, summary="", memories=None, corrected=None, tenant_id=""
+    ):
         self.seen = (query, history, chunks)
         self.summary = summary
         self.memories = memories

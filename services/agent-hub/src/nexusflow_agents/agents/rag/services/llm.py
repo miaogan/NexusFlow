@@ -108,12 +108,15 @@ class AnswerGenerator:
         summary: str = "",
         memories: list[str] | None = None,
         corrected: list[dict[str, Any]] | None = None,
+        tenant_id: str = "",
     ) -> str:
         if not chunks and not corrected:
             return NO_CONTEXT_ANSWER
         if self._llm is None:
             return self._extractive(chunks, corrected)
-        return self._llm_answer(query, history, chunks, summary, memories, corrected)
+        return self._llm_answer(
+            query, history, chunks, summary, memories, corrected, tenant_id
+        )
 
     async def astream(
         self,
@@ -123,6 +126,7 @@ class AnswerGenerator:
         summary: str = "",
         memories: list[str] | None = None,
         corrected: list[dict[str, Any]] | None = None,
+        tenant_id: str = "",
     ) -> AsyncIterator[str]:
         """Streams answer text. Degrades to one chunk when no LLM is configured."""
         if not chunks and not corrected:
@@ -132,7 +136,9 @@ class AnswerGenerator:
             yield self._extractive(chunks, corrected)
             return
         messages = self._messages(query, history, chunks, summary, memories, corrected)
-        async for delta in self._llm.astream(messages):  # type: ignore[union-attr]
+        async for delta in self._llm.astream(  # type: ignore[union-attr]
+            messages, **self._tenant_headers(tenant_id)
+        ):
             text = str(getattr(delta, "content", "") or "")
             if text:
                 yield text
@@ -144,12 +150,14 @@ class AnswerGenerator:
         history: list[dict[str, str]],
         summary: str = "",
         memories: list[str] | None = None,
+        tenant_id: str = "",
     ) -> str:
         """Answers chitchat/clarify turns without retrieval."""
         if self._llm is None:
             return CHITCHAT_ANSWER if intent == "chitchat" else CLARIFY_ANSWER
         result = self._llm.invoke(
-            self._intent_messages(intent, message, history, summary, memories)
+            self._intent_messages(intent, message, history, summary, memories),
+            **self._tenant_headers(tenant_id),
         )
         return str(getattr(result, "content", result)).strip()
 
@@ -160,15 +168,25 @@ class AnswerGenerator:
         history: list[dict[str, str]],
         summary: str = "",
         memories: list[str] | None = None,
+        tenant_id: str = "",
     ) -> AsyncIterator[str]:
         if self._llm is None:
             yield CHITCHAT_ANSWER if intent == "chitchat" else CLARIFY_ANSWER
             return
         messages = self._intent_messages(intent, message, history, summary, memories)
-        async for delta in self._llm.astream(messages):  # type: ignore[union-attr]
+        async for delta in self._llm.astream(  # type: ignore[union-attr]
+            messages, **self._tenant_headers(tenant_id)
+        ):
             text = str(getattr(delta, "content", "") or "")
             if text:
                 yield text
+
+    @staticmethod
+    def _tenant_headers(tenant_id: str) -> dict[str, Any]:
+        """Forwards the tenant to an OpenAI-compatible LLM router."""
+        if not tenant_id:
+            return {}
+        return {"extra_headers": {"x-tenant-id": tenant_id}}
 
     def _intent_messages(
         self,
@@ -307,8 +325,10 @@ class AnswerGenerator:
         summary: str = "",
         memories: list[str] | None = None,
         corrected: list[dict[str, Any]] | None = None,
+        tenant_id: str = "",
     ) -> str:
         result = self._llm.invoke(  # type: ignore[union-attr]
-            self._messages(query, history, chunks, summary, memories, corrected)
+            self._messages(query, history, chunks, summary, memories, corrected),
+            **self._tenant_headers(tenant_id),
         )
         return str(getattr(result, "content", result)).strip()

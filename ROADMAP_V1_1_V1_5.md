@@ -1,6 +1,6 @@
 # NexusFlow v1.1.0 – v1.5.0 企业级能力演进方案（ROADMAP_V1_1_V1_5）
 
-> **定位**：本文件是面向 v1.1.0 至 v1.5.0 的能力演进方案，共 5 个 Milestone、11 个结构化任务；已交付 8 个，其余 3 个为当前待做项。
+> **定位**：本文件是面向 v1.1.0 至 v1.5.0 的能力演进方案，共 5 个 Milestone、11 个结构化任务；已交付 9 个，其余 2 个为当前待做项。
 > **2026-11-27 增补**：Agent Hub × Workflow × MCP × HITL 已按规划文档 `.trae/documents/agent-hub-workflow-mcp-hitl.md` 交付；Task 3.2 完成（运行状态持久化由 Task 3.3 补齐），Task 5.2 的 MCP Server 部分提前落地，其余任务状态不变。
 > **v1.2.0 已交付**：自定义 SubAgent（存储 + 多租户注册表 + SandboxAgentExecutor + 动态技能路由 + `/subagents` 控制台）已按 [ROADMAP_V1_2.md](ROADMAP_V1_2.md) Milestone 1–3 完成。本文件 Milestone 2（多模态、Connector）未能进入该版本，顺延为待做项，其原 v1.2.0 版本标签不再使用。
 > **与 `ROADMAP_V1_1.md` 的关系**：`ROADMAP_V1_1.md` 是上一轮已执行完毕的交付清单（知识库实体、级联删除、配额计量、K8s HPA，对应提交 c880e64 / 44b9284 / 9bc2c01 / a244bd7）。本文件在此基础上重新规划更完整的企业级能力，Milestone 1 为增量升级。
@@ -11,7 +11,6 @@
 
 | 任务 | 内容 | 状态 | 现状与前置 |
 | --- | --- | --- | --- |
-| Task 4.2 | LLM 多模型路由网关 + 租户级配额 | 未开始 | 可复用 `internal/metering`（memory / Redis） |
 | Task 5.1 | API Key 鉴权 + OpenAI 兼容端点 | 未开始 | 需与现有 JWT 并存，作用域可绑定知识库 |
 | Task 5.2 | 租户级 Webhook 订阅（HMAC + 退避重试） | 部分完成 | MCP Server 已交付（`POST /mcp`）；Webhook 未开始 |
 
@@ -63,15 +62,17 @@
 
 ---
 
-## Milestone 4: 企业级安全合规与大模型网关治理（Task 4.1 已交付，4.2 待做）
+## Milestone 4: 企业级安全合规与大模型网关治理（已全部交付）
 
 * **[x] Task 4.1: 实现 PII 敏感信息双向脱敏引擎与结构化合规审计日志中间件，支持安全追溯**
   * 入口对提示词与上传文本做 PII 识别与脱敏，出口对模型回复做还原或再次脱敏；审计日志记录操作者、资源、动作与脱敏命中项，支持按租户与时间检索。
   * 交付情况：新增 `core/pii.py`（邮箱 / 手机号 / 身份证 / 银行卡 / IPv4），按请求维护稳定占位符（`{{EMAIL_1}}` 等）与唯一命中计数；Chat 同步与 SSE 路径在模型边界脱敏提示词、历史、检索片段、摘要、记忆与纠正答案，检索仍使用原始 query；回复默认保持脱敏并二次扫描模型新生成的 PII，`RAG_PII_RESTORE_OUTPUT=true` 可还原。命中写入 `pii.mask` 审计事件（操作者、资源、`detail.types/count`），`GET /v1/audit` 新增 `since` / `until`（RFC3339 或 unix 秒）并支持 memory / Postgres 两种存储。
   * 边界：上传文档与对话历史保持原文存储，脱敏发生在进入模型的边界；SSE 逐 token 事件为实时输出，最终 `done.answer` 与持久化内容采用脱敏结果；`audit_logs` 按月分区与保留策略仍由运维脚本负责。
 
-* **[ ] Task 4.2: 建设多模型路由网关（主备自动故障转移）与租户级用量计量/配额管控（防 429 溢出）**
+* **[x] Task 4.2: 建设多模型路由网关（主备自动故障转移）与租户级用量计量/配额管控（防 429 溢出）**
   * 统一 LLM 调用入口，按模型与租户路由至主/备通道，失败自动切换并熔断；复用并扩展已有计量能力，按租户累计 token 与调用量，超限前置拦截并避免上游 429 溢出。
+  * 交付情况：新增独立 `cmd/llm-gateway`（`internal/llmgateway`），提供 OpenAI 兼容 `/v1/chat/completions`（含 SSE 透传与 usage 解析）与 `/v1/embeddings`；按 `LLM_PRIMARY_*` → `LLM_BACKUP_*` 顺序失败切换，网络错误 / 429 / 5xx 计入熔断（`LLM_BREAKER_THRESHOLD` / `LLM_BREAKER_COOLDOWN`）。按 `x-tenant-id` + UTC 日原子预留 token（提示词估算 + max_tokens），超限前置返回 `429 quota_exceeded`，响应后按实际 usage 修正；计数支持 `LLM_QUOTA_DRIVER=memory|redis`。Agent Hub 的 RAG 生成在 `generate` / `astream` / intent 路径透传 `x-tenant-id`。
+  * 边界：模型路由以通道顺序为准（`LLM_*_MODEL` 可按通道覆盖模型名）；Intent/Summary/Memory 独立 Agent 若直连上游则不带租户头；Embedding 用量按请求体估算；配额按 UTC 自然日重置。
 
 ---
 

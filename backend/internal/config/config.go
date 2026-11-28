@@ -143,6 +143,20 @@ type Config struct {
 	QuotaMaxStorageBytes    int64
 	QuotaMaxFiles           int64
 	QuotaMaxQueriesPerMonth int64
+
+	// LLM router: OpenAI-compatible gateway with primary/backup failover.
+	LLMGatewayAddr      string
+	LLMPrimaryBaseURL   string
+	LLMPrimaryAPIKey    string
+	LLMPrimaryModel     string
+	LLMBackupBaseURL    string
+	LLMBackupAPIKey     string
+	LLMBackupModel      string
+	LLMDailyTokenLimit  int64
+	LLMQuotaDriver      string
+	LLMBreakerThreshold int
+	LLMBreakerCooldown  time.Duration
+	LLMUpstreamTimeout  time.Duration
 }
 
 func Load() Config {
@@ -247,6 +261,19 @@ func Load() Config {
 		QuotaMaxStorageBytes:    envInt64("QUOTA_MAX_STORAGE_BYTES", 10<<30),
 		QuotaMaxFiles:           envInt64("QUOTA_MAX_FILES", 5000),
 		QuotaMaxQueriesPerMonth: envInt64("QUOTA_MAX_QUERIES", 100000),
+
+		LLMGatewayAddr:      env("LLM_GATEWAY_ADDR", ":8082"),
+		LLMPrimaryBaseURL:   env("LLM_PRIMARY_BASE_URL", ""),
+		LLMPrimaryAPIKey:    env("LLM_PRIMARY_API_KEY", ""),
+		LLMPrimaryModel:     env("LLM_PRIMARY_MODEL", ""),
+		LLMBackupBaseURL:    env("LLM_BACKUP_BASE_URL", ""),
+		LLMBackupAPIKey:     env("LLM_BACKUP_API_KEY", ""),
+		LLMBackupModel:      env("LLM_BACKUP_MODEL", ""),
+		LLMDailyTokenLimit:  envInt64("LLM_DAILY_TOKEN_LIMIT", 0),
+		LLMQuotaDriver:      env("LLM_QUOTA_DRIVER", "memory"),
+		LLMBreakerThreshold: envInt("LLM_BREAKER_THRESHOLD", 3),
+		LLMBreakerCooldown:  envDuration("LLM_BREAKER_COOLDOWN", 30*time.Second),
+		LLMUpstreamTimeout:  envDuration("LLM_UPSTREAM_TIMEOUT", 120*time.Second),
 	}
 }
 

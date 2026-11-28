@@ -128,6 +128,36 @@ services:
     volumes: ["objects:/data/objects"]
     ports: ["${GATEWAY_PUBLISH_PORT:-8080}:8080"]
 
+  llm-gateway:
+    build:
+      context: ../backend
+      args:
+        SERVICE: llm-gateway
+    environment:
+      <<: *app-env
+      LLM_GATEWAY_ADDR: ":8082"
+      # Primary/backup OpenAI-compatible upstreams. Empty routes keep the
+      # service healthy but return 502 until configured.
+      LLM_PRIMARY_BASE_URL: ${LLM_PRIMARY_BASE_URL:-}
+      LLM_PRIMARY_API_KEY: ${LLM_PRIMARY_API_KEY:-}
+      LLM_PRIMARY_MODEL: ${LLM_PRIMARY_MODEL:-}
+      LLM_BACKUP_BASE_URL: ${LLM_BACKUP_BASE_URL:-}
+      LLM_BACKUP_API_KEY: ${LLM_BACKUP_API_KEY:-}
+      LLM_BACKUP_MODEL: ${LLM_BACKUP_MODEL:-}
+      # Per-tenant daily token budget (0 = unlimited) and breaker tuning.
+      LLM_DAILY_TOKEN_LIMIT: ${LLM_DAILY_TOKEN_LIMIT:-0}
+      LLM_QUOTA_DRIVER: ${LLM_QUOTA_DRIVER:-redis}
+      LLM_BREAKER_THRESHOLD: ${LLM_BREAKER_THRESHOLD:-3}
+      LLM_BREAKER_COOLDOWN: ${LLM_BREAKER_COOLDOWN:-30s}
+      LLM_UPSTREAM_TIMEOUT: ${LLM_UPSTREAM_TIMEOUT:-120s}
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8082/healthz"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports: ["${LLM_GATEWAY_PUBLISH_PORT:-8082}:8082"]
+
   auth-service:
     build:
       context: ../backend
