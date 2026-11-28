@@ -112,6 +112,8 @@ services:
       WEBHOOK_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
       WEBHOOK_EVENTS_TOKEN: ${WEBHOOK_EVENTS_TOKEN:-}
       WEBHOOK_ENCRYPTION_KEY: ${WEBHOOK_ENCRYPTION_KEY:-}
+      # Compose is a demo topology; allow local receivers unless overridden.
+      WEBHOOK_ALLOW_PRIVATE: ${WEBHOOK_ALLOW_PRIVATE:-true}
       METRICS_ADDR: ""
     healthcheck:
       <<: *healthcheck

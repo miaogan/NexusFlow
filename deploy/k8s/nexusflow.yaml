@@ -44,6 +44,8 @@ data:
   WEBHOOK_DATABASE_URL: "postgresql://nexusflow:change-me@postgres.nexusflow.svc:5432/nexusflow"
   WEBHOOK_MAX_ATTEMPTS: "5"
   WEBHOOK_RETRY_BASE: "1s"
+  # Reject loopback/private webhook targets in production (SSRF guard).
+  WEBHOOK_ALLOW_PRIVATE: "false"
   GATEWAY_URL: "http://gateway:8080"
   QUERY_TARGET: "query-service:9094"
   SANDBOX_TARGET: "sandbox-execution:9093"

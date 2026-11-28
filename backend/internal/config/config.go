@@ -93,6 +93,8 @@ type Config struct {
 	WebhookEventsToken string
 	WebhookMaxAttempts int
 	WebhookRetryBase   time.Duration
+	// WebhookAllowPrivate permits loopback/private targets (local development).
+	WebhookAllowPrivate bool
 	// GatewayURL is used by workers to publish events back to the gateway.
 	GatewayURL string
 
@@ -179,6 +181,9 @@ func Load() Config {
 	if webhookKey == "" {
 		webhookKey = env("CONNECTOR_ENCRYPTION_KEY", "")
 	}
+	// Local/dev runs may target loopback receivers; production defaults to
+	// rejecting private addresses to mitigate SSRF.
+	allowPrivate := env("APP_ENV", "dev") != "prod"
 	return Config{
 		Env: env("APP_ENV", "dev"),
 
@@ -241,6 +246,7 @@ func Load() Config {
 		WebhookEventsToken:   env("WEBHOOK_EVENTS_TOKEN", ""),
 		WebhookMaxAttempts:   envInt("WEBHOOK_MAX_ATTEMPTS", 5),
 		WebhookRetryBase:     envDuration("WEBHOOK_RETRY_BASE", time.Second),
+		WebhookAllowPrivate:  envBool("WEBHOOK_ALLOW_PRIVATE", allowPrivate),
 
 		ObjectStoreDir:          env("OBJECT_STORE_DIR", "/tmp/nexusflow-objects"),
 		ObjectStoreBase:         env("OBJECT_STORE_BASE", "http://127.0.0.1:9000/nexusflow"),

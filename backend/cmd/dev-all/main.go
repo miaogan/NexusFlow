@@ -88,6 +88,7 @@ func main() {
 		logger,
 		cfg.WebhookMaxAttempts,
 		cfg.WebhookRetryBase,
+		webhook.TargetPolicy{AllowPrivate: cfg.WebhookAllowPrivate},
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

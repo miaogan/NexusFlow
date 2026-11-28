@@ -33,28 +33,34 @@ type Dispatcher struct {
 	client      *http.Client
 	maxAttempts int
 	baseDelay   time.Duration
+	policy      TargetPolicy
 	sem         chan struct{}
 }
 
 // NewDispatcher builds a dispatcher. maxAttempts and baseDelay fall back to
 // 5 and 1s when non-positive.
-func NewDispatcher(store Store, cipher Cipher, logger *slog.Logger, maxAttempts int, baseDelay time.Duration) *Dispatcher {
+func NewDispatcher(store Store, cipher Cipher, logger *slog.Logger, maxAttempts int, baseDelay time.Duration, policy TargetPolicy) *Dispatcher {
 	if maxAttempts <= 0 {
 		maxAttempts = defaultMaxAttempts
 	}
 	if baseDelay <= 0 {
 		baseDelay = defaultBaseDelay
 	}
+	transport := &http.Transport{DialContext: policy.DialContext}
 	return &Dispatcher{
 		store:       store,
 		cipher:      cipher,
 		logger:      logger,
-		client:      &http.Client{Timeout: deliveryTimeout},
+		client:      &http.Client{Timeout: deliveryTimeout, Transport: transport},
 		maxAttempts: maxAttempts,
 		baseDelay:   baseDelay,
+		policy:      policy,
 		sem:         make(chan struct{}, 32),
 	}
 }
+
+// Policy exposes the target policy for subscription validation.
+func (d *Dispatcher) Policy() TargetPolicy { return d.policy }
 
 // Store exposes the backing store for management APIs.
 func (d *Dispatcher) Store() Store { return d.store }

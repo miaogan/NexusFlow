@@ -66,7 +66,7 @@ func TestDispatcherSignsAndRetries(t *testing.T) {
 	// Point the stored subscription at the test server.
 	store.subs[sub.ID] = sub
 
-	dispatcher := NewDispatcher(store, plainCipher{}, discardLogger(), 4, 5*time.Millisecond)
+	dispatcher := NewDispatcher(store, plainCipher{}, discardLogger(), 4, 5*time.Millisecond, TargetPolicy{AllowPrivate: true})
 	dispatcher.Dispatch(context.Background(), Event{
 		Type: EventTaskCompleted, TenantID: "t1",
 		Payload: map[string]any{"task_id": "task-1"},
@@ -114,7 +114,7 @@ func TestDispatcherMarksExhaustedDeliveryFailed(t *testing.T) {
 	sub.TargetURL = server.URL
 	store.subs[sub.ID] = sub
 
-	dispatcher := NewDispatcher(store, plainCipher{}, discardLogger(), 2, time.Millisecond)
+	dispatcher := NewDispatcher(store, plainCipher{}, discardLogger(), 2, time.Millisecond, TargetPolicy{AllowPrivate: true})
 	dispatcher.Dispatch(context.Background(), Event{Type: EventTaskFailed, TenantID: "t1"})
 
 	deliveries, _ := store.ListDeliveries(context.Background(), "t1", sub.ID, 10)
@@ -143,7 +143,7 @@ func TestDispatchFiltersEventsAndTenant(t *testing.T) {
 		store.subs[sub.ID] = sub
 	}
 
-	dispatcher := NewDispatcher(store, plainCipher{}, discardLogger(), 2, time.Millisecond)
+	dispatcher := NewDispatcher(store, plainCipher{}, discardLogger(), 2, time.Millisecond, TargetPolicy{AllowPrivate: true})
 	dispatcher.Dispatch(context.Background(), Event{Type: EventTaskCompleted, TenantID: "t1"})
 
 	if called["/"+active.ID] != 0 || called["/"+inactive.ID] != 0 || called["/"+other.ID] != 0 {
@@ -202,7 +202,7 @@ func TestSendTestDelivers(t *testing.T) {
 	sub.TargetURL = server.URL
 	store.subs[sub.ID] = sub
 
-	dispatcher := NewDispatcher(store, plainCipher{}, discardLogger(), 2, time.Millisecond)
+	dispatcher := NewDispatcher(store, plainCipher{}, discardLogger(), 2, time.Millisecond, TargetPolicy{AllowPrivate: true})
 	if err := dispatcher.SendTest(context.Background(), "t1", sub.ID); err != nil {
 		t.Fatalf("SendTest: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestReplayDelivery(t *testing.T) {
 		t.Fatalf("CreateDelivery: %v", err)
 	}
 
-	dispatcher := NewDispatcher(store, plainCipher{}, discardLogger(), 2, time.Millisecond)
+	dispatcher := NewDispatcher(store, plainCipher{}, discardLogger(), 2, time.Millisecond, TargetPolicy{AllowPrivate: true})
 	if err := dispatcher.Replay(context.Background(), "t1", sub.ID, original.ID); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
@@ -288,6 +288,31 @@ func waitForDeliveries(t *testing.T, store *MemoryStore, hookID string, want int
 	items, _ := store.ListDeliveries(context.Background(), "t1", hookID, 20)
 	t.Fatalf("deliveries = %d, want %d: %+v", len(items), want, items)
 	return nil
+}
+
+func TestTargetPolicyBlocksPrivateAddresses(t *testing.T) {
+	policy := TargetPolicy{}
+	for _, target := range []string{
+		"http://127.0.0.1:8080/hook",
+		"http://[::1]:8080/hook",
+		"http://10.0.0.1/hook",
+		"http://169.254.169.254/latest/meta-data",
+	} {
+		if err := policy.Validate(context.Background(), target); err != ErrPrivateTarget {
+			t.Fatalf("target %s error = %v, want ErrPrivateTarget", target, err)
+		}
+	}
+	if err := policy.Validate(context.Background(), "https://8.8.8.8/hook"); err != nil {
+		t.Fatalf("public target error = %v", err)
+	}
+	if err := policy.Validate(context.Background(), "ftp://example.com/hook"); err != ErrInvalidTarget {
+		t.Fatalf("scheme error = %v", err)
+	}
+
+	allow := TargetPolicy{AllowPrivate: true}
+	if err := allow.Validate(context.Background(), "http://127.0.0.1:8080/hook"); err != nil {
+		t.Fatalf("allow-private error = %v", err)
+	}
 }
 
 func TestNormalizeEventsAndTarget(t *testing.T) {

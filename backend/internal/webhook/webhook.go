@@ -9,8 +9,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -72,6 +74,8 @@ var (
 	ErrInvalidEvent = errors.New("invalid webhook event type")
 	// ErrInvalidTarget is returned for a non-http(s) target URL.
 	ErrInvalidTarget = errors.New("webhook target must be an http(s) URL")
+	// ErrPrivateTarget is returned when a target resolves to a non-public IP.
+	ErrPrivateTarget = errors.New("webhook target resolves to a private address")
 )
 
 // Subscription is a tenant-scoped webhook endpoint.
@@ -206,6 +210,68 @@ func ValidateTarget(raw string) error {
 		return ErrInvalidTarget
 	}
 	return nil
+}
+
+// TargetPolicy validates and dials webhook targets, optionally rejecting
+// loopback/private/link-local addresses to mitigate SSRF.
+type TargetPolicy struct {
+	// AllowPrivate permits private networks; intended for local development.
+	AllowPrivate bool
+}
+
+// Validate checks the URL format and, unless private targets are allowed,
+// resolves the host and rejects non-public addresses.
+func (p TargetPolicy) Validate(ctx context.Context, raw string) error {
+	if err := ValidateTarget(raw); err != nil {
+		return err
+	}
+	if p.AllowPrivate {
+		return nil
+	}
+	u, _ := url.Parse(strings.TrimSpace(raw))
+	host := u.Hostname()
+	if host == "" {
+		return ErrInvalidTarget
+	}
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return fmt.Errorf("webhook: resolve %s: %w", host, err)
+	}
+	for _, ip := range ips {
+		if isPrivateIP(ip) {
+			return ErrPrivateTarget
+		}
+	}
+	return nil
+}
+
+// DialContext resolves and validates the target on every attempt, preventing
+// DNS-rebinding attacks between subscription creation and delivery.
+func (p TargetPolicy) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := &net.Dialer{}
+	if p.AllowPrivate {
+		return dialer.DialContext(ctx, network, addr)
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return nil, fmt.Errorf("webhook: resolve %s: %w", host, err)
+	}
+	for _, ip := range ips {
+		if isPrivateIP(ip) {
+			continue
+		}
+		return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+	}
+	return nil, ErrPrivateTarget
+}
+
+func isPrivateIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast()
 }
 
 // NewSecret returns a 32-byte hex signing secret.

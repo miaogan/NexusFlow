@@ -42,7 +42,7 @@ func (g *Gateway) createWebhook(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name must be 1-128 characters"})
 		return
 	}
-	if err := webhook.ValidateTarget(body.TargetURL); err != nil {
+	if err := g.webhooks.Policy().Validate(c.Request.Context(), body.TargetURL); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

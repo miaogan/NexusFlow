@@ -39,7 +39,8 @@ func TestWebhookManagementAndDelivery(t *testing.T) {
 
 	store := webhook.NewMemoryStore()
 	dispatcher := webhook.NewDispatcher(store, connector.NewCipher("webhook-test-key"),
-		slog.New(slog.NewTextHandler(io.Discard, nil)), 1, time.Millisecond)
+		slog.New(slog.NewTextHandler(io.Discard, nil)), 1, time.Millisecond,
+		webhook.TargetPolicy{AllowPrivate: true})
 	g := New(nil, nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)),
 		"test-secret", false, WithWebhooks(dispatcher, "events-token"))
 
@@ -155,6 +156,29 @@ func TestWebhookManagementAndDelivery(t *testing.T) {
 	rec = call(t, g.Router(), http.MethodDelete, "/v1/webhooks/"+created.Webhook.ID, admin, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("delete status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWebhookRejectsPrivateTarget(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := webhook.NewMemoryStore()
+	dispatcher := webhook.NewDispatcher(store, connector.NewCipher("webhook-test-key"),
+		slog.New(slog.NewTextHandler(io.Discard, nil)), 1, time.Millisecond,
+		webhook.TargetPolicy{})
+	g := New(nil, nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)),
+		"test-secret", false, WithWebhooks(dispatcher, "events-token"))
+
+	admin, err := tenant.IssueToken("test-secret", tenant.Principal{
+		TenantID: "t1", UserID: "admin", Permissions: []string{"*"},
+	}, time.Hour)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	rec := call(t, g.Router(), http.MethodPost, "/v1/webhooks", admin, map[string]any{
+		"name": "ssrf", "target_url": "http://127.0.0.1:9/hook",
+	})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "private") {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
