@@ -35,7 +35,7 @@ Milestone 1–5 的 11 个任务已全部交付，无待做项。
 * **[x] Task 2.2: 内置统一 Connector 框架与开箱即用连接器，支持 web_crawler、s3_bucket 及 db_query 的增量同步与去重**
   * 抽象统一的 Connector 接口（发现 → 拉取 → 解析 → 入库 → 游标持久化），内置网页抓取、S3 桶与数据库查询三类连接器；以内容哈希与外部主键去重，按游标增量同步，失败可断点续传。
   * 交付情况：新增 `internal/connector`（`Source` 接口 + `web_crawler` / `s3_bucket` / `db_query` 实现），游标分别使用已抓 URL 集合、S3 对象 key 与 SQL OFFSET；`data_connectors` 支持 memory / Postgres 持久化，配置以 AES-256-GCM 加密，同步状态记录 `IDLE / SYNCING / ERROR` 与 `last_error`。同步时通过 ingestion 的 `RegisterContent` 写入对象存储并创建普通任务，沿用 MinerU → LlamaIndex 链路；内容 SHA-256 作为幂等键，未变化文档自动跳过。Gateway 新增 `GET/POST /v1/connectors`、`GET/DELETE /v1/connectors/{id}`、`POST /v1/connectors/{id}/sync`（`kb:write`）。
-  * 边界：`db_query` 为只读 SELECT + OFFSET 分页，要求稳定 `ORDER BY`；`web_crawler` 默认拒绝私网/回环地址（`allow_private` 可放开），单页上限 5MB、最多 100 页；S3 单对象上限 20MB。`schedule_cron` 仅保存配置，定时触发留给后续调度器。
+  * 边界：`db_query` 为只读 SELECT + OFFSET 分页，要求稳定 `ORDER BY`；`web_crawler` 默认拒绝私网/回环地址（`allow_private` 可放开），单页上限 5MB、最多 100 页；S3 单对象上限 20MB。`schedule_cron` 为 5 字段标准 cron，由 ingestion 内置调度器执行（`CONNECTOR_SCHEDULER_*`），多副本通过 `connector_schedule_claims` 按分钟抢占去重。
 
 ---
 

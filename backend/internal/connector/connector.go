@@ -102,10 +102,17 @@ type Source interface {
 // Store persists connector definitions and sync cursors.
 type Store interface {
 	List(ctx context.Context, tenantID, kbID string) ([]Spec, error)
+	// ListAll returns every connector across tenants, used by the scheduler.
+	ListAll(ctx context.Context) ([]Spec, error)
 	Get(ctx context.Context, tenantID, id string) (Spec, bool, error)
 	Create(ctx context.Context, spec Spec) (Spec, error)
 	Update(ctx context.Context, spec Spec) error
 	Delete(ctx context.Context, tenantID, id string) (bool, error)
+	// ClaimSchedule atomically claims one connector run for a minute so only
+	// one replica fires it; it returns false when another replica won.
+	ClaimSchedule(ctx context.Context, connectorID string, minute time.Time) (bool, error)
+	// PruneScheduleClaims removes claims older than before.
+	PruneScheduleClaims(ctx context.Context, before time.Time) error
 }
 
 // Result summarizes one sync run.

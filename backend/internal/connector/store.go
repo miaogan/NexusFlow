@@ -35,6 +35,14 @@ var storeSchema = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_connectors_tenant_kb
 		ON data_connectors (tenant_id, kb_id)`,
+	`CREATE TABLE IF NOT EXISTS connector_schedule_claims (
+		connector_id VARCHAR(64) NOT NULL,
+		run_minute   TIMESTAMPTZ NOT NULL,
+		claimed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		PRIMARY KEY (connector_id, run_minute)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_connector_claims_minute
+		ON connector_schedule_claims (run_minute)`,
 }
 
 // NewStore builds the configured store. A broken DSN falls back to memory so
@@ -55,10 +63,15 @@ type MemoryStore struct {
 	mu     sync.RWMutex
 	cipher *Cipher
 	specs  map[string]Spec
+	claims map[string]time.Time
 }
 
 func NewMemoryStore(cipher *Cipher) *MemoryStore {
-	return &MemoryStore{cipher: cipher, specs: make(map[string]Spec)}
+	return &MemoryStore{
+		cipher: cipher,
+		specs:  make(map[string]Spec),
+		claims: make(map[string]time.Time),
+	}
 }
 
 func (s *MemoryStore) List(_ context.Context, tenantID, kbID string) ([]Spec, error) {
@@ -72,6 +85,17 @@ func (s *MemoryStore) List(_ context.Context, tenantID, kbID string) ([]Spec, er
 		if kbID != "" && spec.KBID != kbID {
 			continue
 		}
+		out = append(out, spec.clone())
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (s *MemoryStore) ListAll(_ context.Context) ([]Spec, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Spec, 0, len(s.specs))
+	for _, spec := range s.specs {
 		out = append(out, spec.clone())
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
@@ -118,6 +142,32 @@ func (s *MemoryStore) Delete(_ context.Context, tenantID, id string) (bool, erro
 	}
 	delete(s.specs, id)
 	return true, nil
+}
+
+func (s *MemoryStore) ClaimSchedule(_ context.Context, connectorID string, minute time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := claimKey(connectorID, minute)
+	if _, exists := s.claims[key]; exists {
+		return false, nil
+	}
+	s.claims[key] = minute
+	return true, nil
+}
+
+func (s *MemoryStore) PruneScheduleClaims(_ context.Context, before time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, minute := range s.claims {
+		if minute.Before(before) {
+			delete(s.claims, key)
+		}
+	}
+	return nil
+}
+
+func claimKey(connectorID string, minute time.Time) string {
+	return connectorID + "|" + minute.UTC().Format(time.RFC3339)
 }
 
 // PostgresStore persists connectors and cursors across replicas.
@@ -195,6 +245,25 @@ func (s *PostgresStore) List(ctx context.Context, tenantID, kbID string) ([]Spec
 	return out, rows.Err()
 }
 
+func (s *PostgresStore) ListAll(ctx context.Context) ([]Spec, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, tenant_id, kb_id, name, connector_type,
+		config_encrypted, schedule_cron, sync_cursor, status, last_sync_at, last_error,
+		created_at, updated_at FROM data_connectors ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Spec
+	for rows.Next() {
+		spec, err := s.scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, spec)
+	}
+	return out, rows.Err()
+}
+
 func (s *PostgresStore) Get(ctx context.Context, tenantID, id string) (Spec, bool, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, tenant_id, kb_id, name, connector_type,
 		config_encrypted, schedule_cron, sync_cursor, status, last_sync_at, last_error,
@@ -257,6 +326,27 @@ func (s *PostgresStore) Delete(ctx context.Context, tenantID, id string) (bool, 
 	}
 	affected, _ := result.RowsAffected()
 	return affected > 0, nil
+}
+
+func (s *PostgresStore) ClaimSchedule(ctx context.Context, connectorID string, minute time.Time) (bool, error) {
+	result, err := s.db.ExecContext(ctx,
+		`INSERT INTO connector_schedule_claims (connector_id, run_minute)
+		 VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+		connectorID, minute.UTC())
+	if err != nil {
+		return false, fmt.Errorf("connector: claim schedule: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	return affected > 0, nil
+}
+
+func (s *PostgresStore) PruneScheduleClaims(ctx context.Context, before time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		"DELETE FROM connector_schedule_claims WHERE run_minute < $1", before.UTC())
+	if err != nil {
+		return fmt.Errorf("connector: prune schedule claims: %w", err)
+	}
+	return nil
 }
 
 func (s *PostgresStore) encodeConfig(cfg Config) (string, error) {

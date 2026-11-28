@@ -91,6 +91,17 @@ CREATE TABLE IF NOT EXISTS data_connectors (
 CREATE INDEX IF NOT EXISTS idx_connectors_tenant_kb
     ON data_connectors (tenant_id, kb_id);
 
+-- 3.1 连接器定时 run 抢占表（多副本调度去重，按「连接器 + 分钟」唯一）
+CREATE TABLE IF NOT EXISTS connector_schedule_claims (
+    connector_id VARCHAR(64) NOT NULL,
+    run_minute   TIMESTAMPTZ NOT NULL,
+    claimed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (connector_id, run_minute)
+);
+
+CREATE INDEX IF NOT EXISTS idx_connector_claims_minute
+    ON connector_schedule_claims (run_minute);
+
 -- 4. 文档多模态媒体资产映射表 (存储 MinerU 提取的图表/截图元数据)
 CREATE TABLE IF NOT EXISTS document_media_assets (
     id          VARCHAR(64) PRIMARY KEY,

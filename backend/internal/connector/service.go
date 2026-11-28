@@ -45,6 +45,21 @@ func (s *Service) List(ctx context.Context, tenantID, kbID string) ([]Spec, erro
 	return s.store.List(ctx, tenantID, kbID)
 }
 
+// All returns every connector; the scheduler runs due ones across tenants.
+func (s *Service) All(ctx context.Context) ([]Spec, error) {
+	return s.store.ListAll(ctx)
+}
+
+// ClaimSchedule deduplicates one scheduled run across replicas.
+func (s *Service) ClaimSchedule(ctx context.Context, id string, minute time.Time) (bool, error) {
+	return s.store.ClaimSchedule(ctx, id, minute)
+}
+
+// PruneScheduleClaims drops old claims so the table stays small.
+func (s *Service) PruneScheduleClaims(ctx context.Context, before time.Time) error {
+	return s.store.PruneScheduleClaims(ctx, before)
+}
+
 func (s *Service) Get(ctx context.Context, tenantID, id string) (Spec, bool, error) {
 	return s.store.Get(ctx, tenantID, id)
 }
@@ -64,6 +79,11 @@ func (s *Service) Create(ctx context.Context, tenantID string, spec Spec) (Spec,
 	}
 	if err := source.Validate(spec.Config); err != nil {
 		return Spec{}, err
+	}
+	if strings.TrimSpace(spec.ScheduleCron) != "" {
+		if _, err := parseCron(spec.ScheduleCron); err != nil {
+			return Spec{}, err
+		}
 	}
 	now := time.Now()
 	if spec.ID == "" {

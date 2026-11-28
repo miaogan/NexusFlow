@@ -80,6 +80,10 @@ type Config struct {
 	ConnectorDriver        string
 	ConnectorDatabaseURL   string
 	ConnectorEncryptionKey string
+	// ConnectorSchedulerEnabled runs connectors whose schedule_cron matches.
+	ConnectorSchedulerEnabled  bool
+	ConnectorSchedulerInterval time.Duration
+	ConnectorSyncTimeout       time.Duration
 
 	// APIKeyDriver selects the tenant API-key store: memory | postgres.
 	APIKeyDriver      string
@@ -235,6 +239,10 @@ func Load() Config {
 		ConnectorDriver:        env("CONNECTOR_DRIVER", "memory"),
 		ConnectorDatabaseURL:   env("CONNECTOR_DATABASE_URL", ""),
 		ConnectorEncryptionKey: env("CONNECTOR_ENCRYPTION_KEY", ""),
+
+		ConnectorSchedulerEnabled:  envBool("CONNECTOR_SCHEDULER_ENABLED", true),
+		ConnectorSchedulerInterval: envDuration("CONNECTOR_SCHEDULER_INTERVAL", 30*time.Second),
+		ConnectorSyncTimeout:       envDuration("CONNECTOR_SYNC_TIMEOUT", 10*time.Minute),
 
 		APIKeyDriver:      env("API_KEY_DRIVER", "memory"),
 		APIKeyDatabaseURL: env("API_KEY_DATABASE_URL", ""),

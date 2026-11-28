@@ -368,6 +368,12 @@ func main() {
 	}
 	connSvc := connector.NewService(connStore, ingestSvc, logger,
 		connector.WebSource{}, connector.S3Source{}, connector.DBSource{})
+	if cfg.ConnectorSchedulerEnabled {
+		scheduler := connector.NewScheduler(connSvc, logger,
+			cfg.ConnectorSchedulerInterval, cfg.ConnectorSyncTimeout)
+		go scheduler.Run(ctx)
+		logger.Info("connector scheduler started", "interval", cfg.ConnectorSchedulerInterval)
+	}
 	connSrv := &http.Server{
 		Addr:              cfg.IngestionHTTPAddr,
 		Handler:           connector.NewHandler(connSvc),
