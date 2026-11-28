@@ -223,6 +223,9 @@ services:
       CONNECTOR_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
       # Configs hold S3/DB credentials; empty keeps plaintext for local demos.
       CONNECTOR_ENCRYPTION_KEY: ${CONNECTOR_ENCRYPTION_KEY:-}
+      # Cascade delete must also drop vectors/graph rows from the retrieval
+      # index (same target the processing worker uses).
+      LLAMAINDEX_URL: "http://llamaindex:8000"
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9100/healthz"]

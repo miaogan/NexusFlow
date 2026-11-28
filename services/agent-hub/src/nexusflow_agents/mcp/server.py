@@ -271,9 +271,17 @@ def _collect_list_changed(session_id: str) -> list[dict[str, Any]]:
     return [{"jsonrpc": "2.0", "method": "notifications/resources/list_changed"}]
 
 
-def _drop_stream_session(session_id: str) -> None:
+def _drop_stream_session(session_id: str, delete: bool = False) -> None:
+    """Releases the in-process stream handle.
+
+    A GET stream closing must not invalidate a session created by POST
+    ``initialize``: clients reconnect their event stream while continuing to
+    send JSON-RPC over POST. Only ephemeral sessions created by this stream are
+    deleted; persistent ones expire through the session store TTL.
+    """
     _stream_queues.pop(session_id, None)
-    get_session_store().delete(session_id)
+    if delete:
+        get_session_store().delete(session_id)
 
 
 def _prompt_defs() -> list[dict[str, Any]]:
@@ -634,6 +642,7 @@ async def mcp_stream(request: Request) -> StreamingResponse:
         )
     session_id = request.headers.get("mcp-session-id", "")
     store = get_session_store()
+    created = False
     if session_id:
         if not store.exists(session_id):
             raise HTTPException(status_code=404, detail="unknown MCP session")
@@ -642,6 +651,7 @@ async def mcp_stream(request: Request) -> StreamingResponse:
             raise HTTPException(status_code=503, detail="too many MCP sessions")
         session_id = uuid.uuid4().hex
         store.create(session_id, "", _resource_list_fingerprint())
+        created = True
     queue = _stream_queues.setdefault(session_id, asyncio.Queue())
 
     async def event_stream():
@@ -666,7 +676,7 @@ async def mcp_stream(request: Request) -> StreamingResponse:
                 data = json.dumps(message, ensure_ascii=False, default=str)
                 yield f"event: message\ndata: {data}\n\n"
         finally:
-            _drop_stream_session(session_id)
+            _drop_stream_session(session_id, delete=created)
 
     return StreamingResponse(
         event_stream(),
@@ -688,7 +698,7 @@ async def mcp_close(request: Request) -> Response:
     store = get_session_store()
     if not session_id or not store.exists(session_id):
         raise HTTPException(status_code=404, detail="unknown MCP session")
-    _drop_stream_session(session_id)
+    _drop_stream_session(session_id, delete=True)
     return Response(status_code=204)
 
 

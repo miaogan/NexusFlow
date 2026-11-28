@@ -145,6 +145,9 @@ class _ScrollClient:
     def __init__(self) -> None:
         self.kwargs: dict[str, Any] | None = None
 
+    def collection_exists(self, collection: str) -> bool:
+        return True
+
     def scroll(self, **kwargs: Any) -> tuple[list[_Record], None]:
         self.kwargs = kwargs
         node = {

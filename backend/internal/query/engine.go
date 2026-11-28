@@ -149,19 +149,21 @@ func (e *Engine) Search(ctx context.Context, opts SearchOptions) (Result, error)
 
 	var lists [][]Chunk
 	recallCount := 0
+	succeeded := 0
 	for res := range results {
 		if res.err != nil {
 			// Fail-open: a single broken route must not take the query down.
 			e.logger.Warn("recall route failed", "route", res.name, "error", res.err)
 			continue
 		}
+		succeeded++
 		if len(res.chunks) == 0 {
 			continue
 		}
 		lists = append(lists, res.chunks)
 		recallCount += len(res.chunks)
 	}
-	if len(lists) == 0 {
+	if succeeded == 0 {
 		root.SetStatus(tracing.StatusError, "no recall")
 		return Result{}, ErrNoRecall
 	}

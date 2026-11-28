@@ -312,6 +312,21 @@ def test_memory_session_store_tracks_subscriptions() -> None:
     assert store.count() == 0
 
 
+def test_stream_close_keeps_initialized_session() -> None:
+    store = mcp_server.get_session_store()
+    store.create("sid-persistent")
+    mcp_server._stream_queues["sid-persistent"] = asyncio.Queue()
+
+    # A GET stream closing must only release the in-process handle.
+    mcp_server._drop_stream_session("sid-persistent")
+    assert "sid-persistent" not in mcp_server._stream_queues
+    assert store.exists("sid-persistent") is True
+
+    # Ephemeral sessions created by the stream itself are deleted.
+    mcp_server._drop_stream_session("sid-persistent", delete=True)
+    assert store.exists("sid-persistent") is False
+
+
 def test_mcp_calls_tool(client: TestClient) -> None:
     resp = _rpc(
         client,

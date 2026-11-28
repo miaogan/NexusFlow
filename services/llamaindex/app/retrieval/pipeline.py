@@ -24,17 +24,26 @@ async def search(request: SearchRequest) -> SearchResponse:
 
     lists = []
     recall_count = 0
+    succeeded = 0
     for route, result in zip(routes, results):
         if isinstance(result, Exception):
             # Fail-open: one broken route must not take the query down.
             logger.warning("recall route %s failed: %s", route.type, result)
             continue
+        succeeded += 1
         if result:
             lists.append(result)
             recall_count += len(result)
 
-    if not lists:
+    if succeeded == 0:
         raise RecallUnavailable("no recall route produced results")
+
+    if not lists:
+        # Every route answered successfully; the knowledge base simply has no
+        # matching chunks yet. That is an empty result, not an outage.
+        return SearchResponse(
+            chunks=[], trace_id=uuid.uuid4().hex, recall_count=0, rerank_applied=False
+        )
 
     fused = rrf_fuse(lists, settings.rrf_k)
 

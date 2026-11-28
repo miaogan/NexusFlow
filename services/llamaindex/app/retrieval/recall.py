@@ -88,7 +88,12 @@ def _vector_recall(query: str, top_k: int, filters: dict[str, str]) -> list[Chun
     from llama_index.vector_stores.qdrant import QdrantVectorStore
 
     collection = _collection(filters)
-    store = QdrantVectorStore(client=_qdrant_client(collection), collection_name=collection)
+    client = _qdrant_client(collection)
+    # A KB collection is created on first index; searching an empty KB must be
+    # an empty result rather than a recall outage.
+    if not client.collection_exists(collection):
+        return []
+    store = QdrantVectorStore(client=client, collection_name=collection)
     index = VectorStoreIndex.from_vector_store(store, embed_model=_embedding())
 
     kwargs = {"similarity_top_k": top_k}
@@ -117,11 +122,14 @@ def _tokenize(text: str) -> list[str]:
 
 
 def _scroll_documents(filters: dict[str, str]) -> list[Chunk]:
-    client = _qdrant_client(_collection(filters))
+    collection = _collection(filters)
+    client = _qdrant_client(collection)
+    if not client.collection_exists(collection):
+        return []
     # The collection is shared by KB id; tenant/metadata filters must be
     # applied here too, otherwise BM25 and the graph route leak other tenants.
     points, _ = client.scroll(
-        collection_name=_collection(filters),
+        collection_name=collection,
         scroll_filter=_payload_filter(filters),
         limit=1000,
         with_payload=True,
