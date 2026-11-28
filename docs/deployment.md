@@ -295,11 +295,11 @@ if not hmac.compare_digest(expected, request.headers["X-NexusFlow-Signature"]):
     return 401
 ```
 
-- 重试：非 2xx 或网络错误按指数退避（`WEBHOOK_MAX_ATTEMPTS` 默认 5，`WEBHOOK_RETRY_BASE` 默认 1s，上限 60s）；每次尝试更新 `webhook_deliveries`，`GET /v1/webhooks/{id}/deliveries` 查看状态、HTTP 码与响应体（截断 2KB）。
-- 运维操作：`POST /v1/webhooks/{id}/test` 发送 `webhook.test` 测试投递；`POST /v1/webhooks/{id}/rotate-secret` 轮换 HMAC 密钥（新密钥仅返回一次，旧密钥立即失效）；`POST /v1/webhooks/{id}/deliveries/{deliveryId}/replay` 以保存的载荷重新投递。三者均为异步调度，结果写入投递日志。
+- 重试：非 2xx 或网络错误按指数退避（`WEBHOOK_MAX_ATTEMPTS` 默认 5，`WEBHOOK_RETRY_BASE` 默认 1s，上限 60s）；每次尝试更新 `webhook_deliveries`，`GET /v1/webhooks/{id}/deliveries` 查看状态、HTTP 码与响应体（截断 2KB），`?status=FAILED` 只看死信。
+- 运维操作：`POST /v1/webhooks/{id}/test` 发送 `webhook.test` 测试投递；`POST /v1/webhooks/{id}/rotate-secret` 轮换 HMAC 密钥（新密钥仅返回一次，旧密钥立即失效）；`POST /v1/webhooks/{id}/deliveries/{deliveryId}/replay` 以保存的载荷重投单条；`POST /v1/webhooks/{id}/dead-letters/replay?limit=50` 批量重放 FAILED 投递。重放会新建投递记录，并把原 FAILED 记录标记为 `REPLAYED`，重复扫描不会再次发送。均为异步调度，结果写入投递日志。
 - 事件接入：processing-worker / workflow-engine 使用 `GATEWAY_URL` + `WEBHOOK_EVENTS_TOKEN` 调用 `POST /v1/internal/events`；`WEBHOOK_EVENTS_TOKEN` 为空时该端点禁用（返回 503），审批事件仍由网关本地产生。
-- 目标策略：`WEBHOOK_ALLOW_PRIVATE` 默认在 `APP_ENV=prod` 时为 `false`，拒绝回环、私网、链路本地与组播地址；创建订阅与每次投递都会重新解析主机，防止 DNS rebinding。本地联调需要指向 `127.0.0.1` 时显式设为 `true`。
-- 边界：投放目标仅支持 `http(s)`；未做域名白名单，如需更严格控制可在出口网关限制可达网段。
+- 目标策略：`WEBHOOK_ALLOW_PRIVATE` 默认在 `APP_ENV=prod` 时为 `false`，拒绝回环、私网、链路本地与组播地址；`WEBHOOK_ALLOWED_HOSTS` 可配置精确域名或 `*.suffix` 通配白名单（逗号分隔）。创建订阅与每次投递都会重新校验主机，防止 DNS rebinding。本地联调需要指向 `127.0.0.1` 时显式设置 `WEBHOOK_ALLOW_PRIVATE=true`。
+- 边界：投放目标仅支持 `http(s)`；仍为 HTTP 即时分发，未引入独立消息队列（死信通过 `FAILED` 记录 + 批量重放处理）。
 
 **审批**
 
