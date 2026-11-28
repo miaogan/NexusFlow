@@ -153,6 +153,26 @@ func TestWebhookManagementAndDelivery(t *testing.T) {
 	}
 	pollDeliveries(t, store, created.Webhook.ID, 3)
 
+	// Dead letters: FAILED deliveries can be filtered and replayed in bulk.
+	failed, err := store.CreateDelivery(context.Background(), webhook.Delivery{
+		TenantID: "t1", WebhookID: created.Webhook.ID, EventType: webhook.EventTaskCompleted,
+		Payload: json.RawMessage(`{"id":"evt-dead","type":"task.completed","tenant_id":"t1","data":{}}`),
+		Status:  webhook.StatusFailed, AttemptCount: 1,
+	})
+	if err != nil {
+		t.Fatalf("create failed delivery: %v", err)
+	}
+	rec = call(t, g.Router(), http.MethodGet,
+		"/v1/webhooks/"+created.Webhook.ID+"/deliveries?status=FAILED", admin, nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), failed.ID) {
+		t.Fatalf("failed filter status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = call(t, g.Router(), http.MethodPost,
+		"/v1/webhooks/"+created.Webhook.ID+"/dead-letters/replay", admin, nil)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"scheduled":1`) {
+		t.Fatalf("dead-letter replay status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
 	rec = call(t, g.Router(), http.MethodDelete, "/v1/webhooks/"+created.Webhook.ID, admin, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("delete status = %d body=%s", rec.Code, rec.Body.String())

@@ -823,9 +823,22 @@ export async function deleteWebhook(
 export async function listWebhookDeliveries(
   id: string,
   limit = 50,
+  status?: string,
 ): Promise<{ deliveries: WebhookDelivery[]; count: number }> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (status) params.set("status", status);
   return request(
-    `${GATEWAY_BASE}/v1/webhooks/${encodeURIComponent(id)}/deliveries?limit=${limit}`,
+    `${GATEWAY_BASE}/v1/webhooks/${encodeURIComponent(id)}/deliveries?${params.toString()}`,
+  );
+}
+
+export async function replayWebhookDeadLetters(
+  id: string,
+  limit = 50,
+): Promise<{ scheduled: number }> {
+  return request(
+    `${GATEWAY_BASE}/v1/webhooks/${encodeURIComponent(id)}/dead-letters/replay?limit=${limit}`,
+    { method: "POST" },
   );
 }
 

@@ -297,6 +297,7 @@ func (g *Gateway) Router() *gin.Engine {
 	v1.POST("/webhooks/:id/test", RequirePermission("webhook:write"), g.testWebhook)
 	v1.POST("/webhooks/:id/rotate-secret", RequirePermission("webhook:write"), g.rotateWebhookSecret)
 	v1.POST("/webhooks/:id/deliveries/:deliveryId/replay", RequirePermission("webhook:write"), g.replayWebhookDelivery)
+	v1.POST("/webhooks/:id/dead-letters/replay", RequirePermission("webhook:write"), g.replayWebhookDeadLetters)
 
 	// Knowledge-base management and namespace discovery.
 	v1.GET("/knowledge-bases", RequirePermission("kb:read"), g.listKnowledgeBases)

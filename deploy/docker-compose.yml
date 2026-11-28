@@ -114,6 +114,7 @@ services:
       WEBHOOK_ENCRYPTION_KEY: ${WEBHOOK_ENCRYPTION_KEY:-}
       # Compose is a demo topology; allow local receivers unless overridden.
       WEBHOOK_ALLOW_PRIVATE: ${WEBHOOK_ALLOW_PRIVATE:-true}
+      WEBHOOK_ALLOWED_HOSTS: ${WEBHOOK_ALLOWED_HOSTS:-}
       METRICS_ADDR: ""
     healthcheck:
       <<: *healthcheck

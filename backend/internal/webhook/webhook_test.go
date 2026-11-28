@@ -3,6 +3,7 @@ package webhook
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -253,6 +254,92 @@ func TestReplayDelivery(t *testing.T) {
 	}
 	if replayed == nil || replayed.Status != StatusSuccess || replayed.EventType != EventTaskCompleted {
 		t.Fatalf("deliveries = %+v", items)
+	}
+}
+
+func TestTargetPolicyHostAllowlist(t *testing.T) {
+	policy := TargetPolicy{
+		AllowPrivate:  true,
+		HostAllowlist: []string{"hooks.example.com", "*.trusted.test"},
+	}
+	ctx := context.Background()
+	for _, target := range []string{
+		"https://hooks.example.com/events",
+		"https://a.trusted.test/events",
+		"https://SUB.Trusted.Test/events",
+	} {
+		if err := policy.Validate(ctx, target); err != nil {
+			t.Fatalf("%s rejected: %v", target, err)
+		}
+	}
+	for _, target := range []string{
+		"https://trusted.test/events", // wildcard matches subdomains only
+		"https://evil.example.com/events",
+		"https://evil-example.com/events",
+	} {
+		if err := policy.Validate(ctx, target); !errors.Is(err, ErrHostNotAllowed) {
+			t.Fatalf("%s error = %v, want ErrHostNotAllowed", target, err)
+		}
+	}
+}
+
+func TestTargetPolicyDialRejectsNonAllowlistedHost(t *testing.T) {
+	policy := TargetPolicy{
+		AllowPrivate:  true,
+		HostAllowlist: []string{"hooks.example.com"},
+	}
+	_, err := policy.DialContext(context.Background(), "tcp", "evil.example.com:443")
+	if !errors.Is(err, ErrHostNotAllowed) {
+		t.Fatalf("dial error = %v, want ErrHostNotAllowed", err)
+	}
+}
+
+func TestReplayDeadLettersBulk(t *testing.T) {
+	store := NewMemoryStore()
+	sub, _ := testSubscription(t, store, "t1", []string{EventTaskCompleted}, true)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	sub.TargetURL = target.URL
+	store.subs[sub.ID] = sub
+	ctx := context.Background()
+
+	var failedIDs []string
+	for _, taskID := range []string{"task-1", "task-2"} {
+		d, err := store.CreateDelivery(ctx, Delivery{
+			TenantID: "t1", WebhookID: sub.ID, EventType: EventTaskCompleted,
+			Payload: json.RawMessage(`{"id":"` + taskID + `","type":"task.completed","tenant_id":"t1","data":{"task_id":"` + taskID + `"}}`),
+			Status:  StatusFailed, AttemptCount: 1,
+		})
+		if err != nil {
+			t.Fatalf("CreateDelivery: %v", err)
+		}
+		failedIDs = append(failedIDs, d.ID)
+	}
+	if _, err := store.CreateDelivery(ctx, Delivery{
+		TenantID: "t1", WebhookID: sub.ID, EventType: EventTaskCompleted,
+		Payload: json.RawMessage(`{"id":"ok","type":"task.completed","tenant_id":"t1","data":{}}`),
+		Status:  StatusSuccess, AttemptCount: 1,
+	}); err != nil {
+		t.Fatalf("CreateDelivery success: %v", err)
+	}
+
+	dispatcher := NewDispatcher(store, plainCipher{}, discardLogger(), 2, time.Millisecond, TargetPolicy{AllowPrivate: true})
+	count, err := dispatcher.ReplayDeadLetters(ctx, "t1", sub.ID, 10)
+	if err != nil || count != 2 {
+		t.Fatalf("ReplayDeadLetters = %d, %v", count, err)
+	}
+	waitForDeliveries(t, store, sub.ID, 5)
+	for _, id := range failedIDs {
+		got, err := store.GetDelivery(ctx, "t1", sub.ID, id)
+		if err != nil || got.Status != StatusReplayed {
+			t.Fatalf("delivery %s = %+v, %v", id, got, err)
+		}
+	}
+	again, err := dispatcher.ReplayDeadLetters(ctx, "t1", sub.ID, 10)
+	if err != nil || again != 0 {
+		t.Fatalf("second ReplayDeadLetters = %d, %v", again, err)
 	}
 }
 

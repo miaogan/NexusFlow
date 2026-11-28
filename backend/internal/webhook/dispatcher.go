@@ -113,22 +113,69 @@ func (d *Dispatcher) Replay(ctx context.Context, tenantID, webhookID, deliveryID
 	if err != nil {
 		return err
 	}
+	evt, err := eventFromDelivery(delivery)
+	if err != nil {
+		return err
+	}
+	d.enqueue(func() { d.deliver(context.Background(), sub, evt) })
+	d.markReplayed(ctx, delivery)
+	return nil
+}
+
+// ReplayDeadLetters re-delivers failed deliveries in bulk. Each failed row is
+// marked REPLAYED so a later sweep does not resend it again.
+func (d *Dispatcher) ReplayDeadLetters(ctx context.Context, tenantID, webhookID string, limit int) (int, error) {
+	sub, err := d.store.GetSubscription(ctx, tenantID, webhookID)
+	if err != nil {
+		return 0, err
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	items, err := d.store.ListDeliveriesByStatus(ctx, tenantID, webhookID, StatusFailed, limit)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, delivery := range items {
+		evt, err := eventFromDelivery(delivery)
+		if err != nil {
+			d.logger.Warn("skip dead-letter delivery", "id", delivery.ID, "error", err)
+			continue
+		}
+		d.enqueue(func() { d.deliver(context.Background(), sub, evt) })
+		d.markReplayed(ctx, delivery)
+		count++
+	}
+	return count, nil
+}
+
+func (d *Dispatcher) markReplayed(ctx context.Context, delivery Delivery) {
+	delivery.Status = StatusReplayed
+	delivery.NextRetryAt = nil
+	if err := d.store.UpdateDelivery(ctx, delivery); err != nil {
+		d.logger.Warn("mark delivery replayed failed", "id", delivery.ID, "error", err)
+	}
+}
+
+func eventFromDelivery(delivery Delivery) (Event, error) {
 	var envelope struct {
 		Type string         `json:"type"`
 		Data map[string]any `json:"data"`
 	}
 	if err := json.Unmarshal(delivery.Payload, &envelope); err != nil {
-		return fmt.Errorf("webhook: decode delivery payload: %w", err)
+		return Event{}, fmt.Errorf("webhook: decode delivery payload: %w", err)
 	}
 	eventType := envelope.Type
 	if eventType == "" {
 		eventType = delivery.EventType
 	}
-	evt := normalizeEvent(Event{
+	return normalizeEvent(Event{
 		Type: eventType, TenantID: delivery.TenantID, Payload: envelope.Data,
-	})
-	d.enqueue(func() { d.deliver(context.Background(), sub, evt) })
-	return nil
+	}), nil
 }
 
 func (d *Dispatcher) enqueue(fn func()) {

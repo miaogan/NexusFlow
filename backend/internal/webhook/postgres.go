@@ -55,6 +55,8 @@ var storeSchema = []string{
 		WHERE status = 'PENDING'`,
 	`CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_tenant
 		ON webhook_deliveries (tenant_id, webhook_id, created_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status
+		ON webhook_deliveries (tenant_id, webhook_id, status, created_at DESC)`,
 }
 
 // NewPostgresStore opens the database, verifies connectivity and ensures the
@@ -241,15 +243,24 @@ func (s *PostgresStore) GetDelivery(ctx context.Context, tenantID, webhookID, id
 }
 
 func (s *PostgresStore) ListDeliveries(ctx context.Context, tenantID, webhookID string, limit int) ([]Delivery, error) {
+	return s.ListDeliveriesByStatus(ctx, tenantID, webhookID, "", limit)
+}
+
+func (s *PostgresStore) ListDeliveriesByStatus(ctx context.Context, tenantID, webhookID, status string, limit int) ([]Delivery, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+deliveryColumns+` FROM webhook_deliveries
-		 WHERE tenant_id = $1 AND webhook_id = $2
-		 ORDER BY created_at DESC LIMIT $3`,
-		tenantID, webhookID, limit,
-	)
+	query := `SELECT ` + deliveryColumns + ` FROM webhook_deliveries
+		WHERE tenant_id = $1 AND webhook_id = $2`
+	args := []any{tenantID, webhookID}
+	if status != "" {
+		query += " AND status = $3"
+		args = append(args, status)
+	}
+	query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d", len(args)+1)
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("webhook: list deliveries: %w", err)
 	}

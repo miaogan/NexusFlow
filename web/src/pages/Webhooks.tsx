@@ -5,6 +5,7 @@ import {
   hasPermission,
   listWebhookDeliveries,
   listWebhooks,
+  replayWebhookDeadLetters,
   replayWebhookDelivery,
   rotateWebhookSecret,
   testWebhook,
@@ -40,6 +41,8 @@ function deliveryClass(status: string): string {
       return "bg-emerald-500/10 text-emerald-300";
     case "FAILED":
       return "bg-rose-500/10 text-rose-300";
+    case "REPLAYED":
+      return "bg-slate-500/10 text-slate-400";
     default:
       return "bg-amber-500/10 text-amber-300";
   }
@@ -65,6 +68,7 @@ export default function Webhooks() {
   const [selected, setSelected] = useState<string | null>(null);
   const [deliveries, setDeliveries] = useState<WebhookDelivery[]>([]);
   const [deliveryLoading, setDeliveryLoading] = useState(false);
+  const [deliveryFilter, setDeliveryFilter] = useState<"ALL" | "FAILED">("ALL");
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -144,20 +148,45 @@ export default function Webhooks() {
       return;
     }
     setSelected(hook.id);
-    await refreshDeliveries(hook.id);
+    setDeliveryFilter("ALL");
+    await refreshDeliveries(hook.id, "ALL");
   };
 
-  const refreshDeliveries = async (hookID: string) => {
+  const refreshDeliveries = async (
+    hookID: string,
+    filter: "ALL" | "FAILED" = deliveryFilter,
+  ) => {
     setDeliveryLoading(true);
     setError(null);
     try {
-      const res = await listWebhookDeliveries(hookID);
+      const res = await listWebhookDeliveries(
+        hookID,
+        50,
+        filter === "FAILED" ? "FAILED" : undefined,
+      );
       setDeliveries(res.deliveries ?? []);
     } catch (e) {
       setError(errMsg(e));
       setDeliveries([]);
     } finally {
       setDeliveryLoading(false);
+    }
+  };
+
+  const changeFilter = async (hookID: string, filter: "ALL" | "FAILED") => {
+    setDeliveryFilter(filter);
+    await refreshDeliveries(hookID, filter);
+  };
+
+  const replayFailed = async (hook: WebhookSubscription) => {
+    try {
+      const res = await replayWebhookDeadLetters(hook.id);
+      flash(`已重放 ${res.scheduled ?? 0} 条失败投递`);
+      window.setTimeout(() => {
+        if (selected === hook.id) void refreshDeliveries(hook.id, deliveryFilter);
+      }, 800);
+    } catch (e) {
+      setError(errMsg(e));
     }
   };
 
@@ -307,6 +336,29 @@ export default function Webhooks() {
 
                   {selected === hook.id && (
                     <div className="mt-3 border-t border-white/5 pt-3">
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        <Button
+                          variant={deliveryFilter === "ALL" ? "subtle" : "ghost"}
+                          onClick={() => changeFilter(hook.id, "ALL")}
+                          className="px-2 py-0.5 text-[10px]"
+                        >
+                          全部
+                        </Button>
+                        <Button
+                          variant={deliveryFilter === "FAILED" ? "subtle" : "ghost"}
+                          onClick={() => changeFilter(hook.id, "FAILED")}
+                          className="px-2 py-0.5 text-[10px]"
+                        >
+                          仅失败
+                        </Button>
+                        <Button
+                          variant="subtle"
+                          onClick={() => replayFailed(hook)}
+                          className="ml-auto px-2 py-0.5 text-[10px]"
+                        >
+                          重放失败
+                        </Button>
+                      </div>
                       {deliveryLoading ? (
                         <div className="flex items-center gap-2 text-xs text-slate-500">
                           <Spinner /> 加载投递日志…

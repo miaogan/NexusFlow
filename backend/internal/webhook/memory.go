@@ -149,7 +149,11 @@ func (s *MemoryStore) GetDelivery(_ context.Context, tenantID, webhookID, id str
 	return cloneDelivery(delivery), nil
 }
 
-func (s *MemoryStore) ListDeliveries(_ context.Context, tenantID, webhookID string, limit int) ([]Delivery, error) {
+func (s *MemoryStore) ListDeliveries(ctx context.Context, tenantID, webhookID string, limit int) ([]Delivery, error) {
+	return s.ListDeliveriesByStatus(ctx, tenantID, webhookID, "", limit)
+}
+
+func (s *MemoryStore) ListDeliveriesByStatus(_ context.Context, tenantID, webhookID, status string, limit int) ([]Delivery, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if limit <= 0 {
@@ -159,6 +163,9 @@ func (s *MemoryStore) ListDeliveries(_ context.Context, tenantID, webhookID stri
 	for i := len(s.deliveryList) - 1; i >= 0 && len(out) < limit; i-- {
 		delivery := s.deliveries[s.deliveryList[i]]
 		if delivery.TenantID != tenantID || delivery.WebhookID != webhookID {
+			continue
+		}
+		if status != "" && delivery.Status != status {
 			continue
 		}
 		out = append(out, cloneDelivery(delivery))

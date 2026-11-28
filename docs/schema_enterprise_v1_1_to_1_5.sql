@@ -250,7 +250,7 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
     attempt_count INT NOT NULL DEFAULT 1,
     http_status   INT DEFAULT 0,
     response_body TEXT DEFAULT '',
-    status        VARCHAR(16) NOT NULL DEFAULT 'PENDING', -- PENDING, SUCCESS, FAILED
+    status        VARCHAR(16) NOT NULL DEFAULT 'PENDING', -- PENDING, SUCCESS, FAILED, REPLAYED
     next_retry_at TIMESTAMPTZ,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -258,6 +258,9 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_retry
     ON webhook_deliveries (status, next_retry_at)
     WHERE status = 'PENDING';
+
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status
+    ON webhook_deliveries (tenant_id, webhook_id, status, created_at DESC);
 
 -- ----------------------------------------------------------------------------
 -- v1.2.0: 自定义 SubAgent 注册表 (Agent Hub)

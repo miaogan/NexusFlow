@@ -26,6 +26,9 @@ const (
 	StatusPending = "PENDING"
 	StatusSuccess = "SUCCESS"
 	StatusFailed  = "FAILED"
+	// StatusReplayed marks a failed delivery that has been queued for replay,
+	// so bulk dead-letter replay does not resend it again.
+	StatusReplayed = "REPLAYED"
 )
 
 // Event types emitted by the platform.
@@ -76,6 +79,8 @@ var (
 	ErrInvalidTarget = errors.New("webhook target must be an http(s) URL")
 	// ErrPrivateTarget is returned when a target resolves to a non-public IP.
 	ErrPrivateTarget = errors.New("webhook target resolves to a private address")
+	// ErrHostNotAllowed is returned when a target host is outside the allowlist.
+	ErrHostNotAllowed = errors.New("webhook target host is not allowlisted")
 )
 
 // Subscription is a tenant-scoped webhook endpoint.
@@ -139,6 +144,8 @@ type Store interface {
 	UpdateDelivery(ctx context.Context, d Delivery) error
 	GetDelivery(ctx context.Context, tenantID, webhookID, id string) (Delivery, error)
 	ListDeliveries(ctx context.Context, tenantID, webhookID string, limit int) ([]Delivery, error)
+	// ListDeliveriesByStatus filters by status; an empty status returns all.
+	ListDeliveriesByStatus(ctx context.Context, tenantID, webhookID, status string, limit int) ([]Delivery, error)
 	Close() error
 }
 
@@ -217,21 +224,28 @@ func ValidateTarget(raw string) error {
 type TargetPolicy struct {
 	// AllowPrivate permits private networks; intended for local development.
 	AllowPrivate bool
+	// HostAllowlist restricts targets to these hosts. Entries are exact hosts
+	// ("hooks.example.com") or wildcard subdomains ("*.example.com"). Empty
+	// means no host restriction beyond the private-address check.
+	HostAllowlist []string
 }
 
-// Validate checks the URL format and, unless private targets are allowed,
-// resolves the host and rejects non-public addresses.
+// Validate checks the URL format, the host allowlist and, unless private
+// targets are allowed, resolves the host and rejects non-public addresses.
 func (p TargetPolicy) Validate(ctx context.Context, raw string) error {
 	if err := ValidateTarget(raw); err != nil {
 		return err
-	}
-	if p.AllowPrivate {
-		return nil
 	}
 	u, _ := url.Parse(strings.TrimSpace(raw))
 	host := u.Hostname()
 	if host == "" {
 		return ErrInvalidTarget
+	}
+	if !hostAllowed(host, p.HostAllowlist) {
+		return ErrHostNotAllowed
+	}
+	if p.AllowPrivate {
+		return nil
 	}
 	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
 	if err != nil {
@@ -249,12 +263,15 @@ func (p TargetPolicy) Validate(ctx context.Context, raw string) error {
 // DNS-rebinding attacks between subscription creation and delivery.
 func (p TargetPolicy) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	dialer := &net.Dialer{}
-	if p.AllowPrivate {
-		return dialer.DialContext(ctx, network, addr)
-	}
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
+	}
+	if !hostAllowed(host, p.HostAllowlist) {
+		return nil, ErrHostNotAllowed
+	}
+	if p.AllowPrivate {
+		return dialer.DialContext(ctx, network, addr)
 	}
 	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
 	if err != nil {
@@ -267,6 +284,31 @@ func (p TargetPolicy) DialContext(ctx context.Context, network, addr string) (ne
 		return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
 	}
 	return nil, ErrPrivateTarget
+}
+
+// hostAllowed matches a host against exact and "*.suffix" allowlist entries.
+// An empty allowlist allows every host.
+func hostAllowed(host string, patterns []string) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	for _, raw := range patterns {
+		pattern := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
+		if pattern == "" {
+			continue
+		}
+		if strings.HasPrefix(pattern, "*.") {
+			if strings.HasSuffix(host, pattern[1:]) {
+				return true
+			}
+			continue
+		}
+		if host == pattern {
+			return true
+		}
+	}
+	return false
 }
 
 func isPrivateIP(ip net.IP) bool {

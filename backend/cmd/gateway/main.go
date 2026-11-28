@@ -63,7 +63,10 @@ func main() {
 		logger,
 		cfg.WebhookMaxAttempts,
 		cfg.WebhookRetryBase,
-		webhook.TargetPolicy{AllowPrivate: cfg.WebhookAllowPrivate},
+		webhook.TargetPolicy{
+			AllowPrivate:  cfg.WebhookAllowPrivate,
+			HostAllowlist: cfg.WebhookAllowedHosts,
+		},
 	)
 
 	meterStore, err := metering.NewStore(cfg.MeteringDriver, cfg.RedisAddr)

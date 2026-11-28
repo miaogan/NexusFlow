@@ -46,6 +46,8 @@ data:
   WEBHOOK_RETRY_BASE: "1s"
   # Reject loopback/private webhook targets in production (SSRF guard).
   WEBHOOK_ALLOW_PRIVATE: "false"
+  # Optional comma-separated host allowlist (exact or "*.suffix").
+  WEBHOOK_ALLOWED_HOSTS: ""
   GATEWAY_URL: "http://gateway:8080"
   QUERY_TARGET: "query-service:9094"
   SANDBOX_TARGET: "sandbox-execution:9093"

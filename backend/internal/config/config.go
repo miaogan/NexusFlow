@@ -99,6 +99,9 @@ type Config struct {
 	WebhookRetryBase   time.Duration
 	// WebhookAllowPrivate permits loopback/private targets (local development).
 	WebhookAllowPrivate bool
+	// WebhookAllowedHosts restricts delivery targets; entries are exact hosts
+	// or "*.suffix" wildcards. Empty means no host restriction.
+	WebhookAllowedHosts []string
 	// GatewayURL is used by workers to publish events back to the gateway.
 	GatewayURL string
 
@@ -255,6 +258,7 @@ func Load() Config {
 		WebhookMaxAttempts:   envInt("WEBHOOK_MAX_ATTEMPTS", 5),
 		WebhookRetryBase:     envDuration("WEBHOOK_RETRY_BASE", time.Second),
 		WebhookAllowPrivate:  envBool("WEBHOOK_ALLOW_PRIVATE", allowPrivate),
+		WebhookAllowedHosts:  csvList(env("WEBHOOK_ALLOWED_HOSTS", "")),
 
 		ObjectStoreDir:          env("OBJECT_STORE_DIR", "/tmp/nexusflow-objects"),
 		ObjectStoreBase:         env("OBJECT_STORE_BASE", "http://127.0.0.1:9000/nexusflow"),
@@ -326,6 +330,20 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// csvList splits a comma-separated environment value, dropping blanks.
+func csvList(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	out := make([]string, 0, 4)
+	for _, item := range strings.Split(raw, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // objectStoreHosts returns the allowlisted hosts for presigned upload URLs. An

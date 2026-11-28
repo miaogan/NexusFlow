@@ -217,9 +217,16 @@ func (g *Gateway) listWebhookDeliveries(c *gin.Context) {
 	if limit > 200 {
 		limit = 200
 	}
+	status := strings.ToUpper(strings.TrimSpace(c.Query("status")))
+	switch status {
+	case "", webhook.StatusPending, webhook.StatusSuccess, webhook.StatusFailed, webhook.StatusReplayed:
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "status must be PENDING, SUCCESS, FAILED or REPLAYED"})
+		return
+	}
 	p, _ := tenant.From(c.Request.Context())
-	items, err := g.webhooks.Store().ListDeliveries(
-		c.Request.Context(), p.TenantID, c.Param("id"), limit,
+	items, err := g.webhooks.Store().ListDeliveriesByStatus(
+		c.Request.Context(), p.TenantID, c.Param("id"), status, limit,
 	)
 	if err != nil {
 		g.logger.Error("list webhook deliveries failed", "tenant", p.TenantID, "error", err)
@@ -230,6 +237,34 @@ func (g *Gateway) listWebhookDeliveries(c *gin.Context) {
 		items = []webhook.Delivery{}
 	}
 	c.JSON(http.StatusOK, gin.H{"deliveries": items, "count": len(items)})
+}
+
+// replayWebhookDeadLetters queues every FAILED delivery for the subscription,
+// marking each as REPLAYED so a repeated sweep does not resend it.
+func (g *Gateway) replayWebhookDeadLetters(c *gin.Context) {
+	if g.webhooks == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "webhook store not configured (set WEBHOOK_DRIVER)"})
+		return
+	}
+	limit := 50
+	if raw := c.Query("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	p, _ := tenant.From(c.Request.Context())
+	count, err := g.webhooks.ReplayDeadLetters(
+		c.Request.Context(), p.TenantID, c.Param("id"), limit,
+	)
+	if err != nil {
+		if errors.Is(err, webhook.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "webhook not found"})
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"scheduled": count})
 }
 
 // ingestWebhookEvent lets trusted services publish platform events. The
