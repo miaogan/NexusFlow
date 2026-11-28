@@ -378,14 +378,17 @@ func (c *HTTPClient) downloadResult(ctx context.Context, resultURL string) (Docu
 	return doc, nil
 }
 
-// readLayout returns MinerU's content_list.json from the result archive,
-// preferring the file that sits next to the parsed Markdown.
+// readLayout returns MinerU's layout artifact from the result archive,
+// preferring the file that sits next to the parsed Markdown. Older releases
+// emit content_list.json; 4.x emits structured_content.json (and
+// middle_json.json) instead.
 func readLayout(archive *zip.Reader, markdownDir, markdownName string) []byte {
 	preferred := ""
 	if markdownName != "" {
 		preferred = strings.TrimSuffix(path.Base(markdownName), path.Ext(markdownName)) + "_content_list.json"
 	}
-	var fallback *zip.File
+	candidates := make(map[string]*zip.File, 3)
+	var suffixed *zip.File
 	for _, entry := range archive.File {
 		if entry.FileInfo().IsDir() {
 			continue
@@ -393,20 +396,31 @@ func readLayout(archive *zip.Reader, markdownDir, markdownName string) []byte {
 		normalized := strings.ReplaceAll(entry.Name, "\\", "/")
 		base := path.Base(normalized)
 		lowered := strings.ToLower(base)
-		if lowered != "content_list.json" && !strings.HasSuffix(lowered, "_content_list.json") {
-			continue
-		}
 		if preferred != "" && base == preferred && inDir(entry.Name, markdownDir) {
 			return readLayoutEntry(entry)
 		}
-		if fallback == nil {
-			fallback = entry
+		switch {
+		case lowered == "content_list.json",
+			lowered == "structured_content.json",
+			lowered == "middle_json.json":
+			if _, seen := candidates[lowered]; !seen {
+				candidates[lowered] = entry
+			}
+		case strings.HasSuffix(lowered, "_content_list.json"):
+			if suffixed == nil {
+				suffixed = entry
+			}
 		}
 	}
-	if fallback == nil {
-		return nil
+	for _, name := range []string{"content_list.json", "structured_content.json", "middle_json.json"} {
+		if entry, ok := candidates[name]; ok {
+			return readLayoutEntry(entry)
+		}
 	}
-	return readLayoutEntry(fallback)
+	if suffixed != nil {
+		return readLayoutEntry(suffixed)
+	}
+	return nil
 }
 
 func inDir(name, dir string) bool {

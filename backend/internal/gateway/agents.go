@@ -103,11 +103,8 @@ func (g *Gateway) decideApproval(c *gin.Context) {
 }
 
 func (g *Gateway) listAudit(c *gin.Context) {
-	path := "/v1/audit"
-	if query := c.Request.URL.Query().Encode(); query != "" {
-		path += "?" + query
-	}
-	g.hubGet(c, path)
+	// hubGet already appends the caller's query string.
+	g.hubGet(c, "/v1/audit")
 }
 
 func (g *Gateway) listAgents(c *gin.Context) {

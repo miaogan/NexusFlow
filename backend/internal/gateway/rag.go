@@ -104,7 +104,7 @@ func (g *Gateway) proxyRAG(c *gin.Context, method, path string, body []byte) int
 type chatReq struct {
 	Message        string            `json:"message"`
 	ConversationID string            `json:"conversation_id"`
-	TopK           int               `json:"top_k"`
+	TopK           int               `json:"top_k,omitempty"`
 	KBID           string            `json:"kb_id"`
 	Filters        map[string]string `json:"filters"`
 	// ApprovalID replays an approved high-risk tool call.

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -56,6 +57,38 @@ func TestCallAgentProxiesToHub(t *testing.T) {
 	input, _ := agent["input"].(map[string]any)
 	if input["text"] != "hi" {
 		t.Fatalf("input = %v", input)
+	}
+}
+
+func TestListAuditForwardsQueryOnce(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var path, rawQuery string
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, rawQuery = r.URL.Path, r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"events":[]}`))
+	}))
+	defer hub.Close()
+
+	g := &Gateway{
+		rag:    newRAGProxy(hub.URL),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/audit?limit=25&action=tool.call", nil)
+
+	g.listAudit(c)
+
+	query, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "/v1/audit" || query.Get("limit") != "25" || query.Get("action") != "tool.call" || len(query) != 2 {
+		t.Fatalf("upstream target = %s?%s, want a single query string", path, rawQuery)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

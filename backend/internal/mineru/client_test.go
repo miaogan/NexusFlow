@@ -144,6 +144,36 @@ func TestHTTPClientV1Tasks(t *testing.T) {
 	}
 }
 
+func TestReadLayoutAcceptsMinerU4StructuredContent(t *testing.T) {
+	var archive bytes.Buffer
+	zw := zip.NewWriter(&archive)
+	markdown, err := zw.Create("result/report.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := markdown.Write([]byte("# parsed markdown\n")); err != nil {
+		t.Fatal(err)
+	}
+	structured, err := zw.Create("result/structured_content.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout := `{"pages":[{"page_idx":0,"blocks":[]}]}`
+	if _, err := structured.Write([]byte(layout)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := zip.NewReader(bytes.NewReader(archive.Bytes()), int64(archive.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(readLayout(reader, "result", "result/report.md")); got != layout {
+		t.Fatalf("layout = %q, want structured_content.json for MinerU 4.x", got)
+	}
+}
+
 func TestHTTPClientTextPassthrough(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "default"), 0o755); err != nil {
