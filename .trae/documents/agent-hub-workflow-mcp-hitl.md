@@ -19,7 +19,7 @@ Agent Hub 已完成单容器与星型调度，但目前仍是固定能力（inte
 | --- | --- | --- | --- |
 | P0 统一契约 | 已完成 | `ToolSpec` / `ToolRegistry` / `ToolService`、`CallEnvelope`、`AgentSpec` 契约扩展、`POST /v1/call`、`GET /v1/tools` | — |
 | P1 双向联动 | 已完成 | Go `agent` 节点、`ExecutionContext` 身份元数据、Gateway `/v1/workflows/*` 代理、服务令牌、Hub `workflow.run` 工具 | `/v1/call` 的 agent 分支恒可用；tool 分支需 `AGENT_HUB_TOOLS_ENABLED` |
-| P2 推理循环 | 已完成 | `ReasoningLoop`（预算/重复检测/失败回退）、`tool_call` / `tool_result` / `approval_required` SSE、最终回答逐 token 流式、`ChatService` 集成 | `tool_call` 进度与超时事件未实现 |
+| P2 推理循环 | 已完成 | `ReasoningLoop`（预算/重复检测/失败回退）、`tool_call` / `tool_result` / `tool_progress` / `tool_timeout` / `approval_required` SSE、最终回答逐 token 流式、单工具超时、`ChatService` 集成 | 同步 `run` 路径不发送进度事件 |
 | P3 MCP 与契约 | 已完成 | `POST /mcp`（initialize / tools / resources / prompts）、Streamable HTTP（`GET` / `DELETE /mcp` + `Mcp-Session-Id`）、`GET /mcp/sse` + `POST /mcp/messages`、stdio 入口、MCP Client、`mcp.<server>.<tool>`、动态注册复用同一 Schema | 会话与订阅为进程内状态；`resources/listChanged` 主动推送未实现 |
 | P4 人机协同 | 已完成 | `ApprovalService`、高风险工具 202 + `approval_id`、审批 API、`human_approval` 节点、`RunStore`、runs / approve / resume、Web `/approvals` | Postgres 运行/审批/审计已接入；节点级 `EventSink` 已交付（`workflow.node.*`） |
 | P5 安全护栏 | 已完成 | 风险分级、JSON Schema、输出截断、预算 429、审计、工具结果不可信包裹、sandbox 权限与 local 后端生产保护 | 审计为进程内环形缓冲；PII 脱敏不属于本期 |
@@ -151,7 +151,7 @@ Agent Hub 已完成单容器与星型调度，但目前仍是固定能力（inte
 
 1. **持久化**：`MemoryRunStore` / `ApprovalService` / `AuditLog` 的 Postgres 驱动（`workflow_executions` / `workflow_approvals` / `audit_logs`）与审批 CAS 已交付；剩余审计表按月分区与保留策略（见第 6 条）。
 2. **MCP 传输与能力**：Streamable HTTP、`resources/subscribe` 与三种原语均已交付；剩余 `resources/listChanged` 主动推送，以及会话/订阅跨副本共享（当前需粘性会话）。
-3. **推理流式体验**：最终回答已改为逐 token 流式下发；剩余为 `tool_call` 进度事件与单工具超时控制。
+3. **推理流式体验**：最终回答逐 token 流式、`tool_progress` 心跳与单工具超时均已交付；同步 `run` 路径暂不产生进度事件。
 4. **控制台**：审批收件箱、run 详情/挂起恢复与审计查询页（`/audit`）已交付；run 节点时间线可视化可继续增强。
 5. **端到端验证**：Gateway 发起 `agent → query` DAG 并核对 Go/Hub 两侧 trace；Chat 高风险工具审批 → 重试 → 结果；外部 MCP 工具在推理循环中调用。
 6. **安全增强**：PII 脱敏与审计持久化已交付；剩余 `audit_logs` 按月分区与保留策略、MCP 外部域白名单与出口审计。
