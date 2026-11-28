@@ -375,6 +375,10 @@ services:
       RAG_LLM_BASE_URL: ${RAG_LLM_BASE_URL:-}
       RAG_LLM_API_KEY: ${RAG_LLM_API_KEY:-}
       RAG_LLM_MODEL: ${RAG_LLM_MODEL:-gpt-4o-mini}
+      # PII shielding: prompts/context are masked; replies stay masked unless
+      # restore is explicitly enabled.
+      RAG_PII_ENABLED: ${RAG_PII_ENABLED:-false}
+      RAG_PII_RESTORE_OUTPUT: ${RAG_PII_RESTORE_OUTPUT:-false}
       RAG_DEFAULT_TOP_K: "5"
       INTENT_LLM_BASE_URL: ${INTENT_LLM_BASE_URL:-}
       INTENT_LLM_API_KEY: ${INTENT_LLM_API_KEY:-}

@@ -227,6 +227,8 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 | `AGENT_HUB_APPROVAL_DRIVER` | memory | 工具审批存储：memory / postgres（`agent_approvals`） |
 | `AGENT_HUB_AUDIT_DRIVER` | memory | 审计存储：memory / postgres（`audit_logs`） |
 | `WORKFLOW_RUN_STORE_DRIVER` | memory | 工作流运行与审批存储：memory / postgres |
+| `RAG_PII_ENABLED` | false | 提示词/上下文 PII 脱敏（邮箱、手机号、身份证、银行卡、IPv4） |
+| `RAG_PII_RESTORE_OUTPUT` | false | 回复还原原始 PII；默认保持脱敏 |
 
 - 自定义 SubAgent 注册表：`AGENT_HUB_REGISTRY_DRIVER=memory|postgres`；Postgres 模式需 `AGENT_HUB_REGISTRY_DATABASE_URL`，启动时幂等创建 `custom_agents` 并加载该租户的自定义 Agent。写接口仍受 `AGENT_HUB_DYNAMIC_REGISTRATION` 控制。
 - 审批与审计持久化：`AGENT_HUB_APPROVAL_DRIVER` / `AGENT_HUB_AUDIT_DRIVER=postgres` 时需 `AGENT_HUB_STATE_DATABASE_URL`，启动幂等创建 `agent_approvals` / `audit_logs`；数据库不可用时记录告警并回退内存，不影响 Hub 启动。
@@ -273,7 +275,8 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 
 **审计**
 
-- `GET /v1/audit?limit=100&action=tool.call&decision=denied`，按 `x-tenant-id` 过滤；经 Gateway 时要求 `trace:read`。
+- `GET /v1/audit?limit=100&action=tool.call&decision=denied&since=2026-11-01T00:00:00Z&until=2026-11-30T23:59:59Z`，按 `x-tenant-id` 过滤；`since` / `until` 支持 RFC3339 或 unix 秒；经 Gateway 时要求 `trace:read`。
+- PII 命中记录为 `pii.mask` 事件，`detail.types` 给出各类型数量；默认仅发送脱敏后的内容给模型，回复默认保持脱敏（`RAG_PII_RESTORE_OUTPUT=true` 可还原）。
 - `AGENT_HUB_AUDIT_DRIVER=postgres` 时事件写入 `audit_logs`（按租户、动作、时间可查）；未配置时退化为进程内环形缓冲（默认 2000 条），仅用于近期排障。
 - 合规留存：生产建议对 `audit_logs` 按月分区并配置保留策略；写入失败只记录告警，不阻断被审计的请求。
 - 审计不保存工具入参全文，仅记录参数键、风险、决策、租户与 trace，避免凭据/代码泄漏。

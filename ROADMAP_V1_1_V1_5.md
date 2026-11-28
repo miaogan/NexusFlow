@@ -1,6 +1,6 @@
 # NexusFlow v1.1.0 – v1.5.0 企业级能力演进方案（ROADMAP_V1_1_V1_5）
 
-> **定位**：本文件是面向 v1.1.0 至 v1.5.0 的能力演进方案，共 5 个 Milestone、11 个结构化任务；已交付 7 个，其余 4 个为当前待做项。
+> **定位**：本文件是面向 v1.1.0 至 v1.5.0 的能力演进方案，共 5 个 Milestone、11 个结构化任务；已交付 8 个，其余 3 个为当前待做项。
 > **2026-11-27 增补**：Agent Hub × Workflow × MCP × HITL 已按规划文档 `.trae/documents/agent-hub-workflow-mcp-hitl.md` 交付；Task 3.2 完成（运行状态持久化由 Task 3.3 补齐），Task 5.2 的 MCP Server 部分提前落地，其余任务状态不变。
 > **v1.2.0 已交付**：自定义 SubAgent（存储 + 多租户注册表 + SandboxAgentExecutor + 动态技能路由 + `/subagents` 控制台）已按 [ROADMAP_V1_2.md](ROADMAP_V1_2.md) Milestone 1–3 完成。本文件 Milestone 2（多模态、Connector）未能进入该版本，顺延为待做项，其原 v1.2.0 版本标签不再使用。
 > **与 `ROADMAP_V1_1.md` 的关系**：`ROADMAP_V1_1.md` 是上一轮已执行完毕的交付清单（知识库实体、级联删除、配额计量、K8s HPA，对应提交 c880e64 / 44b9284 / 9bc2c01 / a244bd7）。本文件在此基础上重新规划更完整的企业级能力，Milestone 1 为增量升级。
@@ -11,7 +11,6 @@
 
 | 任务 | 内容 | 状态 | 现状与前置 |
 | --- | --- | --- | --- |
-| Task 4.1 | PII 双向脱敏 + 合规审计检索 | 未开始 | 工具/审批审计已持久化到 `audit_logs`；PII 识别脱敏与按时间检索/保留策略待实现 |
 | Task 4.2 | LLM 多模型路由网关 + 租户级配额 | 未开始 | 可复用 `internal/metering`（memory / Redis） |
 | Task 5.1 | API Key 鉴权 + OpenAI 兼容端点 | 未开始 | 需与现有 JWT 并存，作用域可绑定知识库 |
 | Task 5.2 | 租户级 Webhook 订阅（HMAC + 退避重试） | 部分完成 | MCP Server 已交付（`POST /mcp`）；Webhook 未开始 |
@@ -64,11 +63,12 @@
 
 ---
 
-## Milestone 4: 企业级安全合规与大模型网关治理（v1.4.0）
+## Milestone 4: 企业级安全合规与大模型网关治理（Task 4.1 已交付，4.2 待做）
 
-* **[ ] Task 4.1: 实现 PII 敏感信息双向脱敏引擎与结构化合规审计日志中间件，支持安全追溯**
+* **[x] Task 4.1: 实现 PII 敏感信息双向脱敏引擎与结构化合规审计日志中间件，支持安全追溯**
   * 入口对提示词与上传文本做 PII 识别与脱敏，出口对模型回复做还原或再次脱敏；审计日志记录操作者、资源、动作与脱敏命中项，支持按租户与时间检索。
-  * 进展：工具调用与审批决策审计已落地并可通过 `AGENT_HUB_AUDIT_DRIVER=postgres` 持久化到 `audit_logs`（Task 3.3）；PII 识别/脱敏、按时间检索与保留策略待实现。
+  * 交付情况：新增 `core/pii.py`（邮箱 / 手机号 / 身份证 / 银行卡 / IPv4），按请求维护稳定占位符（`{{EMAIL_1}}` 等）与唯一命中计数；Chat 同步与 SSE 路径在模型边界脱敏提示词、历史、检索片段、摘要、记忆与纠正答案，检索仍使用原始 query；回复默认保持脱敏并二次扫描模型新生成的 PII，`RAG_PII_RESTORE_OUTPUT=true` 可还原。命中写入 `pii.mask` 审计事件（操作者、资源、`detail.types/count`），`GET /v1/audit` 新增 `since` / `until`（RFC3339 或 unix 秒）并支持 memory / Postgres 两种存储。
+  * 边界：上传文档与对话历史保持原文存储，脱敏发生在进入模型的边界；SSE 逐 token 事件为实时输出，最终 `done.answer` 与持久化内容采用脱敏结果；`audit_logs` 按月分区与保留策略仍由运维脚本负责。
 
 * **[ ] Task 4.2: 建设多模型路由网关（主备自动故障转移）与租户级用量计量/配额管控（防 429 溢出）**
   * 统一 LLM 调用入口，按模型与租户路由至主/备通道，失败自动切换并熔断；复用并扩展已有计量能力，按租户累计 token 与调用量，超限前置拦截并避免上游 429 溢出。

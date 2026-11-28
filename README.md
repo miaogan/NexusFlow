@@ -391,6 +391,7 @@ flowchart LR
 - **MCP**（`AGENT_HUB_MCP_ENABLED`）：`POST /mcp` 提供 `initialize` / `tools/list` / `tools/call`；`AGENT_HUB_MCP_SERVERS=name=url,...` 接入外部 MCP，工具注册为 `mcp.<server>.<tool>`。外部工具默认需审批，sandbox 默认不对外暴露。
 - **人机协同**（`AGENT_HUB_HITL_ENABLED` / `HITL_ENABLED`）：高风险工具不执行，返回 202 + `approval_id`，由 `POST /v1/approvals/{id}/decide` 批准/拒绝后重试；DAG 的 `human_approval` 节点使 run 进入 `WAITING_APPROVAL` 并落盘检查点，经 `/v1/workflows/runs/{id}/approve|resume` 恢复，重复审批返回 409。`WORKFLOW_RUN_STORE_DRIVER=postgres` 时运行与审批写入 `workflow_executions` / `workflow_approvals`，跨副本共享且审批只生效一次。
 - **安全护栏**：工具风险分级（`read/write/execute/external`）、入参 JSON Schema、输出截断、预算超限 429、工具与审批审计（`GET /v1/audit`），工具结果以不可信数据包裹以防提示注入；网关侧 `/v1/sandbox/execute` 要求 `sandbox:execute`。
+- **PII 脱敏**（`RAG_PII_ENABLED`）：提示词、历史、检索片段、摘要、记忆与纠正答案在进入模型前替换为稳定占位符（`{{EMAIL_1}}` / `{{PHONE_1}}` 等，支持邮箱、手机号、身份证、银行卡与 IPv4）；检索仍使用原始 query，保证按手机号/邮箱检索可用。回复默认保持脱敏并对模型新生成的 PII 再次脱敏，`RAG_PII_RESTORE_OUTPUT=true` 可还原。每次命中会写入 `pii.mask` 审计事件（类型与数量），可按租户与时间检索。
 - **图文多模态**：MinerU 结果 ZIP 中的图片由 Worker 提取并落盘到 `<tenant>/<kb>/parsed/<task>/images/`，Markdown 图片链接改写为 `/v1/media`；切块把 `image_urls` 写入节点 metadata，检索结果与问答引用返回配图，控制台展示缩略图并支持点击放大。
 
 新增 / 变更接口：
@@ -403,7 +404,7 @@ flowchart LR
 | `POST /v1/workflows/runs/{id}/{approve,resume}` | `workflow:run` | 审批并恢复挂起的 run，重复审批 409 |
 | `GET /v1/approvals`、`/v1/approvals/{id}` | `workflow:run` | 工具审批待办 / 详情 |
 | `POST /v1/approvals/{id}/decide` | `workflow:run` | 批准 / 拒绝高风险工具 |
-| `GET /v1/audit` | `trace:read` | 工具与审批审计查询 |
+| `GET /v1/audit` | `trace:read` | 工具 / 审批 / PII 审计查询，支持 `since` / `until`（RFC3339 或 unix 秒） |
 | `POST /v1/call` | agent 分支恒可用；tool 分支需 `AGENT_HUB_TOOLS_ENABLED` 或 `AGENT_HUB_WORKFLOW_ENABLED` | Hub 内部通用调用（供 DAG `agent` 节点与 Sandbox SubAgent 使用） |
 | `GET /v1/tools` | `AGENT_HUB_TOOLS_ENABLED` 或 `AGENT_HUB_WORKFLOW_ENABLED` | 工具契约列表 |
 | `POST /v1/agents/{name}/call` | `search:use`；sandbox agent 另需 `sandbox:execute` | Gateway 调用自定义 SubAgent |

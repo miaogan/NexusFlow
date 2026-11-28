@@ -180,6 +180,7 @@ Agent Hub 是 intent / summary / memory 的中心节点，Hub 与 Agent 构成�
 - **MCP**：Hub 作为 MCP Server 暴露 `initialize` / `tools/list` / `tools/call`（`POST /mcp`），工具来源为 `ToolRegistry`；作为 Client 通过 `AGENT_HUB_MCP_SERVERS=name=url` 注册外部工具为 `mcp.<server>.<tool>`，外部工具默认 `risk=external` 且需审批，sandbox 默认不暴露。
 - **人机协同**：高风险工具返回 202 + `approval_id`，`ApprovalService` 保存一次性决策（TTL、租户隔离、重复决策 409）；DAG 的 `human_approval` 节点将运行挂起为 `WAITING_APPROVAL`，检查点写入 `RunStore`，批准后从已完成节点继续，拒绝则终止为 `REJECTED`。`WORKFLOW_RUN_STORE_DRIVER=postgres` 时运行快照与审批单写入 `workflow_executions` / `workflow_approvals`，审批以行锁 + 状态 CAS 保证跨副本只生效一次。
 - **安全与审计**：风险分级、JSON Schema 入参校验、输出大小截断、预算超限 429、工具结果包裹为不可信数据；`AuditLog` 记录工具调用与审批决策，可通过 `GET /v1/audit` 按租户/动作查询；`AGENT_HUB_AUDIT_DRIVER=postgres` 时写入 `audit_logs`。
+- **PII 脱敏**（`RAG_PII_ENABLED`）：模型调用边界统一脱敏提示词、历史、检索片段、摘要、记忆与纠正答案，使用稳定占位符（`{{EMAIL_1}}` / `{{PHONE_1}}` 等）；检索仍用原始 query，回复默认保持脱敏或按配置还原。命中数量写入 `pii.mask` 审计事件，`GET /v1/audit` 支持 `since` / `until` 时间范围检索。
 
 **实现边界（2026-11-27）**
 

@@ -103,6 +103,8 @@ class AuditLog:
         tenant_id: str = "",
         action: str = "",
         decision: str = "",
+        since: float = 0.0,
+        until: float = 0.0,
     ) -> list[dict[str, Any]]:
         with self._lock:
             events = list(reversed(self._events))
@@ -112,6 +114,8 @@ class AuditLog:
             if (not tenant_id or event.tenant_id == tenant_id)
             and (not action or event.action == action)
             and (not decision or event.decision == decision)
+            and (since <= 0 or event.ts >= since)
+            and (until <= 0 or event.ts <= until)
         ]
         return out[: max(1, min(limit, 500))]
 
@@ -214,6 +218,8 @@ class PostgresAuditLog(AuditLog):
         tenant_id: str = "",
         action: str = "",
         decision: str = "",
+        since: float = 0.0,
+        until: float = 0.0,
     ) -> list[dict[str, Any]]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -226,6 +232,12 @@ class PostgresAuditLog(AuditLog):
         if decision:
             clauses.append("metadata->>'decision' = %s")
             params.append(decision)
+        if since > 0:
+            clauses.append("created_at >= to_timestamp(%s)")
+            params.append(since)
+        if until > 0:
+            clauses.append("created_at <= to_timestamp(%s)")
+            params.append(until)
         sql = (
             "SELECT id, tenant_id, user_id, action, resource_id, trace_id, "
             "status_code, metadata, created_at FROM audit_logs"

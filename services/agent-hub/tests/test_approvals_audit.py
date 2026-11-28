@@ -7,7 +7,7 @@ from nexusflow_agents.agents.rag.services.approvals import (
     ApprovalNotFound,
     ApprovalService,
 )
-from nexusflow_agents.core.audit import get_audit
+from nexusflow_agents.core.audit import AuditLog, get_audit
 from nexusflow_agents.core.tooling import ToolRegistry, ToolService, ToolSpec
 
 
@@ -60,3 +60,19 @@ def test_tool_calls_write_audit_events() -> None:
     assert events[0]["decision"] == "allowed"
     assert events[0]["resource"] == "demo.echo"
     assert events[0]["trace_id"] == "tr-9"
+
+
+def test_audit_list_supports_time_range_filters() -> None:
+    audit = AuditLog()
+    event = audit.record("pii.mask", tenant_id="t1")
+    assert audit.list(tenant_id="t1", since=event.ts - 1, until=event.ts + 1)
+    assert audit.list(tenant_id="t1", since=event.ts + 1) == []
+    assert audit.list(tenant_id="t1", until=event.ts - 1) == []
+
+
+def test_audit_epoch_accepts_unix_and_rfc3339() -> None:
+    from nexusflow_agents.api.audit import _epoch
+
+    assert _epoch("") == 0.0
+    assert _epoch("100") == 100.0
+    assert _epoch("2026-01-01T00:00:00Z") == 1767225600.0

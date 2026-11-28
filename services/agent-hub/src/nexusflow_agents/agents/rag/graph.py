@@ -150,6 +150,26 @@ class ChatGraph:
         )
         return {"answer": answer, "citations": self.citations(chunks)}
 
+    def generate(
+        self,
+        query: str,
+        history: list[dict[str, str]],
+        chunks: list[dict[str, Any]],
+        summary: str = "",
+        memories: list[str] | None = None,
+        corrected: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """Generation step exposed for callers that retrieve separately (PII
+        shielding needs the original query for retrieval and a masked prompt)."""
+        return self._generator.generate(
+            query,
+            history,
+            chunks,
+            summary=summary,
+            memories=memories,
+            corrected=corrected,
+        )
+
     async def stream_answer(
         self,
         query: str,

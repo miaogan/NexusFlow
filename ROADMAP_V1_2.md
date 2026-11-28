@@ -31,7 +31,6 @@
 
 > v1.2.0 的三阶段目标已全部交付。以下能力未纳入本版本，拆解与验收标准统一维护在 [ROADMAP_V1_1_V1_5.md](ROADMAP_V1_1_V1_5.md)，按编号执行即可。
 
-* **Task 4.1 安全合规**：PII 入口/出口双向脱敏，审计日志按租户、时间检索与保留策略（`audit_logs` 持久化已随 Task 3.3 完成）。
 * **Task 4.2 模型治理**：统一 LLM 路由网关（主备故障转移、熔断）与租户级 token/调用量配额前置拦截。
 * **Task 5.1 对外服务**：租户级 API Key 签发/吊销/作用域，以及 OpenAI 兼容 `/v1/openai/chat/completions`。
 * **Task 5.2 生态集成**：Webhook 订阅（HMAC 签名、指数退避、投递日志）；MCP Server 已交付，Webhook 未开始。

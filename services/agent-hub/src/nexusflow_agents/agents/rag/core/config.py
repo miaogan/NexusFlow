@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     database_url: str = ""
     max_history: int = 12
 
+    # PII shielding at the LLM boundary. Inputs (prompt, history, chunks,
+    # summary, memories, corrections) are masked with stable tokens; replies
+    # stay masked unless pii_restore_output restores the originals.
+    pii_enabled: bool = False
+    pii_restore_output: bool = False
+
     # Historical human corrections matched before retrieval (gateway
     # /v1/corrected-answers). Lookup failure -> chat proceeds without them.
     corrected_timeout_seconds: float = 5.0

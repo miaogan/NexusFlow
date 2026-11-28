@@ -26,6 +26,8 @@ from nexusflow_agents.agents.rag.services.retrieval import RetrievalUnavailable
 from nexusflow_agents.agents.rag.services.skills import SkillRouter
 from nexusflow_agents.agents.rag.services.store import ConversationNotFound, ConversationStore
 from nexusflow_agents.agents.rag.services.summary import ConversationSummarizer, HttpSummarizer
+from nexusflow_agents.core.audit import get_audit
+from nexusflow_agents.core.pii import MaskSession, get_pii_shield
 
 APPROVAL_PENDING_ANSWER = "该操作需要人工审批，已暂停执行。"
 
@@ -115,8 +117,60 @@ class ChatService:
             ],
         )
 
-    def _corrected_answers(
-        self, message: str, tenant_id: str, auth_header: str | None
+    def _pii_session(self) -> MaskSession:
+        return get_pii_shield(self._settings).session()
+
+    @staticmethod
+    def _mask_history(
+        session: MaskSession, history: list[dict[str, str]]
+    ) -> list[dict[str, str]]:
+        return [
+            {"role": item.get("role", ""), "content": session.mask(item.get("content", ""))}
+            for item in history
+        ]
+
+    @staticmethod
+    def _mask_corrected(
+        session: MaskSession, corrected: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                **item,
+                "answer": session.mask(str(item.get("answer") or "")),
+                "query": session.mask(str(item.get("query") or "")),
+            }
+            for item in corrected
+        ]
+
+    @staticmethod
+    def _audit_pii(
+        session: MaskSession,
+        tenant_id: str,
+        user_id: str,
+        trace_id: str | None,
+    ) -> None:
+        if session.total() == 0:
+            return
+        try:
+            get_audit().record(
+                "pii.mask",
+                tenant_id=tenant_id,
+                user_id=user_id,
+                trace_id=trace_id or "",
+                resource="chat",
+                risk="read",
+                decision="masked",
+                status="ok",
+                detail={
+                    "types": session.counts(),
+                    "count": session.total(),
+                    "restore_output": session.restore_output,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - auditing must not fail a turn
+            logger.warning("pii audit failed: %s", exc)
+
+    def _corrected_answers(        self, message: str, tenant_id: str, auth_header: str | None
     ) -> list[dict[str, Any]]:
         """Matches historical corrected answers before retrieval.
 
@@ -146,8 +200,18 @@ class ChatService:
         tenant_id: str,
         user_id: str,
         auth_header: str | None,
+        prompt_message: str | None = None,
+        prompt_history: list[dict[str, str]] | None = None,
+        prompt_summary: str | None = None,
+        prompt_memories: list[str] | None = None,
+        prompt_corrected: list[dict[str, Any]] | None = None,
+        session: MaskSession | None = None,
     ) -> dict[str, Any] | None:
-        """Runs retrieval + the reasoning loop; None means fall back."""
+        """Runs retrieval + the reasoning loop; None means fall back.
+
+        Retrieval always sees the original query so PII searches still work;
+        the prompt receives the masked variants.
+        """
         if self._reasoning is None or not self._reasoning.enabled:
             return None
         try:
@@ -162,14 +226,15 @@ class ChatService:
         except Exception:  # noqa: BLE001 - retrieval failure falls back to graph
             return None
         chunks = retrieved.get("chunks") or []
+        prompt_chunks = session.mask_chunks(chunks) if session is not None else chunks
         try:
             outcome = self._reasoning.run(
-                query=message,
-                history=history,
-                chunks=chunks,
-                summary=summary,
-                memories=memories,
-                corrected=corrected,
+                query=prompt_message if prompt_message is not None else message,
+                history=prompt_history if prompt_history is not None else history,
+                chunks=prompt_chunks,
+                summary=prompt_summary if prompt_summary is not None else summary,
+                memories=prompt_memories if prompt_memories is not None else memories,
+                corrected=prompt_corrected if prompt_corrected is not None else corrected,
                 envelope={
                     "tenant_id": tenant_id,
                     "user_id": user_id,
@@ -264,9 +329,15 @@ class ChatService:
         top_k = req.top_k or self._settings.default_top_k
         top_k = max(1, min(top_k, self._settings.max_top_k))
 
+        session = self._pii_session()
+        masked_message = session.mask(message)
+        masked_history = self._mask_history(session, history)
+        masked_summary = session.mask(summary)
+        masked_memories = [session.mask(item) for item in memories]
+
         skills = self._available_skills(tenant_id)
         intent = self._intent.classify(
-            message, history, tenant_id=tenant_id, skills=skills
+            masked_message, masked_history, tenant_id=tenant_id, skills=skills
         )
         citations: list[dict[str, Any]] = []
         answer = ""
@@ -274,8 +345,8 @@ class ChatService:
         if intent.get("intent") == "skill":
             skill_result = self._invoke_skill(
                 str(intent.get("skill") or ""),
-                message,
-                history,
+                masked_message,
+                masked_history,
                 tenant_id,
                 user_id,
                 auth_header,
@@ -295,6 +366,7 @@ class ChatService:
             pass
         elif intent.get("need_retrieval", True):
             corrected = self._corrected_answers(message, tenant_id, auth_header)
+            masked_corrected = self._mask_corrected(session, corrected)
             state = self._reasoning_state(
                 message=message,
                 history=history,
@@ -306,8 +378,40 @@ class ChatService:
                 tenant_id=tenant_id,
                 user_id=user_id,
                 auth_header=auth_header,
+                prompt_message=masked_message,
+                prompt_history=masked_history,
+                prompt_summary=masked_summary,
+                prompt_memories=masked_memories,
+                prompt_corrected=masked_corrected,
+                session=session,
             )
-            if state is None:
+            if state is not None:
+                answer = state.get("answer") or ""
+                citations = state.get("citations") or []
+                trace_id = state.get("trace_id")
+            elif session.enabled:
+                # PII mode retrieves with the original query so searches for a
+                # phone/email still hit, then generates from masked context.
+                retrieved = self._graph.retrieve(
+                    query=message,
+                    tenant_id=tenant_id,
+                    top_k=top_k,
+                    kb_id=req.kb_id,
+                    filters=req.filters,
+                    auth_header=auth_header,
+                )
+                chunks = retrieved.get("chunks") or []
+                answer = self._graph.generate(
+                    masked_message,
+                    masked_history,
+                    session.mask_chunks(chunks),
+                    summary=masked_summary,
+                    memories=masked_memories,
+                    corrected=masked_corrected,
+                )
+                citations = self._graph.citations(chunks)
+                trace_id = retrieved.get("trace_id")
+            else:
                 state = self._graph.invoke(
                     tenant_id=tenant_id,
                     user_id=user_id,
@@ -321,22 +425,24 @@ class ChatService:
                     auth_header=auth_header,
                     corrected=corrected,
                 )
-            answer = state.get("answer") or ""
-            citations = state.get("citations") or []
-            trace_id = state.get("trace_id")
+                answer = state.get("answer") or ""
+                citations = state.get("citations") or []
+                trace_id = state.get("trace_id")
         else:
             answer = self._graph.generate_intent_answer(
                 str(intent.get("intent") or "clarify"),
-                message,
-                history,
-                summary=summary,
-                memories=memories,
+                masked_message,
+                masked_history,
+                summary=masked_summary,
+                memories=masked_memories,
             )
             citations = []
             trace_id = None
 
+        answer = session.output(answer)
+        self._audit_pii(session, tenant_id, user_id, trace_id)
         msg = self._store.append(conv["id"], "assistant", answer, citations)
-        self._remember(tenant_id, user_id, message, answer)
+        self._remember(tenant_id, user_id, masked_message, answer)
 
         return ChatResponse(
             conversation_id=conv["id"],
@@ -382,6 +488,12 @@ class ChatService:
         )
         await run_in_threadpool(self._store.append, conv["id"], "user", message, [])
 
+        session = self._pii_session()
+        masked_message = session.mask(message)
+        masked_history = self._mask_history(session, history)
+        masked_summary = session.mask(summary)
+        masked_memories = [session.mask(item) for item in memories]
+
         top_k = req.top_k or self._settings.default_top_k
         top_k = max(1, min(top_k, self._settings.max_top_k))
 
@@ -389,8 +501,8 @@ class ChatService:
         skills = await run_in_threadpool(self._available_skills, tenant_id)
         intent = await run_in_threadpool(
             self._intent.classify,
-            message,
-            history,
+            masked_message,
+            masked_history,
             tenant_id=tenant_id,
             skills=skills,
         )
@@ -403,19 +515,21 @@ class ChatService:
             skill_result = await run_in_threadpool(
                 self._invoke_skill,
                 skill,
-                message,
-                history,
+                masked_message,
+                masked_history,
                 tenant_id,
                 user_id,
                 auth_header,
             )
             if skill_result is not None:
                 answer, trace_id = skill_result
+                answer = session.output(answer)
+                self._audit_pii(session, tenant_id, user_id, trace_id)
                 yield {"type": "token", "content": answer}
                 msg = await run_in_threadpool(
                     self._store.append, conv["id"], "assistant", answer, []
                 )
-                self._remember(tenant_id, user_id, message, answer)
+                self._remember(tenant_id, user_id, masked_message, answer)
                 yield {"type": "stage", "stage": "skill", "status": "done", "skill": skill}
                 yield {
                     "type": "done",
@@ -443,10 +557,10 @@ class ChatService:
             try:
                 async for piece in self._graph.stream_intent_answer(
                     str(intent.get("intent") or "clarify"),
-                    message,
-                    history,
-                    summary=summary,
-                    memories=memories,
+                    masked_message,
+                    masked_history,
+                    summary=masked_summary,
+                    memories=masked_memories,
                 ):
                     intent_parts.append(piece)
                     yield {"type": "token", "content": piece}
@@ -454,11 +568,12 @@ class ChatService:
                 yield {"type": "error", "error": f"generation failed: {exc}"}
                 return
 
-            answer = "".join(intent_parts)
+            answer = session.output("".join(intent_parts))
+            self._audit_pii(session, tenant_id, user_id, None)
             msg = await run_in_threadpool(
                 self._store.append, conv["id"], "assistant", answer, []
             )
-            self._remember(tenant_id, user_id, message, answer)
+            self._remember(tenant_id, user_id, masked_message, answer)
             yield {
                 "type": "done",
                 "conversation_id": conv["id"],
@@ -490,6 +605,8 @@ class ChatService:
 
         chunks: list[dict[str, Any]] = retrieved.get("chunks") or []
         citations = self._graph.citations(chunks)
+        masked_chunks = session.mask_chunks(chunks)
+        masked_corrected = self._mask_corrected(session, corrected)
         yield {"type": "sources", "citations": citations}
         yield {
             "type": "stage",
@@ -504,12 +621,12 @@ class ChatService:
         if self._reasoning is not None and self._reasoning.enabled:
             try:
                 async for event in self._reasoning.astream(
-                    query=message,
-                    history=history,
-                    chunks=chunks,
-                    summary=summary,
-                    memories=memories,
-                    corrected=corrected,
+                    query=masked_message,
+                    history=masked_history,
+                    chunks=masked_chunks,
+                    summary=masked_summary,
+                    memories=masked_memories,
+                    corrected=masked_corrected,
                     envelope={
                         "tenant_id": tenant_id,
                         "user_id": user_id,
@@ -540,12 +657,12 @@ class ChatService:
             parts: list[str] = []
             try:
                 async for piece in self._graph.stream_answer(
-                    message,
-                    history,
-                    chunks,
-                    summary=summary,
-                    memories=memories,
-                    corrected=corrected,
+                    masked_message,
+                    masked_history,
+                    masked_chunks,
+                    summary=masked_summary,
+                    memories=masked_memories,
+                    corrected=masked_corrected,
                 ):
                     parts.append(piece)
                     yield {"type": "token", "content": piece}
@@ -553,10 +670,12 @@ class ChatService:
                 yield {"type": "error", "error": f"generation failed: {exc}"}
                 return
             answer = "".join(parts)
+        answer = session.output(answer)
+        self._audit_pii(session, tenant_id, user_id, retrieved.get("trace_id"))
         msg = await run_in_threadpool(
             self._store.append, conv["id"], "assistant", answer, citations
         )
-        self._remember(tenant_id, user_id, message, answer)
+        self._remember(tenant_id, user_id, masked_message, answer)
         yield {
             "type": "done",
             "conversation_id": conv["id"],

@@ -47,6 +47,9 @@ data:
   RAG_AGENT_URL: "http://rag-agent:8001"
   RAG_GATEWAY_URL: "http://gateway:8080"
   RAG_DATABASE_URL: "postgresql://nexusflow:change-me@postgres.nexusflow.svc:5432/nexusflow"
+  # PII shielding at the LLM boundary (replies stay masked unless restored).
+  RAG_PII_ENABLED: "false"
+  RAG_PII_RESTORE_OUTPUT: "false"
   # Single-container star hub: RAG chat plus in-process intent/summary/memory.
   AGENT_HUB_ROLE: "all"
   AGENT_HUB_MODE: "local"
