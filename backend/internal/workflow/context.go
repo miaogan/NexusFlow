@@ -17,9 +17,11 @@ type Meta struct {
 // ExecutionContext carries data between DAG nodes. Upstream outputs are
 // written into the context and read by downstream nodes by name.
 type ExecutionContext struct {
-	mu   sync.RWMutex
-	vars map[string]any
-	meta Meta
+	mu    sync.RWMutex
+	vars  map[string]any
+	meta  Meta
+	runID string
+	store RunStore
 }
 
 func NewExecutionContext(input map[string]any) *ExecutionContext {
@@ -28,6 +30,30 @@ func NewExecutionContext(input map[string]any) *ExecutionContext {
 		vars[k] = v
 	}
 	return &ExecutionContext{vars: vars}
+}
+
+// SetRun records the current run identity and store so composite nodes (loop)
+// can persist their sub-runs under the same parent.
+func (c *ExecutionContext) SetRun(runID string, store RunStore) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.runID = runID
+	c.store = store
+}
+
+// RunID returns the current top-level run ID.
+func (c *ExecutionContext) RunID() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.runID
+}
+
+// Store returns the store backing the current run, or nil when persistence is
+// disabled.
+func (c *ExecutionContext) Store() RunStore {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.store
 }
 
 // SetMeta records the caller identity for nodes that call external services.

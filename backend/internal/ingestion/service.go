@@ -29,7 +29,7 @@ import (
 // IndexCleaner removes a document's chunks and graph nodes from the retrieval
 // index. *indexing.LlamaIndexIndexer implements it in production deployments.
 type IndexCleaner interface {
-	DeleteDocument(ctx context.Context, docID, kbID string) (int, error)
+	DeleteDocument(ctx context.Context, docID, kbID, tenantID string) (int, error)
 }
 
 // Option configures a Service at construction time.
@@ -368,7 +368,7 @@ func (s *Service) DeleteTask(ctx context.Context, req *pb.DeleteTaskRequest) (*p
 
 	indexDeleted := 0
 	if s.cleaner != nil {
-		n, cleanupErr := s.cleaner.DeleteDocument(ctx, task.ID, kbID)
+		n, cleanupErr := s.cleaner.DeleteDocument(ctx, task.ID, kbID, task.TenantID)
 		if cleanupErr != nil {
 			s.logger.Error("delete index failed", "task_id", task.ID, "kb_id", kbID, "error", cleanupErr)
 			return nil, status.Error(codes.Unavailable, "delete index: "+cleanupErr.Error())
@@ -581,10 +581,13 @@ func toTaskSummary(t state.Task) *pb.TaskSummary {
 }
 
 // parsedArtifactKeys lists derived files created by the parser for one task:
-// the persisted markdown plus every extracted image.
+// the persisted markdown, the layout JSON and every extracted image.
 func parsedArtifactKeys(meta map[string]string) []string {
 	var keys []string
 	if key := strings.TrimSpace(meta["markdown_key"]); key != "" {
+		keys = append(keys, key)
+	}
+	if key := strings.TrimSpace(meta["layout_key"]); key != "" {
 		keys = append(keys, key)
 	}
 	for _, key := range strings.Split(meta["media_keys"], ",") {

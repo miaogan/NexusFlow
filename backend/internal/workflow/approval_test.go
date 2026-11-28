@@ -39,6 +39,59 @@ func doJSON(t *testing.T, handler http.Handler, method, path string, body any) *
 	return rec
 }
 
+func TestHTTPRunListsLoopChildren(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(echoNode{})
+	registry.Register(NewLoopNode(registry, testLogger()))
+	store := NewMemoryRunStore(20)
+	engine := NewEngine(registry, testLogger())
+	handler := NewHTTPHandler(engine, registry, WithRunStore(store))
+
+	dag := DAG{
+		Name: "loop-http",
+		Nodes: []NodeSpec{{ID: "loop", Type: "loop", Config: map[string]any{
+			"items": []any{1, 2},
+			"sub_dag": map[string]any{
+				"name":  "inner",
+				"nodes": []any{map[string]any{"id": "echo", "type": "echo"}},
+			},
+		}}},
+	}
+	rec := doJSON(t, handler, http.MethodPost, "/v1/workflows/run", HTTPRunRequest{DAG: dag})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("run status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var result RunResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	rec = doJSON(t, handler, http.MethodGet, "/v1/workflows/runs/"+result.RunID+"/children", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("children status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var children struct {
+		Runs []*RunState `json:"runs"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &children); err != nil {
+		t.Fatalf("decode children: %v", err)
+	}
+	if len(children.Runs) != 2 {
+		t.Fatalf("children = %d, want 2", len(children.Runs))
+	}
+
+	rec = doJSON(t, handler, http.MethodGet, "/v1/workflows/runs", nil)
+	var top struct {
+		Runs []*RunState `json:"runs"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &top); err != nil {
+		t.Fatalf("decode runs: %v", err)
+	}
+	if len(top.Runs) != 1 || top.Runs[0].ID != result.RunID {
+		t.Fatalf("top-level runs = %+v", top.Runs)
+	}
+}
+
 func TestHumanApprovalSuspendsAndResumes(t *testing.T) {
 	handler, store := newApprovalHandler()
 

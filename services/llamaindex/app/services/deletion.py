@@ -64,4 +64,14 @@ def delete_document(request: DeleteRequest, client=None) -> DeleteResponse:
         )
 
     clear_graph_cache(collection)
+
+    # Real LightRAG stores its own graph; remove the document's entities and
+    # chunks so deleted content cannot resurface through the graph route.
+    from app.retrieval import lightrag_engine
+
+    if lightrag_engine.enabled():
+        lightrag_engine.delete_document(
+            request.tenant_id, request.kb_id, request.task_id
+        )
+
     return DeleteResponse(success=True, deleted=deleted, collection=collection)

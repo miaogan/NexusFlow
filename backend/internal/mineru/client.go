@@ -26,10 +26,13 @@ type Client interface {
 
 // Document is a parsed result plus the images extracted from the result
 // archive. Image keys are paths relative to the Markdown file (e.g.
-// "images/1.jpg"), matching the links that MinerU writes.
+// "images/1.jpg"), matching the links that MinerU writes. Layout is the raw
+// content_list.json (reading order, block types and page boxes) when the
+// archive includes one.
 type Document struct {
 	Markdown string
 	Images   map[string][]byte
+	Layout   []byte
 }
 
 // DocumentClient is implemented by parsers that also expose images. Callers
@@ -42,6 +45,7 @@ const (
 	maxResultImages  = 64
 	maxResultImage   = 8 << 20
 	maxResultImageIn = 32 << 20
+	maxResultLayout  = 8 << 20
 )
 
 var resultImageExts = map[string]struct{}{
@@ -319,6 +323,7 @@ func (c *HTTPClient) downloadResult(ctx context.Context, resultURL string) (Docu
 	// Read the Markdown first so images can be named relative to it.
 	doc := Document{Images: make(map[string][]byte)}
 	markdownDir := ""
+	markdownName := ""
 	for _, entry := range archive.File {
 		if entry.FileInfo().IsDir() || !strings.EqualFold(path.Ext(entry.Name), ".md") {
 			continue
@@ -331,6 +336,7 @@ func (c *HTTPClient) downloadResult(ctx context.Context, resultURL string) (Docu
 			return Document{}, fmt.Errorf("mineru returned empty Markdown")
 		}
 		doc.Markdown = string(markdown)
+		markdownName = entry.Name
 		if dir := path.Dir(entry.Name); dir != "." && dir != "/" {
 			markdownDir = strings.TrimPrefix(path.Clean("/"+dir), "/")
 		}
@@ -339,6 +345,7 @@ func (c *HTTPClient) downloadResult(ctx context.Context, resultURL string) (Docu
 	if doc.Markdown == "" {
 		return Document{}, fmt.Errorf("mineru result ZIP contains no Markdown")
 	}
+	doc.Layout = readLayout(archive, markdownDir, markdownName)
 
 	total := 0
 	for _, entry := range archive.File {
@@ -369,6 +376,56 @@ func (c *HTTPClient) downloadResult(ctx context.Context, resultURL string) (Docu
 		total += len(data)
 	}
 	return doc, nil
+}
+
+// readLayout returns MinerU's content_list.json from the result archive,
+// preferring the file that sits next to the parsed Markdown.
+func readLayout(archive *zip.Reader, markdownDir, markdownName string) []byte {
+	preferred := ""
+	if markdownName != "" {
+		preferred = strings.TrimSuffix(path.Base(markdownName), path.Ext(markdownName)) + "_content_list.json"
+	}
+	var fallback *zip.File
+	for _, entry := range archive.File {
+		if entry.FileInfo().IsDir() {
+			continue
+		}
+		normalized := strings.ReplaceAll(entry.Name, "\\", "/")
+		base := path.Base(normalized)
+		lowered := strings.ToLower(base)
+		if lowered != "content_list.json" && !strings.HasSuffix(lowered, "_content_list.json") {
+			continue
+		}
+		if preferred != "" && base == preferred && inDir(entry.Name, markdownDir) {
+			return readLayoutEntry(entry)
+		}
+		if fallback == nil {
+			fallback = entry
+		}
+	}
+	if fallback == nil {
+		return nil
+	}
+	return readLayoutEntry(fallback)
+}
+
+func inDir(name, dir string) bool {
+	if dir == "" {
+		return true
+	}
+	clean := strings.TrimPrefix(path.Clean("/"+strings.ReplaceAll(name, "\\", "/")), "/")
+	return strings.HasPrefix(clean, dir+"/")
+}
+
+func readLayoutEntry(entry *zip.File) []byte {
+	if entry.UncompressedSize64 == 0 || entry.UncompressedSize64 > maxResultLayout {
+		return nil
+	}
+	data, err := readZipEntry(entry, maxResultLayout)
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	return data
 }
 
 // safeResultPath rejects absolute and traversal paths inside the result ZIP.

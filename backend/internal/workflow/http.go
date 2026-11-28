@@ -110,6 +110,23 @@ func NewHTTPHandler(engine *Engine, registry *Registry, opts ...HTTPOption) http
 		}
 		c.JSON(http.StatusOK, gin.H{"runs": filtered})
 	})
+	v1.GET("/runs/:id/children", func(c *gin.Context) {
+		if options.store == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "run store not configured"})
+			return
+		}
+		limit, _ := strconv.Atoi(c.Query("limit"))
+		meta := requestMeta(c)
+		children := options.store.Children(c.Param("id"), limit)
+		// Loop sub-runs inherit the parent's identity; keep the same tenant guard.
+		filtered := make([]*RunState, 0, len(children))
+		for _, run := range children {
+			if run.Meta.TenantID == "" || run.Meta.TenantID == meta.TenantID {
+				filtered = append(filtered, run)
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"runs": filtered})
+	})
 	v1.GET("/runs/:id", func(c *gin.Context) {
 		if options.store == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "run store not configured"})

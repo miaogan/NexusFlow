@@ -370,10 +370,32 @@ services:
       LLAMAINDEX_LLM_BASE_URL: ${LLAMAINDEX_LLM_BASE_URL:-}
       LLAMAINDEX_LLM_API_KEY: ${LLAMAINDEX_LLM_API_KEY:-}
       LLAMAINDEX_LLM_MODEL: ${LLAMAINDEX_LLM_MODEL:-gpt-4o-mini}
+      # Persistent LightRAG-style graph snapshots (shared across replicas).
+      LLAMAINDEX_GRAPH_STORE_DRIVER: ${LLAMAINDEX_GRAPH_STORE_DRIVER:-postgres}
+      LLAMAINDEX_GRAPH_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
+      # Real LightRAG (lightrag-hku >= 1.5.8) is opt-in and needs an
+      # OpenAI-compatible LLM. Storage: postgres keeps KV/vector/doc-status
+      # and the graph in PostgreSQL (PGTableGraphStorage, no Apache AGE).
+      LLAMAINDEX_LIGHTRAG_ENABLED: ${LLAMAINDEX_LIGHTRAG_ENABLED:-false}
+      LLAMAINDEX_LIGHTRAG_STORAGE_DRIVER: ${LLAMAINDEX_LIGHTRAG_STORAGE_DRIVER:-postgres}
+      LLAMAINDEX_LIGHTRAG_GRAPH_STORAGE: ${LLAMAINDEX_LIGHTRAG_GRAPH_STORAGE:-PGTableGraphStorage}
+      LLAMAINDEX_LIGHTRAG_WORKING_DIR: /data/lightrag
+      LLAMAINDEX_LIGHTRAG_QUERY_MODE: ${LLAMAINDEX_LIGHTRAG_QUERY_MODE:-hybrid}
+      LLAMAINDEX_LIGHTRAG_EMBEDDING_DIM: ${LLAMAINDEX_LIGHTRAG_EMBEDDING_DIM:-1536}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: nexusflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexusflow}
+      POSTGRES_DATABASE: nexusflow
+    volumes: ["lightrag-data:/data/lightrag"]
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
-    depends_on: [qdrant]
+    depends_on:
+      qdrant:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     ports: ["8000:8000"]
 
   agent-hub:
@@ -576,3 +598,4 @@ volumes:
   minio-data:
   postgres-data:
   objects:
+  lightrag-data:

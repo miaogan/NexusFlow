@@ -331,12 +331,12 @@ type fakeCleaner struct {
 	err     error
 }
 
-type cleanerCall struct{ docID, kbID string }
+type cleanerCall struct{ docID, kbID, tenantID string }
 
-func (f *fakeCleaner) DeleteDocument(_ context.Context, docID, kbID string) (int, error) {
+func (f *fakeCleaner) DeleteDocument(_ context.Context, docID, kbID, tenantID string) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, cleanerCall{docID: docID, kbID: kbID})
+	f.calls = append(f.calls, cleanerCall{docID: docID, kbID: kbID, tenantID: tenantID})
 	return f.deleted, f.err
 }
 
@@ -397,11 +397,12 @@ func TestDeleteTaskRemovesParsedArtifacts(t *testing.T) {
 	meta := map[string]string{
 		"file_name": "a.pdf", "object_key": "default/kb1/upload/x/a.pdf",
 		"kb_id": "kb1", "markdown_key": "default/kb1/parsed/t1.md",
+		"layout_key": "default/kb1/parsed/t1/layout.json",
 		"media_keys": "default/kb1/parsed/t1/images/a.png,default/kb1/parsed/t1/images/b.png",
 	}
 	seedTask(t, m, "t1", "default", meta)
 	for _, key := range []string{
-		meta["object_key"], meta["markdown_key"],
+		meta["object_key"], meta["markdown_key"], meta["layout_key"],
 		"default/kb1/parsed/t1/images/a.png", "default/kb1/parsed/t1/images/b.png",
 	} {
 		if err := objects.Put(context.Background(), key, bytes.NewReader([]byte("x")), 1, "application/octet-stream"); err != nil {
@@ -417,7 +418,7 @@ func TestDeleteTaskRemovesParsedArtifacts(t *testing.T) {
 		got[key] = true
 	}
 	for _, key := range []string{
-		meta["object_key"], meta["markdown_key"],
+		meta["object_key"], meta["markdown_key"], meta["layout_key"],
 		"default/kb1/parsed/t1/images/a.png", "default/kb1/parsed/t1/images/b.png",
 	} {
 		if !got[key] {

@@ -26,6 +26,7 @@ class DeleteRequest(BaseModel):
 
     task_id: str
     kb_id: str = "default"
+    tenant_id: str = ""
 
 
 class DeleteResponse(BaseModel):

@@ -296,11 +296,11 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 
 **DAG 引擎**（`backend/internal/workflow`）：校验节点类型、引用完整性与环路，按拓扑层级并发执行就绪节点，上游输出写入共享 `ExecutionContext`。
 
-**控制流节点**：`condition` 按 `field`（`${node.field}` / `node.field` / 字面量）与 `equals` / `not_equals` / `in` / `contains`（缺省真值判断）选择 `then` / `else` 分支；引擎跳过“从被丢弃目标可达且从选中目标不可达”的节点，汇聚节点仍会执行，结果返回 `skipped` 列表。`loop` 对 `items`（或 `items_from`）逐元素并发执行 `sub_dag`（`max_concurrency` 默认 4、上限 16），每项输入为 `item` / `index`，聚合 `count` / `failed` / `results`；默认任一元素失败即整体失败，`continue_on_error=true` 可收集部分结果。`then` / `else` 必须是 condition 的下游，嵌套 loop 在 `/v1/workflows/validate` 阶段拒绝。
+**控制流节点**：`condition` 按 `field`（`${node.field}` / `node.field` / 字面量）与 `equals` / `not_equals` / `in` / `contains`（缺省真值判断）选择 `then` / `else` 分支；引擎跳过“从被丢弃目标可达且从选中目标不可达”的节点，汇聚节点仍会执行，结果返回 `skipped` 列表。`loop` 对 `items`（或 `items_from`）逐元素并发执行 `sub_dag`（`max_concurrency` 默认 4、上限 16），每项输入为 `item` / `index`，聚合 `count` / `failed` / `results`；默认任一元素失败即整体失败，`continue_on_error=true` 可收集部分结果。配置 RunStore 时每次迭代会作为子运行持久化（`parent_run_id` / `parent_node_id` / `parent_index`），可经 `GET /v1/workflows/runs/{id}/children` 查看，且不进入顶层运行列表、不重复发 Webhook。`then` / `else` 必须是 condition 的下游，嵌套 loop 在 `/v1/workflows/validate` 阶段拒绝。
 
 **NL2SQL 节点**（`type: "nl2sql"`）：配置 `sql` 直接执行，或用 `sql_from` 引用上游输出（如 `query.sql`）；配置 `question` / `question_from` 且启用 `NL2SQL_LLM_*` 时由 LLM 生成 SQL。内置只读护栏：只允许单条 `SELECT` / `WITH ... SELECT`，剔除注释与尾分号，拒绝堆叠语句、DDL/DML 关键字、`SELECT INTO` 与 `FOR UPDATE`；执行时统一包裹 `LIMIT`（`NL2SQL_MAX_ROWS`，默认 200）并受 `NL2SQL_TIMEOUT` 约束。数据库连接由 `NL2SQL_DATABASE_URL` 注入，生产应使用 SELECT-only 角色。
 
-**检索链路**（`backend/internal/query`）：多路召回并行执行（`vector` / `bm25` / `graph`，生产均由 LlamaIndex 检索真实 Qdrant 索引）→ RRF 融合（k=60）→ 去重 → Cross-Encoder 重排 → 负反馈降权（`FeedbackPenalty`：同一租户内某 chunk 累计 ≥3 条负反馈时得分 ×0.5，再排序）→ 取 top-N；单路失败、重排超时或反馈存储不可用时均自动降级（Fail-open）。`LlamaIndexRetriever` 统一封装三路请求并从 gRPC 元数据注入 `tenant_id` 过滤；配置 `LLAMAINDEX_URL` 时 query-service 使用真实索引，未配置时回退到内存演示语料（dev-all 始终使用内存实现）。`graph` 路由为 LightRAG 风格实体图，无 LLM 时退化为共现词图。
+**检索链路**（`backend/internal/query`）：多路召回并行执行（`vector` / `bm25` / `graph`，生产均由 LlamaIndex 检索真实 Qdrant 索引）→ RRF 融合（k=60）→ 去重 → Cross-Encoder 重排 → 负反馈降权（`FeedbackPenalty`：同一租户内某 chunk 累计 ≥3 条负反馈时得分 ×0.5，再排序）→ 取 top-N；单路失败、重排超时或反馈存储不可用时均自动降级（Fail-open）。`LlamaIndexRetriever` 统一封装三路请求并从 gRPC 元数据注入 `tenant_id` 过滤；配置 `LLAMAINDEX_URL` 时 query-service 使用真实索引，未配置时回退到内存演示语料（dev-all 始终使用内存实现）。`graph` 路由默认使用自研的 LightRAG 风格实体图（无 LLM 时退化为共现词图）；图按「集合 + 租户」隔离，`LLAMAINDEX_GRAPH_STORE_DRIVER=postgres` 时快照写入 `rag_graph_snapshots`，重启/多副本可直接复用，索引与删除会按集合前缀失效；BM25 回退与图构建的 Qdrant scroll 也按租户过滤，避免共享 KB 集合串租户。设置 `LLAMAINDEX_LIGHTRAG_ENABLED=true` 且配置 `LLAMAINDEX_LLM_*` 后可切换为 `lightrag-hku`（>=1.5.8）官方实现：按「租户 + KB」独立 workspace，索引异步 `ainsert`、查询 `aquery_data` 取结构化 chunk，存储支持 `file` 或 `postgres`（PGKV/PGVector/PGDocStatus，图默认 `PGTableGraphStorage` 纯 PG 表、无需 Apache AGE；AGE 环境可切 `PGGraphStorage`）。
 
 **稠密 + 稀疏混合召回**：`bm25` 路由优先使用 Qdrant 原生 sparse（每 KB 伴生集合 `<collection>__sparse`，`modifier=idf`），写入时与稠密向量同 ID；sparse 未覆盖、集合缺失或调用失败时自动回退到原来的 scroll + BM25。`LLAMAINDEX_SPARSE_ENABLED=false` 可强制使用旧实现。升级前已索引的文档没有 sparse 向量，建议通过 `POST /v1/files/{id}/reindex` 补齐；命中不足 `top_k` 时会混合旧 BM25 结果兜底，但旧文档的纯词法召回会弱于已补齐的文档。
 
@@ -411,15 +411,16 @@ flowchart LR
 - **LLM 网关**（`backend/internal/llmgateway`）：OpenAI 兼容 `POST /v1/chat/completions`（含 SSE）与 `/v1/embeddings`，按主/备通道自动切换，连续失败触发熔断（阈值/冷却可配）；按 `x-tenant-id` 累计每日 token，超限前置返回 `429 quota_exceeded`，预留额度原子扣减并在响应后按实际 usage 修正。把 `RAG_LLM_BASE_URL` 等指向 `http://llm-gateway:8082/v1` 即可复用；RAG 生成、Intent / Summary / Memory 的独立 Agent 与 HTTP 客户端都会透传 `x-tenant-id`。
 - **开放 API / OpenAI 兼容**（`API_KEY_DRIVER=memory|postgres`）：管理员通过 `POST /v1/api-keys` 签发 `nf-sk-*` 密钥（明文仅返回一次，库中只存 SHA-256），可限定 `allowed_kb_ids`、`scopes`（`chat:completions` / `search:use`）、`rate_limit_rpm` 与 `expires_in_days`；`DELETE /v1/api-keys/{id}` 吊销，密钥与 JWT 并存。`POST /v1/openai/chat/completions` 兼容 OpenAI Chat Completions：非流式返回 `chat.completion`，流式逐 token 返回 `chat.completion.chunk` 并以 `data: [DONE]` 结束；`messages` 转为 Hub 无状态调用（历史随请求传入、不写会话库），引用在 `choices[0].message.citations` 与顶层 `citations` 透传，`kb_id` 可放在请求体、`metadata.kb_id` 或 `X-KB-ID` 头。`system` / `temperature` / `max_tokens` 透传；`usage` 优先使用上游真实 token 用量，未配置模型时回退字符估算；流式请求 `stream_options.include_usage=true` 时会在 `[DONE]` 前追加 usage chunk。
 - **事件 Webhook**（`WEBHOOK_DRIVER=memory|postgres`）：`POST /v1/webhooks` 按租户订阅 `task.completed` / `task.failed` / `index.completed` / `workflow.completed` / `workflow.failed` / `workflow.node.*` / `approval.decided`（或 `*`），可指定目标 URL 与签名密钥（未提供时自动生成并仅返回一次）。目标 URL 默认拒绝回环/私网/链路本地地址，并在每次投递时重新解析以防 DNS rebinding（`WEBHOOK_ALLOW_PRIVATE` 可放宽，仅建议本地开发使用）；`WEBHOOK_ALLOWED_HOSTS` 可进一步限定精确域名或 `*.suffix` 通配。投递携带 `X-NexusFlow-Signature: sha256=<HMAC>`、事件、投递 ID 与时间戳头；失败按指数退避重试（`WEBHOOK_MAX_ATTEMPTS` / `WEBHOOK_RETRY_BASE`），每次尝试写入 `webhook_deliveries`，可经 `GET /v1/webhooks/{id}/deliveries?status=FAILED` 查看死信。支持 `POST /v1/webhooks/{id}/test` 测试投递、`POST .../rotate-secret` 轮换密钥（新密钥仅返回一次）、`POST .../deliveries/{deliveryId}/replay` 单条重放与 `POST .../dead-letters/replay` 批量重放 FAILED 投递（重放后原记录标记 `REPLAYED`，避免重复发送）。processing-worker 与 workflow-engine 通过 `GATEWAY_URL` + `WEBHOOK_EVENTS_TOKEN` 回调 `POST /v1/internal/events`，由网关统一分发；审批结果由网关直接产生。Workflow 引擎的节点级 `EventSink` 会发出 `workflow.node.started` / `completed` / `failed` / `waiting_approval` / `skipped`，循环子运行不重复上报。
-- **图文多模态**：MinerU 结果 ZIP 中的图片由 Worker 提取并落盘到 `<tenant>/<kb>/parsed/<task>/images/`，Markdown 图片链接改写为 `/v1/media`；切块把 `image_urls` 写入节点 metadata，检索结果与问答引用返回配图，控制台展示缩略图并支持点击放大。
+- **图文多模态**：MinerU 结果 ZIP 中的图片由 Worker 提取并落盘到 `<tenant>/<kb>/parsed/<task>/images/`，Markdown 图片链接改写为 `/v1/media`；切块把 `image_urls` 写入节点 metadata，检索结果与问答引用返回配图，控制台展示缩略图并支持点击放大。结果 ZIP 中的 `content_list.json`（同名 `*_content_list.json` 优先）会原样保存为 `<tenant>/<kb>/parsed/<task>/layout.json` 并记录到任务 `layout_key`，供版面感知的下游消费；`/v1/media?key=...` 同时支持读取该文件（JSON，仍受租户与 API Key 知识库白名单约束）。
 
 新增 / 变更接口：
 
 | 方法与路径 | 权限 / 开关 | 说明 |
 | --- | --- | --- |
-| `GET /v1/media?key=` | `search:use` | 读取解析图片（仅本租户 `parsed/*/images` 下的图片） |
+| `GET /v1/media?key=` | `search:use` | 读取解析图片或 `parsed/<task>/layout.json`（仅本租户） |
 | `POST /v1/workflows/{validate,run}` | `workflow:run` | DAG 校验与执行（经 Gateway 代理） |
-| `GET /v1/workflows/runs`、`/v1/workflows/runs/{id}` | `workflow:run` | 运行列表 / 详情 |
+| `GET /v1/workflows/runs`、`/v1/workflows/runs/{id}` | `workflow:run` | 运行列表（仅顶层）/ 详情 |
+| `GET /v1/workflows/runs/{id}/children` | `workflow:run` | loop 节点各次迭代的持久化子运行 |
 | `POST /v1/workflows/runs/{id}/{approve,resume}` | `workflow:run` | 审批并恢复挂起的 run，重复审批 409 |
 | `GET /v1/approvals`、`/v1/approvals/{id}` | `workflow:run` | 工具审批待办 / 详情 |
 | `POST /v1/approvals/{id}/decide` | `workflow:run` | 批准 / 拒绝高风险工具 |

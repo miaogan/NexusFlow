@@ -46,8 +46,9 @@ type llamaIndexIndexResponse struct {
 }
 
 type llamaIndexDeleteRequest struct {
-	TaskID string `json:"task_id"`
-	KBID   string `json:"kb_id"`
+	TaskID   string `json:"task_id"`
+	KBID     string `json:"kb_id"`
+	TenantID string `json:"tenant_id"`
 }
 
 type llamaIndexDeleteResponse struct {
@@ -61,11 +62,13 @@ type llamaIndexDeleteResponse struct {
 // the knowledge-base collection, which also invalidates the graph route cache.
 // It returns the number of removed chunks (0 when the document was never
 // indexed) and is idempotent, so retries are safe.
-func (l *LlamaIndexIndexer) DeleteDocument(ctx context.Context, docID, kbID string) (int, error) {
+func (l *LlamaIndexIndexer) DeleteDocument(ctx context.Context, docID, kbID, tenantID string) (int, error) {
 	if l.baseURL == "" {
 		return 0, fmt.Errorf("llamaindex delete: url is empty")
 	}
-	payload, err := json.Marshal(llamaIndexDeleteRequest{TaskID: docID, KBID: kbID})
+	payload, err := json.Marshal(llamaIndexDeleteRequest{
+		TaskID: docID, KBID: kbID, TenantID: tenantID,
+	})
 	if err != nil {
 		return 0, fmt.Errorf("llamaindex delete: encode request: %w", err)
 	}

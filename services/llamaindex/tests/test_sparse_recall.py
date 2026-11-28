@@ -139,3 +139,42 @@ def test_bm25_route_merges_legacy_results_until_backfilled(
     chunks = recall_mod.retrieve(route, "dense sparse", {})
 
     assert [chunk.chunk_id for chunk in chunks] == ["point-1", "point-2"]
+
+
+class _ScrollClient:
+    def __init__(self) -> None:
+        self.kwargs: dict[str, Any] | None = None
+
+    def scroll(self, **kwargs: Any) -> tuple[list[_Record], None]:
+        self.kwargs = kwargs
+        node = {
+            "text": "tenant scoped content",
+            "metadata": {"tenant_id": "t1", "kb_id": "default"},
+        }
+        return [_Record("point-1", {"_node_content": json.dumps(node)})], None
+
+
+def test_scroll_documents_applies_tenant_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_qdrant(monkeypatch)
+    monkeypatch.setattr(recall_mod.settings, "collection_prefix", "nexusflow")
+    client = _ScrollClient()
+    monkeypatch.setattr(recall_mod, "_qdrant_client", lambda collection: client)
+
+    docs = recall_mod._scroll_documents({"kb_id": "default", "tenant_id": "t1"})
+
+    assert [doc.chunk_id for doc in docs] == ["point-1"]
+    assert client.kwargs is not None
+    conditions = client.kwargs["scroll_filter"].must
+    assert [condition.key for condition in conditions] == ["tenant_id"]
+    assert conditions[0].match.value == "t1"
+
+
+def test_graph_scope_includes_tenant(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(recall_mod.settings, "collection_prefix", "nexusflow")
+
+    assert recall_mod._graph_scope({"kb_id": "kb1", "tenant_id": "t1"}) == (
+        "nexusflow_kb1|tenant=t1"
+    )
+    assert recall_mod._graph_scope({"kb_id": "kb1"}) == "nexusflow_kb1"

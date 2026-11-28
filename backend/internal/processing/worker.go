@@ -190,6 +190,13 @@ func (w *Worker) Handle(ctx context.Context, msg queue.Message) error {
 		} else if err := w.machine.UpdateMetadata(ctx, task.ID, map[string]string{"markdown_key": key}); err != nil {
 			w.logger.Warn("record markdown key failed", "task_id", task.ID, "error", err)
 		}
+		if len(doc.Layout) > 0 {
+			if key, err := w.persistLayout(ctx, task, doc.Layout); err != nil {
+				w.logger.Warn("persist parsed layout failed", "task_id", task.ID, "error", err)
+			} else if err := w.machine.UpdateMetadata(ctx, task.ID, map[string]string{"layout_key": key}); err != nil {
+				w.logger.Warn("record layout key failed", "task_id", task.ID, "error", err)
+			}
+		}
 	}
 
 	// Publish before flipping state: if publishing fails we return an error and
@@ -231,6 +238,20 @@ func (w *Worker) persistMarkdown(ctx context.Context, task state.Task, markdown 
 	}
 	key := fmt.Sprintf("%s/%s/parsed/%s.md", task.TenantID, kbID, task.ID)
 	if err := w.objects.Put(ctx, key, strings.NewReader(markdown), int64(len(markdown)), "text/markdown"); err != nil {
+		return "", err
+	}
+	return key, nil
+}
+
+// persistLayout stores MinerU's content_list.json under
+// tenant/kb/parsed/<task>/layout.json for layout-aware consumers.
+func (w *Worker) persistLayout(ctx context.Context, task state.Task, layout []byte) (string, error) {
+	kbID := task.Metadata["kb_id"]
+	if kbID == "" {
+		kbID = "default"
+	}
+	key := fmt.Sprintf("%s/%s/parsed/%s/layout.json", task.TenantID, kbID, task.ID)
+	if err := w.objects.Put(ctx, key, bytes.NewReader(layout), int64(len(layout)), "application/json"); err != nil {
 		return "", err
 	}
 	return key, nil

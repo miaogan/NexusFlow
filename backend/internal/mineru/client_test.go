@@ -41,6 +41,13 @@ func TestHTTPClientV1Tasks(t *testing.T) {
 	if _, err := figure.Write([]byte("PNG-BYTES")); err != nil {
 		t.Fatal(err)
 	}
+	layout, err := zw.Create("result/full_content_list.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := layout.Write([]byte(`[{"type":"text","page_idx":0}]`)); err != nil {
+		t.Fatal(err)
+	}
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -131,6 +138,9 @@ func TestHTTPClientV1Tasks(t *testing.T) {
 	}
 	if got := string(doc.Images["images/fig1.png"]); got != "PNG-BYTES" {
 		t.Fatalf("extracted image = %q, want PNG-BYTES (all=%v)", got, doc.Images)
+	}
+	if got := string(doc.Layout); got != `[{"type":"text","page_idx":0}]` {
+		t.Fatalf("extracted layout = %q", got)
 	}
 }
 

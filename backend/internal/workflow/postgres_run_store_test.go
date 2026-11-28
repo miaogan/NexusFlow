@@ -43,6 +43,33 @@ func TestPostgresRunStoreIntegration(t *testing.T) {
 		t.Fatalf("loaded = %+v ok=%v", loaded, ok)
 	}
 
+	// Loop sub-runs are persisted with parent linkage and excluded from the
+	// top-level listing.
+	childID := runID + ":loop:0"
+	index := 0
+	child := &RunState{
+		ID:           childID,
+		DAG:          DAG{Name: "inner"},
+		Meta:         Meta{TenantID: "t1", UserID: "u1"},
+		Status:       string(RunSucceeded),
+		ParentRunID:  runID,
+		ParentNodeID: "loop",
+		ParentIndex:  &index,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}
+	store.Save(child)
+	children := store.Children(runID, 10)
+	if len(children) != 1 || children[0].ID != childID ||
+		children[0].ParentNodeID != "loop" || children[0].ParentIndex == nil {
+		t.Fatalf("children = %+v", children)
+	}
+	for _, run := range store.List(500) {
+		if run.ID == childID {
+			t.Fatalf("sub-run %s leaked into the top-level list", childID)
+		}
+	}
+
 	// Two competing decisions: only the first transition may win.
 	var resumed *RunState
 	claimed, err := store.Transition(runID, RunWaitingApproval, func(st *RunState) error {
@@ -84,9 +111,11 @@ func TestPostgresRunStoreIntegration(t *testing.T) {
 		t.Fatalf("approval decision = %q, want APPROVED", decision)
 	}
 
-	if _, err := store.db.ExecContext(
-		ctx, "DELETE FROM workflow_executions WHERE execution_id = $1", runID,
-	); err != nil {
-		t.Fatalf("cleanup: %v", err)
+	for _, id := range []string{childID, runID} {
+		if _, err := store.db.ExecContext(
+			ctx, "DELETE FROM workflow_executions WHERE execution_id = $1", id,
+		); err != nil {
+			t.Fatalf("cleanup %s: %v", id, err)
+		}
 	}
 }

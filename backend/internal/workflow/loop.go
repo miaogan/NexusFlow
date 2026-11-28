@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -12,7 +13,20 @@ import (
 const (
 	defaultLoopConcurrency = 4
 	maxLoopConcurrency     = 16
+	// loopNodeIDKey is injected by the engine into a loop node's config so the
+	// node can tag its persisted sub-runs without changing the Node interface.
+	loopNodeIDKey = "_node_id"
 )
+
+// withLoopNodeID returns a copy of config carrying the owning node ID.
+func withLoopNodeID(config map[string]any, nodeID string) map[string]any {
+	out := make(map[string]any, len(config)+1)
+	for key, value := range config {
+		out[key] = value
+	}
+	out[loopNodeIDKey] = nodeID
+	return out
+}
 
 // LoopNode runs a sub-DAG once per item with bounded concurrency and aggregates
 // each item's output. The parent run fails if any item fails unless
@@ -56,6 +70,11 @@ func (n *LoopNode) Run(
 		return nil, fmt.Errorf("loop: invalid sub_dag: %w", err)
 	}
 	continueOnError, _ := config["continue_on_error"].(bool)
+	// Persist each iteration as a sub-run of the parent so item-level results
+	// survive the aggregated output being overwritten or the process restarting.
+	store := ec.Store()
+	parentRunID := ec.RunID()
+	nodeID, _ := config[loopNodeIDKey].(string)
 
 	outcomes := make([]loopOutcome, len(items))
 	sem := make(chan struct{}, loopConcurrency(config))
@@ -74,7 +93,15 @@ func (n *LoopNode) Run(
 
 			run, runErr := engine.RunWithOptions(
 				ctx, subDAG, loopInput(value, index),
-				RunOptions{Meta: ec.Meta(), Nested: true},
+				RunOptions{
+					Meta:         ec.Meta(),
+					Store:        store,
+					Nested:       true,
+					RunID:        loopRunID(parentRunID, nodeID, index),
+					ParentRunID:  parentRunID,
+					ParentNodeID: nodeID,
+					ParentIndex:  &index,
+				},
 			)
 			if runErr != nil {
 				outcomes[index] = loopOutcome{Index: index, Status: string(RunFailed), Error: runErr.Error()}
@@ -105,6 +132,20 @@ func (n *LoopNode) Run(
 		return out, fmt.Errorf("loop: %d of %d items failed", failed, len(items))
 	}
 	return out, nil
+}
+
+// loopRunID builds a deterministic sub-run ID so retries reuse the same row.
+// Oversized IDs fall back to a short hash; linkage is preserved by ParentRunID.
+func loopRunID(parentRunID, nodeID string, index int) string {
+	if parentRunID == "" {
+		return ""
+	}
+	id := fmt.Sprintf("%s:%s:%d", parentRunID, nodeID, index)
+	if len(id) <= 64 {
+		return id
+	}
+	sum := sha256.Sum256([]byte(id))
+	return fmt.Sprintf("loop-%x", sum[:12])
 }
 
 func loopConcurrency(config map[string]any) int {

@@ -149,7 +149,7 @@ Agent Hub 已完成单容器与星型调度，但目前仍是固定能力（inte
 
 ## 剩余工作（P6+）
 
-1. **持久化**：`MemoryRunStore` / `ApprovalService` / `AuditLog` 的 Postgres 驱动（`workflow_executions` / `workflow_approvals` / `audit_logs`）与审批 CAS 已交付；`audit_logs` 月分区与保留策略（`AGENT_HUB_AUDIT_RETENTION_DAYS`）已由 Hub 自动维护。
+1. **持久化**：`MemoryRunStore` / `ApprovalService` / `AuditLog` 的 Postgres 驱动（`workflow_executions` / `workflow_approvals` / `audit_logs`）与审批 CAS 已交付；`audit_logs` 月分区与保留策略（`AGENT_HUB_AUDIT_RETENTION_DAYS`）已由 Hub 自动维护；Workflow loop 的每次迭代已作为子运行持久化，可通过 `GET /v1/workflows/runs/{id}/children` 查看。
 2. **MCP 传输与能力**：Streamable HTTP、`resources/subscribe`、三种原语与 `resources/list_changed` 主动推送均已交付；会话存在性/租户/订阅通过 `AGENT_HUB_MCP_SESSION_DRIVER=postgres` 写入共享 `mcp_sessions`，跨副本可续接会话（SSE 流仍绑定当前副本）。
 3. **推理流式体验**：最终回答逐 token 流式、`tool_progress` 心跳与单工具超时均已交付；同步 `run` 路径暂不产生进度事件。
 4. **控制台**：审批收件箱、run 详情/挂起恢复与审计查询页（`/audit`）已交付；run 节点时间线可视化可继续增强。

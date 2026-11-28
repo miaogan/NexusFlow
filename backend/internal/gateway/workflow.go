@@ -102,6 +102,15 @@ func (g *Gateway) workflowRunDetail(c *gin.Context) {
 	)
 }
 
+// workflowRunChildren lists the persisted loop sub-runs of a parent execution.
+func (g *Gateway) workflowRunChildren(c *gin.Context) {
+	path := "/v1/workflows/runs/" + url.PathEscape(c.Param("id")) + "/children"
+	if query := c.Request.URL.Query().Encode(); query != "" {
+		path += "?" + query
+	}
+	g.proxyWorkflow(c, http.MethodGet, path)
+}
+
 func (g *Gateway) workflowApprove(c *gin.Context) {
 	g.proxyWorkflowDecision(
 		c,

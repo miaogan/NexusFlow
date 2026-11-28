@@ -33,6 +33,12 @@
 --     按整月 DROP；在此之前退化为 DELETE 过期行。
 --   * mcp_sessions 已落地：AGENT_HUB_MCP_SESSION_DRIVER=postgres 时由 Agent Hub 建表，
 --     保存 Streamable HTTP 会话的租户、订阅与指纹，供多副本共享。
+--   * rag_graph_snapshots 已落地：LLAMAINDEX_GRAPH_STORE_DRIVER=postgres 时由 LlamaIndex
+--     服务建表，保存按「集合|租户」隔离的 LightRAG 风格图快照。
+--   * lightrag_* 表由 lightrag-hku（>=1.5.8）在 LLAMAINDEX_LIGHTRAG_STORAGE_DRIVER=postgres
+--     时自动创建（KV / 向量 / 文档状态 / 图，按 workspace 隔离）；图默认
+--     PGTableGraphStorage（lightrag_graph_nodes / lightrag_graph_edges），无需 Apache AGE；
+--     仅显式选择 PGGraphStorage 时才依赖 AGE。本文件不重复定义这些表。
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
@@ -142,11 +148,18 @@ CREATE TABLE IF NOT EXISTS workflow_executions (
     triggered_by     VARCHAR(64) NOT NULL,
     started_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    finished_at      TIMESTAMPTZ
+    finished_at      TIMESTAMPTZ,
+    -- loop 子运行指向父执行与迭代序号；顶层运行两者为空
+    parent_run_id    VARCHAR(64) NOT NULL DEFAULT '',
+    parent_node_id   VARCHAR(64) NOT NULL DEFAULT '',
+    parent_index     INT
 );
 
 CREATE INDEX IF NOT EXISTS idx_wf_exec_tenant_status
     ON workflow_executions (tenant_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_wf_exec_parent
+    ON workflow_executions (parent_run_id);
 
 -- 6. 人工审批任务单表 (Human-in-the-Loop)
 CREATE TABLE IF NOT EXISTS workflow_approvals (
@@ -343,3 +356,15 @@ CREATE TABLE IF NOT EXISTS mcp_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_mcp_sessions_updated
     ON mcp_sessions (updated_at);
+
+-- 15. LightRAG 风格图快照（LLAMAINDEX_GRAPH_STORE_DRIVER=postgres）
+-- scope 为「集合|租户」作用域，payload 保存实体、关系与 chunk 关联的 JSON 快照；
+-- 索引/删除时按集合前缀清理，避免跨租户复用图数据。
+CREATE TABLE IF NOT EXISTS rag_graph_snapshots (
+    scope      VARCHAR(256) PRIMARY KEY,
+    payload    JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_graph_snapshots_updated
+    ON rag_graph_snapshots (updated_at);

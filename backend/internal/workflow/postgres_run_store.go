@@ -29,10 +29,21 @@ var runStoreSchema = []string{
 		triggered_by     VARCHAR(64) NOT NULL,
 		started_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		finished_at      TIMESTAMPTZ
+		finished_at      TIMESTAMPTZ,
+		parent_run_id    VARCHAR(64) NOT NULL DEFAULT '',
+		parent_node_id   VARCHAR(64) NOT NULL DEFAULT '',
+		parent_index     INT
 	)`,
+	`ALTER TABLE workflow_executions
+		ADD COLUMN IF NOT EXISTS parent_run_id VARCHAR(64) NOT NULL DEFAULT ''`,
+	`ALTER TABLE workflow_executions
+		ADD COLUMN IF NOT EXISTS parent_node_id VARCHAR(64) NOT NULL DEFAULT ''`,
+	`ALTER TABLE workflow_executions
+		ADD COLUMN IF NOT EXISTS parent_index INT`,
 	`CREATE INDEX IF NOT EXISTS idx_wf_exec_tenant_status
 		ON workflow_executions (tenant_id, status)`,
+	`CREATE INDEX IF NOT EXISTS idx_wf_exec_parent
+		ON workflow_executions (parent_run_id)`,
 	`CREATE TABLE IF NOT EXISTS workflow_approvals (
 		id              VARCHAR(64) PRIMARY KEY,
 		tenant_id       VARCHAR(64) NOT NULL,
@@ -168,12 +179,17 @@ func saveRunTx(ctx context.Context, tx *sql.Tx, state *RunState) error {
 	if isTerminal(state.Status) {
 		finished = updated
 	}
+	var parentIndex any
+	if state.ParentIndex != nil {
+		parentIndex = *state.ParentIndex
+	}
 	if _, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO workflow_executions (
 			execution_id, tenant_id, workflow_id, status, current_node_id,
-			context_snapshot, triggered_by, started_at, updated_at, finished_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+			context_snapshot, triggered_by, started_at, updated_at, finished_at,
+			parent_run_id, parent_node_id, parent_index
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		ON CONFLICT (execution_id) DO UPDATE SET
 			tenant_id = EXCLUDED.tenant_id,
 			workflow_id = EXCLUDED.workflow_id,
@@ -182,9 +198,13 @@ func saveRunTx(ctx context.Context, tx *sql.Tx, state *RunState) error {
 			context_snapshot = EXCLUDED.context_snapshot,
 			triggered_by = EXCLUDED.triggered_by,
 			updated_at = EXCLUDED.updated_at,
-			finished_at = EXCLUDED.finished_at`,
+			finished_at = EXCLUDED.finished_at,
+			parent_run_id = EXCLUDED.parent_run_id,
+			parent_node_id = EXCLUDED.parent_node_id,
+			parent_index = EXCLUDED.parent_index`,
 		state.ID, tenant, workflowID, state.Status, state.PendingNode,
 		snapshot, triggeredBy, created, updated, finished,
+		state.ParentRunID, state.ParentNodeID, parentIndex,
 	); err != nil {
 		return fmt.Errorf("upsert workflow execution: %w", err)
 	}
@@ -287,7 +307,7 @@ func (s *PostgresRunStore) Get(id string) (*RunState, bool) {
 	return state, true
 }
 
-// List returns the most recently updated runs.
+// List returns the most recently updated top-level runs.
 func (s *PostgresRunStore) List(limit int) []*RunState {
 	if limit <= 0 || limit > 500 {
 		limit = 100
@@ -298,7 +318,9 @@ func (s *PostgresRunStore) List(limit int) []*RunState {
 		ctx,
 		`SELECT execution_id, context_snapshot, status,
 		        COALESCE(current_node_id, ''), updated_at
-		 FROM workflow_executions ORDER BY updated_at DESC LIMIT $1`,
+		 FROM workflow_executions
+		 WHERE COALESCE(parent_run_id, '') = ''
+		 ORDER BY updated_at DESC LIMIT $1`,
 		limit,
 	)
 	if err != nil {
@@ -306,8 +328,35 @@ func (s *PostgresRunStore) List(limit int) []*RunState {
 		return nil
 	}
 	defer rows.Close()
+	return scanRunStates(rows, limit)
+}
 
-	out := make([]*RunState, 0, limit)
+// Children returns the loop sub-runs of a parent execution, newest first.
+func (s *PostgresRunStore) Children(parentID string, limit int) []*RunState {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT execution_id, context_snapshot, status,
+		        COALESCE(current_node_id, ''), updated_at
+		 FROM workflow_executions
+		 WHERE parent_run_id = $1
+		 ORDER BY updated_at DESC LIMIT $2`,
+		parentID, limit,
+	)
+	if err != nil {
+		slog.Default().Error("workflow run store children failed", "parent", parentID, "error", err)
+		return nil
+	}
+	defer rows.Close()
+	return scanRunStates(rows, limit)
+}
+
+func scanRunStates(rows *sql.Rows, capacity int) []*RunState {
+	out := make([]*RunState, 0, capacity)
 	for rows.Next() {
 		var (
 			id          string

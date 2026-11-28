@@ -307,24 +307,68 @@ _graph_cache: dict[str, tuple[float, DocumentGraph]] = {}
 _cache_lock = threading.Lock()
 
 
+def _graph_store():
+    from app.retrieval.graph_store import get_graph_store
+
+    return get_graph_store()
+
+
+def _remember(scope: str, graph: DocumentGraph) -> DocumentGraph:
+    ttl = max(0.0, settings.graph_cache_seconds)
+    with _cache_lock:
+        _graph_cache[scope] = (time.monotonic() + ttl, graph)
+    return graph
+
+
 def cached_graph(collection: str, build: Callable[[], DocumentGraph]) -> DocumentGraph:
-    """Caches the per-collection graph briefly so each query avoids re-scrolling."""
+    """Caches the per-scope graph in-process and, when configured, in PostgreSQL.
+
+    ``collection`` is tenant-scoped by the caller so graphs never cross tenants.
+    """
     now = time.monotonic()
     with _cache_lock:
         cached = _graph_cache.get(collection)
         if cached is not None and cached[0] > now:
             return cached[1]
-    graph = build()
-    ttl = max(0.0, settings.graph_cache_seconds)
-    with _cache_lock:
-        _graph_cache[collection] = (now + ttl, graph)
-    return graph
+
+    store = _graph_store()
+    graph: DocumentGraph | None = None
+    if store is not None:
+        payload = store.load(collection)
+        if payload:
+            from app.retrieval.graph_store import graph_from_payload
+
+            graph = graph_from_payload(payload)
+    if graph is None:
+        graph = build()
+        if store is not None:
+            from app.retrieval.graph_store import graph_to_payload
+
+            store.save(collection, graph_to_payload(graph))
+    return _remember(collection, graph)
 
 
 def clear_graph_cache(collection: str | None = None) -> None:
-    """Drops cached graphs; called after indexing so new chunks are visible."""
+    """Drops cached graphs (in-process and persistent) after indexing/deletion."""
     with _cache_lock:
         if collection is None:
             _graph_cache.clear()
         else:
-            _graph_cache.pop(collection, None)
+            prefix = collection + "|"
+            for key in [
+                key
+                for key in _graph_cache
+                if key == collection or key.startswith(prefix)
+            ]:
+                _graph_cache.pop(key, None)
+
+    store = _graph_store()
+    if store is None:
+        return
+    try:
+        if collection is None:
+            store.clear()
+        else:
+            store.delete_prefix(collection)
+    except Exception as exc:  # noqa: BLE001 - retrieval must keep working
+        logger.warning("graph snapshot invalidation failed: %s", exc)

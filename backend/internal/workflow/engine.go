@@ -213,6 +213,11 @@ type RunOptions struct {
 	// Nested marks loop sub-runs so node events are not duplicated by the
 	// parent run.
 	Nested bool
+	// ParentRunID/ParentNodeID/ParentIndex link loop sub-runs to their parent
+	// execution and iteration.
+	ParentRunID  string
+	ParentNodeID string
+	ParentIndex  *int
 }
 
 // Run executes a DAG with no request metadata.
@@ -274,6 +279,7 @@ func (e *Engine) RunWithOptions(
 		}
 	}
 	ec.SetMeta(opts.Meta)
+	ec.SetRun(result.RunID, opts.Store)
 
 	ready := make([]string, 0, len(specs))
 	scheduled := make(map[string]bool, len(specs))
@@ -334,7 +340,11 @@ func (e *Engine) RunWithOptions(
 					return
 				}
 				node, _ := e.registry.Get(spec.Type)
-				out, runErr := node.Run(ctx, ec, spec.Config)
+				runConfig := spec.Config
+				if spec.Type == "loop" {
+					runConfig = withLoopNodeID(spec.Config, id)
+				}
+				out, runErr := node.Run(ctx, ec, runConfig)
 				res := NodeResult{NodeID: id, Output: out, Duration: time.Since(start)}
 				if runErr != nil {
 					res.Error = runErr.Error()
@@ -438,7 +448,7 @@ func (e *Engine) save(
 	state := e.state(opts, result, dag, input, "", errText)
 	opts.Store.Save(state)
 
-	if e.events == nil {
+	if opts.Nested || e.events == nil {
 		return
 	}
 	payload := map[string]any{
@@ -502,6 +512,9 @@ func (e *Engine) state(
 		Error:          errText,
 		ApprovedBy:     opts.ApprovedBy,
 		ApprovalReason: opts.ApprovalReason,
+		ParentRunID:    opts.ParentRunID,
+		ParentNodeID:   opts.ParentNodeID,
+		ParentIndex:    opts.ParentIndex,
 		CreatedAt:      created,
 		UpdatedAt:      now,
 	}

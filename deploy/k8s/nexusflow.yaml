@@ -132,6 +132,9 @@ metadata:
 type: Opaque
 stringData:
   JWT_SECRET: "change-me-in-production"
+  # Matches the password embedded in the Postgres DSNs below; LightRAG's PG
+  # storages read POSTGRES_* from the environment.
+  POSTGRES_PASSWORD: "change-me"
   OPENSANDBOX_TOKEN: ""
   # Shared by gateway -> workflow and agent-hub -> workflow; empty disables
   # the direct-access check (dev only).
@@ -174,6 +177,19 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: sandbox-work
+  namespace: nexusflow
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: nfs-client
+  resources:
+    requests:
+      storage: 20Gi
+---
+# LightRAG working directory (NetworkX graph + LLM cache) shared by replicas.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lightrag-data
   namespace: nexusflow
 spec:
   accessModes: ["ReadWriteMany"]
@@ -761,11 +777,41 @@ spec:
               value: "http://qdrant.nexusflow.svc:6333"
             - name: LLAMAINDEX_SPARSE_ENABLED
               value: "true"
+            - name: LLAMAINDEX_GRAPH_STORE_DRIVER
+              value: "postgres"
+            - name: LLAMAINDEX_GRAPH_DATABASE_URL
+              value: "postgresql://nexusflow:change-me@postgres.nexusflow.svc:5432/nexusflow"
+            - name: LLAMAINDEX_LIGHTRAG_ENABLED
+              value: "false"
+            - name: LLAMAINDEX_LIGHTRAG_STORAGE_DRIVER
+              value: "postgres"
+            - name: LLAMAINDEX_LIGHTRAG_GRAPH_STORAGE
+              value: "PGTableGraphStorage"
+            - name: LLAMAINDEX_LIGHTRAG_WORKING_DIR
+              value: "/data/lightrag"
+            - name: LLAMAINDEX_LIGHTRAG_EMBEDDING_DIM
+              value: "1536"
+            - name: POSTGRES_HOST
+              value: "postgres.nexusflow.svc"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_USER
+              value: "nexusflow"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DATABASE
+              value: "nexusflow"
             - name: LLAMAINDEX_EMBEDDING_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: app-secret
                   key: LLAMAINDEX_EMBEDDING_API_KEY
+          volumeMounts:
+            - name: lightrag-data
+              mountPath: /data/lightrag
           readinessProbe:
             httpGet:
               path: /healthz
@@ -779,6 +825,10 @@ spec:
             limits:
               cpu: "2"
               memory: 2Gi
+      volumes:
+        - name: lightrag-data
+          persistentVolumeClaim:
+            claimName: lightrag-data
 ---
 apiVersion: v1
 kind: Service

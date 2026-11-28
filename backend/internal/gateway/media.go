@@ -12,15 +12,17 @@ import (
 	"github.com/nexusflow/nexusflow/backend/internal/tenant"
 )
 
-const maxMediaBytes = 16 << 20 // 16 MiB per parsed image
+const maxMediaBytes = 16 << 20 // 16 MiB per parsed image / layout file
 
 var mediaExts = map[string]struct{}{
 	".png": {}, ".jpg": {}, ".jpeg": {}, ".webp": {}, ".gif": {},
 }
 
-// getMedia streams a parsed image from the object store. Keys are produced by
-// the processing worker as <tenant>/<kb>/parsed/<task>/images/<name>; the
-// tenant prefix is enforced so a caller cannot read another tenant's media.
+// getMedia streams a parsed image or layout JSON from the object store. Keys
+// are produced by the processing worker as
+// <tenant>/<kb>/parsed/<task>/images/<name> or
+// <tenant>/<kb>/parsed/<task>/layout.json; the tenant prefix is enforced so a
+// caller cannot read another tenant's media.
 func (g *Gateway) getMedia(c *gin.Context) {
 	key := strings.TrimSpace(c.Query("key"))
 	principal, _ := tenant.From(c.Request.Context())
@@ -49,6 +51,9 @@ func (g *Gateway) getMedia(c *gin.Context) {
 	defer reader.Close()
 
 	contentType := mime.TypeByExtension(strings.ToLower(path.Ext(key)))
+	if contentType == "" && strings.EqualFold(path.Ext(key), ".json") {
+		contentType = "application/json"
+	}
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
@@ -59,12 +64,25 @@ func (g *Gateway) getMedia(c *gin.Context) {
 }
 
 // validMediaKey accepts only parser-produced image keys below the caller's
-// tenant, rejecting traversal, nested names and non-image extensions.
+// tenant, plus the single layout.json per parsed task. Traversal, nested names
+// and other extensions are rejected.
 func validMediaKey(key, tenantID string) bool {
 	if key == "" || strings.ContainsAny(key, "\\\x00") || strings.Contains(key, "..") {
 		return false
 	}
 	segments := strings.Split(key, "/")
+	if len(segments) == 5 {
+		// <tenant>/<kb>/parsed/<task>/layout.json
+		if segments[0] != tenantID || segments[2] != "parsed" || segments[4] != "layout.json" {
+			return false
+		}
+		for _, segment := range segments[1:4] {
+			if !validPathSegment(segment) {
+				return false
+			}
+		}
+		return true
+	}
 	if len(segments) != 6 {
 		return false
 	}
@@ -72,10 +90,14 @@ func validMediaKey(key, tenantID string) bool {
 		return false
 	}
 	for _, segment := range []string{segments[1], segments[3], segments[5]} {
-		if segment == "" || segment == "." || segment == ".." || strings.HasPrefix(segment, ".") {
+		if !validPathSegment(segment) {
 			return false
 		}
 	}
 	_, ok := mediaExts[strings.ToLower(path.Ext(segments[5]))]
 	return ok
+}
+
+func validPathSegment(segment string) bool {
+	return segment != "" && segment != "." && segment != ".." && !strings.HasPrefix(segment, ".")
 }

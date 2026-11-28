@@ -149,6 +149,57 @@ func (c *imageClient) PollDocument(
 
 var _ mineru.DocumentClient = (*imageClient)(nil)
 
+// layoutClient returns MinerU's content_list.json alongside the Markdown.
+type layoutClient struct {
+	mineru.MockClient
+}
+
+func (c *layoutClient) PollDocument(
+	ctx context.Context, jobID string,
+) (mineru.Document, bool, error) {
+	markdown, done, err := c.Poll(ctx, jobID)
+	return mineru.Document{
+		Markdown: markdown,
+		Layout:   []byte(`[{"type":"text","page_idx":0}]`),
+	}, done, err
+}
+
+var _ mineru.DocumentClient = (*layoutClient)(nil)
+
+func TestWorkerPersistsLayoutJSON(t *testing.T) {
+	machine := state.NewMachine()
+	objects := newFakeObjects()
+	pub := &fakePublisher{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	client := &layoutClient{MockClient: mineru.MockClient{Markdown: "# layout\n"}}
+	worker := NewWorker(client, machine, pub, logger,
+		10*time.Millisecond, 1, 1, "file.parsed", "task.dlq", "test", WithObjectStore(objects))
+
+	ctx := context.Background()
+	if _, _, err := machine.Create(ctx, state.Task{
+		ID: "t1", TenantID: "default",
+		Metadata: map[string]string{"file_name": "a.pdf", "file_type": "pdf", "kb_id": "kb1"},
+	}); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	msg := queue.Message{
+		Topic: "file.uploaded", Key: "t1",
+		Payload: []byte(`{"task_id":"t1","tenant_id":"default","file_url":"http://objects/x","file_type":"pdf"}`),
+	}
+	if err := worker.Handle(ctx, msg); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+
+	task, _, _ := machine.Get(ctx, "t1")
+	key := "default/kb1/parsed/t1/layout.json"
+	if task.Metadata["layout_key"] != key {
+		t.Fatalf("layout_key = %q, want %q", task.Metadata["layout_key"], key)
+	}
+	if got := string(objects.data[key]); got != `[{"type":"text","page_idx":0}]` {
+		t.Fatalf("persisted layout = %q", got)
+	}
+}
+
 func TestWorkerPersistsImagesAndRewritesLinks(t *testing.T) {
 	machine := state.NewMachine()
 	objects := newFakeObjects()

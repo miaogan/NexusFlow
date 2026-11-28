@@ -276,6 +276,7 @@ func (g *Gateway) Router() *gin.Engine {
 	// Persisted runs and human-in-the-loop approval.
 	v1.GET("/workflows/runs", RequirePermission("workflow:run"), g.workflowRuns)
 	v1.GET("/workflows/runs/:id", RequirePermission("workflow:run"), g.workflowRunDetail)
+	v1.GET("/workflows/runs/:id/children", RequirePermission("workflow:run"), g.workflowRunChildren)
 	v1.POST("/workflows/runs/:id/approve", RequirePermission("workflow:run"), g.workflowApprove)
 	v1.POST("/workflows/runs/:id/resume", RequirePermission("workflow:run"), g.workflowResume)
 	v1.GET("/me", g.me)

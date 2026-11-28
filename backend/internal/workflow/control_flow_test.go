@@ -149,6 +149,66 @@ func TestLoopAggregatesItemOutputs(t *testing.T) {
 	}
 }
 
+func TestLoopPersistsItemSubRuns(t *testing.T) {
+	engine := newControlFlowEngine()
+	pub := &capturePublisher{}
+	engine = engine.WithEventPublisher(pub)
+	store := NewMemoryRunStore(20)
+	dag := &DAG{
+		Name: "loop-persist",
+		Nodes: []NodeSpec{
+			{ID: "loop", Type: "loop", Config: map[string]any{
+				"items": []any{"a", "b"},
+				"sub_dag": map[string]any{
+					"name":  "inner",
+					"nodes": []any{map[string]any{"id": "echo", "type": "echo"}},
+					"edges": []any{},
+				},
+			}},
+		},
+	}
+
+	result, err := engine.RunWithOptions(
+		context.Background(), dag, nil,
+		RunOptions{Store: store, Meta: Meta{TenantID: "t1"}},
+	)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	children := store.Children(result.RunID, 10)
+	if len(children) != 2 {
+		t.Fatalf("children = %d, want 2", len(children))
+	}
+	indexes := map[int]bool{}
+	for _, child := range children {
+		if child.ParentRunID != result.RunID || child.ParentNodeID != "loop" {
+			t.Fatalf("child linkage = %+v", child)
+		}
+		if child.ParentIndex == nil {
+			t.Fatalf("child %s missing parent index", child.ID)
+		}
+		if child.Status != string(RunSucceeded) || child.DAG.Name != "inner" {
+			t.Fatalf("child = %+v", child)
+		}
+		indexes[*child.ParentIndex] = true
+	}
+	if !indexes[0] || !indexes[1] {
+		t.Fatalf("indexes = %v", indexes)
+	}
+
+	top := store.List(10)
+	if len(top) != 1 || top[0].ID != result.RunID {
+		t.Fatalf("top-level runs = %+v", top)
+	}
+
+	// Sub-run persistence must not duplicate workflow.completed webhooks.
+	events := pub.list()
+	if len(events) != 1 || events[0].Payload["run_id"] != result.RunID {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
 func TestLoopFailsWhenItemFails(t *testing.T) {
 	engine := newControlFlowEngine()
 	dag := &DAG{

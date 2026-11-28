@@ -3,6 +3,7 @@ import logging
 from functools import lru_cache
 
 from app.core.config import settings
+from app.retrieval import lightrag_engine
 from app.retrieval.fusion import Chunk
 from app.retrieval.graph import build_graph, cached_graph, query_graph
 from app.services.sparse import (
@@ -20,6 +21,13 @@ class RecallUnavailable(RuntimeError):
 
 def _collection(filters: dict[str, str]) -> str:
     return f"{settings.collection_prefix}_{filters.get('kb_id', 'default')}"
+
+
+def _graph_scope(filters: dict[str, str]) -> str:
+    """Tenant-scoped cache/store key: one KB collection can span tenants."""
+    collection = _collection(filters)
+    tenant = filters.get("tenant_id", "")
+    return f"{collection}|tenant={tenant}" if tenant else collection
 
 
 @lru_cache
@@ -110,8 +118,11 @@ def _tokenize(text: str) -> list[str]:
 
 def _scroll_documents(filters: dict[str, str]) -> list[Chunk]:
     client = _qdrant_client(_collection(filters))
+    # The collection is shared by KB id; tenant/metadata filters must be
+    # applied here too, otherwise BM25 and the graph route leak other tenants.
     points, _ = client.scroll(
         collection_name=_collection(filters),
+        scroll_filter=_payload_filter(filters),
         limit=1000,
         with_payload=True,
     )
@@ -205,8 +216,18 @@ def _bm25_recall(query: str, top_k: int, filters: dict[str, str]) -> list[Chunk]
 
 
 def _graph_recall(query: str, top_k: int, filters: dict[str, str]) -> list[Chunk]:
-    collection = _collection(filters)
-    graph = cached_graph(collection, lambda: build_graph(_scroll_documents(filters)))
+    if lightrag_engine.enabled():
+        chunks = lightrag_engine.query(
+            filters.get("tenant_id", ""),
+            filters.get("kb_id", "default"),
+            query,
+            top_k,
+        )
+        if chunks:
+            return chunks
+        logger.warning("lightrag returned no chunks, using the in-house graph")
+    scope = _graph_scope(filters)
+    graph = cached_graph(scope, lambda: build_graph(_scroll_documents(filters)))
     return query_graph(graph, query, top_k)
 
 

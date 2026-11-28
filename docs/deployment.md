@@ -22,6 +22,8 @@
    - 若改用 `IDENTITY_DRIVER=postgres`（`IDENTITY_DATABASE_URL`），服务启动时会在 advisory lock 下自动创建 `identity_users` / `identity_roles` / `knowledge_bases` / `kb_permissions`，并把旧 `identity_knowledge_bases` 幂等迁入；多副本并发启动安全。表结构与 `docs/schema_enterprise_v1_1_to_1_5.sql` 对齐。
    - `LLAMAINDEX_URL`：开启切块/索引与删除级联清理；未配置时删除只清理对象与任务记录。
    - `LLAMAINDEX_SPARSE_ENABLED=true`：`bm25` 路由使用 Qdrant 原生 sparse（每 KB 伴生集合 `<collection>__sparse`，IDF 权重）；关闭、集合缺失或调用失败时回退到 scroll + BM25。
+   - `LLAMAINDEX_GRAPH_STORE_DRIVER=postgres` + `LLAMAINDEX_GRAPH_DATABASE_URL`：LightRAG 风格图快照写入 `rag_graph_snapshots`，重启/多副本直接复用；默认 `memory` 仅用进程内缓存（索引与删除会按集合前缀失效）。
+   - `LLAMAINDEX_LIGHTRAG_ENABLED=true` + `LLAMAINDEX_LLM_*`：启用 `lightrag-hku`（>=1.5.8）官方图实现（按「租户 + KB」workspace；索引异步写入，失败回退自研图）。`LLAMAINDEX_LIGHTRAG_STORAGE_DRIVER=postgres` 时 KV/向量/文档状态与图都使用 LightRAG 的 PG 表（图默认 `PGTableGraphStorage`，纯表结构、不需要 Apache AGE；AGE 环境可改 `PGGraphStorage`），需 `POSTGRES_HOST/PORT/USER/PASSWORD/DATABASE` 环境变量；`LLAMAINDEX_LIGHTRAG_WORKING_DIR` 仍用于 LLM 缓存，建议挂持久卷。`LLAMAINDEX_LIGHTRAG_EMBEDDING_DIM` 必须与实际 embedding 维度一致。
    - `AGENT_HUB_ROLE=all`、`AGENT_HUB_MODE=local`：单容器内置 intent / summary / memory；拆分时同镜像用 `ROLE=intent|summary|memory` 启动 worker，并把主入口切到 `AGENT_HUB_MODE=remote|hybrid`。
    - `MEMORY_DRIVER=qdrant`、`MEMORY_DATABASE_URL`、`MEMORY_QDRANT_URL`、`MEMORY_QDRANT_COLLECTION`：记忆正文写 Postgres，向量写 Qdrant；历史 pgvector 数据用 `python -m nexusflow_agents.agents.memory.backfill` 回填。
    - `QUOTA_MAX_STORAGE_BYTES` / `QUOTA_MAX_FILES` / `QUOTA_MAX_QUERIES`：租户配额，`0` 表示不限。
@@ -33,7 +35,7 @@
 
 | PVC | 挂载点 | 使用方 | 说明 |
 | --- | --- | --- | --- |
-| `object-store` | `/data/objects` | gateway / ingestion / processing-worker | 上传落地、连接器同步、级联删除、解析回读与重建索引需共享同一份数据；解析产物落盘为 `tenant/kb/parsed/<task>.md`，图片落盘为 `tenant/kb/parsed/<task>/images/` 并由 Gateway `GET /v1/media` 鉴权读取，连接器原文落盘为 `tenant/kb/connector/<connector>/<task>/` |
+| `object-store` | `/data/objects` | gateway / ingestion / processing-worker | 上传落地、连接器同步、级联删除、解析回读与重建索引需共享同一份数据；解析产物落盘为 `tenant/kb/parsed/<task>.md`，版面文件为 `tenant/kb/parsed/<task>/layout.json`，图片落盘为 `tenant/kb/parsed/<task>/images/` 并由 Gateway `GET /v1/media` 鉴权读取，连接器原文落盘为 `tenant/kb/connector/<connector>/<task>/` |
 | `sandbox-work` | `/data/sandboxes` | sandbox-execution | 沙箱工作目录 |
 
 ```bash
@@ -116,7 +118,7 @@ kubectl -n nexusflow describe hpa processing-worker
 3. 新向量点全部写入成功后再删除旧点，检索侧无空窗；
 4. 成功后回到 `COMPLETED`。
 
-失败时状态回滚为 `COMPLETED`，旧索引保持可用，可直接重试，无需重新上传。级联删除会同时清理 `parsed/` 下的解析 Markdown 与抽取图片（`media_keys`），请勿单独清理该目录，否则重建将不可用且引用图片会 404。
+失败时状态回滚为 `COMPLETED`，旧索引保持可用，可直接重试，无需重新上传。级联删除会同时清理 `parsed/` 下的解析 Markdown、`layout.json` 与抽取图片（`media_keys`），请勿单独清理该目录，否则重建将不可用且引用图片会 404。
 
 重建会同时刷新稠密索引与 sparse 伴生集合。启用 `LLAMAINDEX_SPARSE_ENABLED` 后，建议对升级前的历史文档执行一次 Reindex 补齐 sparse 向量；未补齐时 `bm25` 在 sparse 命中不足 `top_k` 时会混合旧 BM25 兜底，但旧文档的纯词法召回会弱于已补齐文档。
 
@@ -309,7 +311,7 @@ if not hmac.compare_digest(expected, request.headers["X-NexusFlow-Signature"]):
 - 工具审批（Hub）：`GET /v1/approvals?status=pending` 查看待办，`POST /v1/approvals/{id}/decide` 提交 `{"decision":"approve|reject","reason":"..."}`；两条路径经 Gateway 时均要求 `workflow:run`。
 - 审批有效期默认 600 秒（`ApprovalService` TTL），过期记录自动清理；仅第一次决策生效，重复决策返回 409。Postgres 模式通过 `UPDATE ... WHERE status='pending' ... RETURNING` 保证原子性。
 - 审批通过后需重放调用：Chat 请求带 `approval_id`，`/v1/call` 通过 `envelope.approval_id`；DAG 使用 `POST /v1/workflows/runs/{id}/approve|resume`。
-- `WORKFLOW_RUN_STORE_DRIVER=postgres` 时，run 快照与审批单（`workflow_executions` / `workflow_approvals`）跨重启与副本保留；未配置时仍为进程内状态，滚动重启会丢失挂起的 run。
+- `WORKFLOW_RUN_STORE_DRIVER=postgres` 时，run 快照与审批单（`workflow_executions` / `workflow_approvals`）跨重启与副本保留；loop 节点的每次迭代也作为子运行写入（`parent_run_id` / `parent_node_id` / `parent_index`，索引 `idx_wf_exec_parent`），顶层列表自动排除子运行，可用 `GET /v1/workflows/runs/{id}/children` 查看。未配置时仍为进程内状态，滚动重启会丢失挂起的 run。
 
 **MCP**
 

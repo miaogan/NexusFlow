@@ -246,7 +246,7 @@ PENDING -> FETCHED -> PARSING -> PARSED
 
 ### 6.1 MinerU 异步解析
 
-当前实现对接 MinerU 4.x 官方 V1 Tasks 协议：`POST /v1/tasks` 创建单文件任务，按响应中的 `files[].upload` 流式 PUT 原始字节，轮询 `GET /v1/tasks/{task_id}`，完成后从 `files[].result_url` 下载 ZIP 并提取 Markdown 与 `images/*` 图片。Processing Worker 实现有界轮询与最大重试次数，防止 Goroutine 泄漏；父任务失败时优先透传逐文件错误详情。图片落盘到 `<tenant>/<kb>/parsed/<task>/images/`（单图 8MB、总量 32MB、最多 64 张），Markdown 中的相对图片链接改写为 `/v1/media?key=...`，经 Gateway 鉴权读取。
+当前实现对接 MinerU 4.x 官方 V1 Tasks 协议：`POST /v1/tasks` 创建单文件任务，按响应中的 `files[].upload` 流式 PUT 原始字节，轮询 `GET /v1/tasks/{task_id}`，完成后从 `files[].result_url` 下载 ZIP 并提取 Markdown、`images/*` 图片与 `content_list.json` 版面文件。Processing Worker 实现有界轮询与最大重试次数，防止 Goroutine 泄漏；父任务失败时优先透传逐文件错误详情。图片落盘到 `<tenant>/<kb>/parsed/<task>/images/`（单图 8MB、总量 32MB、最多 64 张），Markdown 中的相对图片链接改写为 `/v1/media?key=...`，经 Gateway 鉴权读取；`content_list.json`（同名 `*_content_list.json` 优先）保存为 `<tenant>/<kb>/parsed/<task>/layout.json` 并写入任务 `layout_key`，同样可经 `/v1/media` 读取，供版面感知的切块/展示使用。
 
 上传事件中的对象 URL 仅允许映射到 `OBJECT_STORE_BASE` 下的 key，再从共享 `OBJECT_STORE_DIR` 读取，包含来源与目录穿越校验，因此解析服务不依赖 MinIO 可达性。PDF/DOCX/HTML 由 MinerU 原生解析；MinerU 4.x 不接收的 TXT/Markdown 直接保留原文，避免真实解析模式下破坏既有文本上传能力。最终 Markdown 统一作为 LlamaIndex 切块的输入。
 
@@ -326,7 +326,7 @@ V2.0 将切块从 Go 迁移至 LlamaIndex 服务。LlamaIndex 按标题层级与
 ### 8.1 控制流节点
 
 - `condition`：从执行上下文读取 `field`（支持 `${node.field}` / `node.field` / 字面量），按 `equals` / `not_equals` / `in` / `contains`（缺省按真值）判定，输出 `branch` 与 `then` / `else` 目标。引擎裁剪“从被丢弃目标可达且从选中目标不可达”的节点，写入 `skipped`；同时被两条分支汇聚的节点仍会执行。`then` / `else` 必须是该节点下游，校验阶段拒绝非法引用。
-- `loop`：从 `items`（或 `items_from` 变量名）读取数组，按 `max_concurrency`（默认 4、上限 16）并发执行 `sub_dag`；每项输入为 `item` / `index`，map 元素同时展开字段。输出 `count` / `failed` / `results`，默认任一元素失败即整体失败，`continue_on_error` 可保留部分成功结果。子图复用同一 `Engine.Validate`，禁止嵌套 loop；子 run 不单独持久化。
+- `loop`：从 `items`（或 `items_from` 变量名）读取数组，按 `max_concurrency`（默认 4、上限 16）并发执行 `sub_dag`；每项输入为 `item` / `index`，map 元素同时展开字段。输出 `count` / `failed` / `results`，默认任一元素失败即整体失败，`continue_on_error` 可保留部分成功结果。子图复用同一 `Engine.Validate`，禁止嵌套 loop。配置 RunStore 时每次迭代作为子运行持久化（`ParentRunID` / `ParentNodeID` / `ParentIndex`），`GET /v1/workflows/runs/{id}/children` 可查看；子运行不进入顶层列表，也不重复发 `workflow.completed` Webhook。
 - 跳过集合随 `RunState` 持久化，审批挂起恢复后仍保持相同的分支语义。
 
 ## 9. OpenSandbox 沙箱集成方案
@@ -777,7 +777,7 @@ LlamaIndex 在切块写库时强行绑定多租户 ACL 元数据（tenant_id、d
 
 ### 16.1 图谱索引与租户隔离图空间
 
-LlamaIndex 加工链路在切块写向量的同时，抽取实体与关系写入 LightRAG；按租户划分独立图空间（Graph Namespace），图数据物理或逻辑隔离，与 ACL 元数据一致，杜绝跨租户图谱串联。
+LlamaIndex 加工链路在切块写向量的同时，抽取实体与关系写入图索引；按租户划分独立图空间（Graph Namespace），图数据物理或逻辑隔离，与 ACL 元数据一致，杜绝跨租户图谱串联。系统提供两种实现：默认是自研的 LightRAG 风格图（`DocumentGraph`，缓存键为「集合 + 租户」；`LLAMAINDEX_GRAPH_STORE_DRIVER=postgres` 时整图快照持久化到 `rag_graph_snapshots`）；设置 `LLAMAINDEX_LIGHTRAG_ENABLED=true` 后改用 `lightrag-hku` 官方实现，按「租户 + KB」建立 workspace，索引走 `ainsert`（后台线程，失败不影响向量索引），查询走 `aquery_data` 取结构化 chunk 参与 RRF。LightRAG 存储可选 `file`（JSON / NanoVector / NetworkX）或 `postgres`（PGKV / PGVector / PGDocStatus，pgvector 由服务自动建扩展）；图存储默认 `PGTableGraphStorage`（LightRAG 1.5.8 新增，纯 PostgreSQL 表、无需 Apache AGE），AGE 环境可切换 `PGGraphStorage`。BM25 回退与图构建共用 `_scroll_documents`，其 Qdrant scroll 会带上租户等 metadata 过滤，避免共享 KB 集合跨租户读取。
 
 ### 16.2 Local 与 Global 双模式查询
 

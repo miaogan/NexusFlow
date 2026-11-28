@@ -212,6 +212,19 @@ def index_markdown(request: IndexRequest) -> IndexResponse:
     # New chunks must appear in the graph route immediately, not after the TTL.
     clear_graph_cache(collection)
 
+    # Real LightRAG keeps its own entity/relation graph. Indexing runs in the
+    # background so LLM extraction never delays the vector index response.
+    from app.retrieval import lightrag_engine
+
+    if lightrag_engine.enabled():
+        lightrag_engine.insert_document(
+            request.metadata.get("tenant_id", ""),
+            request.metadata.get("kb_id", "default"),
+            request.task_id,
+            request.metadata.get("file_name", ""),
+            request.markdown,
+        )
+
     return IndexResponse(
         success=True,
         chunk_count=len(nodes),

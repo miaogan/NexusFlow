@@ -33,10 +33,16 @@ type RunState struct {
 	Error       string         `json:"error,omitempty"`
 	// ApprovedBy and ApprovalReason record who resumed the run so audit and
 	// approval tickets keep the reviewer instead of the original requester.
-	ApprovedBy     string    `json:"approved_by,omitempty"`
-	ApprovalReason string    `json:"approval_reason,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ApprovedBy     string `json:"approved_by,omitempty"`
+	ApprovalReason string `json:"approval_reason,omitempty"`
+	// ParentRunID/ParentNodeID/ParentIndex link loop sub-runs to the parent
+	// execution so each iteration stays inspectable without polluting the
+	// top-level run list.
+	ParentRunID  string    `json:"parent_run_id,omitempty"`
+	ParentNodeID string    `json:"parent_node_id,omitempty"`
+	ParentIndex  *int      `json:"parent_index,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // RunStore persists run checkpoints. MemoryRunStore is the single-process
@@ -44,7 +50,10 @@ type RunState struct {
 type RunStore interface {
 	Save(*RunState)
 	Get(id string) (*RunState, bool)
+	// List returns top-level runs only; loop sub-runs are exposed by Children.
 	List(limit int) []*RunState
+	// Children returns the loop sub-runs of a parent execution, newest first.
+	Children(parentID string, limit int) []*RunState
 }
 
 // RunTransitioner is an optional RunStore extension that applies a status
@@ -102,7 +111,23 @@ func (s *MemoryRunStore) List(limit int) []*RunState {
 	}
 	out := make([]*RunState, 0, limit)
 	for i := len(s.order) - 1; i >= 0 && len(out) < limit; i-- {
-		if state, ok := s.runs[s.order[i]]; ok {
+		if state, ok := s.runs[s.order[i]]; ok && state.ParentRunID == "" {
+			out = append(out, cloneRun(state))
+		}
+	}
+	return out
+}
+
+// Children returns persisted loop sub-runs of the given parent execution.
+func (s *MemoryRunStore) Children(parentID string, limit int) []*RunState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if limit <= 0 || limit > len(s.order) {
+		limit = len(s.order)
+	}
+	out := make([]*RunState, 0, limit)
+	for i := len(s.order) - 1; i >= 0 && len(out) < limit; i-- {
+		if state, ok := s.runs[s.order[i]]; ok && state.ParentRunID == parentID {
 			out = append(out, cloneRun(state))
 		}
 	}
