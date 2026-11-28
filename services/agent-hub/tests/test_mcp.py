@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -48,7 +49,7 @@ def _service() -> ToolService:
 
 
 @pytest.fixture
-def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     service = _service()
     registry = AgentRegistry()
     registry.register(
@@ -68,14 +69,36 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(mcp_server, "get_registry", lambda: registry)
     app = FastAPI()
     app.include_router(mcp_server.router)
-    return TestClient(app)
+    _clear_stream_sessions()
+    with TestClient(app) as test_client:
+        yield test_client
+    _clear_stream_sessions()
 
 
-def _rpc(client: TestClient, method: str, params: dict[str, Any] | None = None):
+def _clear_stream_sessions() -> None:
+    for session_id in list(mcp_server._stream_sessions):
+        mcp_server._drop_stream_session(session_id)
+
+
+def _rpc(
+    client: TestClient,
+    method: str,
+    params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+):
     return client.post(
         "/mcp",
         json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}},
+        headers=headers,
     )
+
+
+def _init_session(client: TestClient) -> str:
+    resp = _rpc(client, "initialize")
+    assert resp.status_code == 200
+    session_id = resp.headers.get("mcp-session-id")
+    assert session_id
+    return session_id
 
 
 def test_mcp_initialize_and_list_hides_sandbox(client: TestClient) -> None:
@@ -83,6 +106,7 @@ def test_mcp_initialize_and_list_hides_sandbox(client: TestClient) -> None:
     assert init.status_code == 200
     caps = init.json()["result"]["capabilities"]
     assert "resources" in caps and "prompts" in caps
+    assert caps["resources"]["subscribe"] is True
     assert init.json()["result"]["serverInfo"]["name"] == "nexusflow-agent-hub"
 
     listing = _rpc(client, "tools/list").json()["result"]["tools"]
@@ -164,6 +188,82 @@ def test_mcp_lists_and_gets_prompts(client: TestClient) -> None:
 
     unknown = _rpc(client, "prompts/get", {"name": "nope", "arguments": {}}).json()
     assert unknown["error"]["code"] == -32602
+
+
+def test_streamable_http_initialize_returns_session(client: TestClient) -> None:
+    resp = _rpc(client, "initialize")
+    assert resp.status_code == 200
+    assert resp.headers.get("mcp-session-id")
+
+
+def test_streamable_http_can_reply_with_sse(client: TestClient) -> None:
+    resp = client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+        headers={"Accept": "text/event-stream"},
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    assert "event: message" in resp.text
+    assert "nexusflow-agent-hub" in resp.text
+    assert resp.headers.get("mcp-session-id")
+
+
+def test_streamable_http_rejects_unknown_session(client: TestClient) -> None:
+    resp = _rpc(
+        client,
+        "initialize",
+        headers={"Mcp-Session-Id": "missing"},
+    )
+    assert resp.status_code == 404
+
+
+def test_streamable_http_delete_session(client: TestClient) -> None:
+    session_id = _init_session(client)
+    headers = {"Mcp-Session-Id": session_id}
+    assert client.delete("/mcp", headers=headers).status_code == 204
+    assert client.delete("/mcp", headers=headers).status_code == 404
+
+
+def test_streamable_http_get_requires_sse(client: TestClient) -> None:
+    assert client.get("/mcp").status_code == 406
+
+
+def test_resource_subscription_requires_session(client: TestClient) -> None:
+    resp = _rpc(client, "resources/subscribe", {"uri": "nexusflow://agents"}).json()
+    assert resp["error"]["code"] == -32602
+
+
+def test_resource_subscription_emits_updates(client: TestClient) -> None:
+    session_id = _init_session(client)
+    headers = {"Mcp-Session-Id": session_id}
+    subscribed = _rpc(
+        client, "resources/subscribe", {"uri": "nexusflow://agents"}, headers
+    ).json()
+    assert subscribed["result"] == {}
+    assert mcp_server._collect_updates(session_id) == []
+
+    mcp_server.get_registry().register(
+        AgentSpec(name="extra", capabilities=frozenset(), kind="local")
+    )
+    updates = mcp_server._collect_updates(session_id)
+    assert len(updates) == 1
+    assert updates[0]["method"] == "notifications/resources/updated"
+    assert updates[0]["params"]["uri"] == "nexusflow://agents"
+    assert mcp_server._collect_updates(session_id) == []
+
+    missing = _rpc(
+        client,
+        "resources/subscribe",
+        {"uri": "nexusflow://agents/nope"},
+        headers,
+    ).json()
+    assert missing["error"]["code"] == -32002
+
+    removed = _rpc(
+        client, "resources/unsubscribe", {"uri": "nexusflow://agents"}, headers
+    ).json()
+    assert removed["result"] == {}
 
 
 def _read_resource(client: TestClient, uri: str) -> dict[str, Any]:

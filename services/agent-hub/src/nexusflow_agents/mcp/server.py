@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import uuid
@@ -33,6 +34,14 @@ TOOLS_PREFIX = RESOURCE_TOOLS + "/"
 # streamable HTTP transport.
 _sse_sessions: dict[str, asyncio.Queue[dict[str, Any]]] = {}
 MAX_SSE_SESSIONS = 64
+
+# Streamable HTTP sessions (2025-03-26 transport): server-initiated messages
+# are queued for the GET stream. Subscriptions are process-local.
+_stream_sessions: dict[str, asyncio.Queue[dict[str, Any]]] = {}
+_stream_tenants: dict[str, str] = {}
+_stream_subscriptions: dict[str, set[str]] = {}
+_stream_fingerprints: dict[str, dict[str, str]] = {}
+MAX_STREAM_SESSIONS = 64
 
 
 def _check_access(request: Request) -> None:
@@ -114,38 +123,37 @@ def _resource_templates() -> list[dict[str, Any]]:
     ]
 
 
-def _read_resource(request_id: Any, params: dict[str, Any]) -> dict[str, Any]:
-    uri = params.get("uri")
-    if not isinstance(uri, str) or not uri:
-        return error_payload(request_id, -32602, "resource uri is required")
-    tenant = _request_tenant(params)
-
+def _resource_body(uri: str, tenant: str) -> Any | None:
+    """Returns the JSON body for a resource URI, or None when it is unknown."""
     if uri == RESOURCE_AGENTS:
-        body: Any = {"agents": get_registry().snapshot(tenant)}
-    elif uri == RESOURCE_SKILLS:
-        body = {"skills": get_registry().available_skills(tenant)}
-    elif uri == RESOURCE_TOOLS:
-        body = {"tools": _tool_snapshot()}
-    elif uri.startswith(AGENTS_PREFIX):
+        return {"agents": get_registry().snapshot(tenant)}
+    if uri == RESOURCE_SKILLS:
+        return {"skills": get_registry().available_skills(tenant)}
+    if uri == RESOURCE_TOOLS:
+        return {"tools": _tool_snapshot()}
+    if uri.startswith(AGENTS_PREFIX):
         name = unquote(uri[len(AGENTS_PREFIX) :])
         matches = [
             item
             for item in get_registry().snapshot(tenant)
             if item.get("name") == name
         ]
-        if not matches:
-            return error_payload(request_id, -32002, f"resource not found: {uri}")
-        body = matches[0]
-    elif uri.startswith(TOOLS_PREFIX):
+        return matches[0] if matches else None
+    if uri.startswith(TOOLS_PREFIX):
         name = unquote(uri[len(TOOLS_PREFIX) :])
-        body = next(
+        return next(
             (item for item in _tool_snapshot() if item.get("name") == name), None
         )
-        if body is None:
-            return error_payload(request_id, -32002, f"resource not found: {uri}")
-    else:
-        return error_payload(request_id, -32002, f"resource not found: {uri}")
+    return None
 
+
+def _read_resource(request_id: Any, params: dict[str, Any]) -> dict[str, Any]:
+    uri = params.get("uri")
+    if not isinstance(uri, str) or not uri:
+        return error_payload(request_id, -32602, "resource uri is required")
+    body = _resource_body(uri, _request_tenant(params))
+    if body is None:
+        return error_payload(request_id, -32002, f"resource not found: {uri}")
     return _result_payload(
         request_id,
         {
@@ -158,6 +166,79 @@ def _read_resource(request_id: Any, params: dict[str, Any]) -> dict[str, Any]:
             ]
         },
     )
+
+
+def _fingerprint(body: Any) -> str:
+    raw = json.dumps(body, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _subscribe_resource(
+    request_id: Any, params: dict[str, Any], session_id: str
+) -> dict[str, Any]:
+    if not session_id or session_id not in _stream_sessions:
+        return error_payload(
+            request_id, -32602, "resources/subscribe requires a streamable HTTP session"
+        )
+    uri = params.get("uri")
+    if not isinstance(uri, str) or not uri:
+        return error_payload(request_id, -32602, "resource uri is required")
+    body = _resource_body(uri, _stream_tenants.get(session_id, ""))
+    if body is None:
+        return error_payload(request_id, -32002, f"resource not found: {uri}")
+    _stream_subscriptions.setdefault(session_id, set()).add(uri)
+    _stream_fingerprints.setdefault(session_id, {})[uri] = _fingerprint(body)
+    return _result_payload(request_id, {})
+
+
+def _unsubscribe_resource(
+    request_id: Any, params: dict[str, Any], session_id: str
+) -> dict[str, Any]:
+    if not session_id or session_id not in _stream_sessions:
+        return error_payload(
+            request_id,
+            -32602,
+            "resources/unsubscribe requires a streamable HTTP session",
+        )
+    uri = params.get("uri")
+    if not isinstance(uri, str) or not uri:
+        return error_payload(request_id, -32602, "resource uri is required")
+    _stream_subscriptions.get(session_id, set()).discard(uri)
+    _stream_fingerprints.get(session_id, {}).pop(uri, None)
+    return _result_payload(request_id, {})
+
+
+def _collect_updates(session_id: str) -> list[dict[str, Any]]:
+    """Diffs subscribed resources against their last fingerprint."""
+    uris = _stream_subscriptions.get(session_id)
+    if not uris:
+        return []
+    tenant = _stream_tenants.get(session_id, "")
+    seen = _stream_fingerprints.setdefault(session_id, {})
+    updates: list[dict[str, Any]] = []
+    for uri in list(uris):
+        body = _resource_body(uri, tenant)
+        if body is None:
+            continue
+        digest = _fingerprint(body)
+        if seen.get(uri) == digest:
+            continue
+        seen[uri] = digest
+        updates.append(
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/resources/updated",
+                "params": {"uri": uri},
+            }
+        )
+    return updates
+
+
+def _drop_stream_session(session_id: str) -> None:
+    _stream_sessions.pop(session_id, None)
+    _stream_tenants.pop(session_id, None)
+    _stream_subscriptions.pop(session_id, None)
+    _stream_fingerprints.pop(session_id, None)
 
 
 def _prompt_defs() -> list[dict[str, Any]]:
@@ -303,11 +384,12 @@ def _result_payload(request_id: Any, result: Any) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
 
-def handle_payload(payload: Any) -> dict[str, Any] | None:
+def handle_payload(payload: Any, session_id: str = "") -> dict[str, Any] | None:
     """Dispatches one JSON-RPC payload and returns the response object.
 
     Returns None for notifications (no response is written). Shared by the
-    HTTP, SSE and stdio transports.
+    JSON-RPC, legacy SSE, streamable HTTP and stdio transports; session_id is
+    only set for transports that support server-initiated subscriptions.
     """
     if isinstance(payload, list):
         return error_payload(None, -32600, "batch requests are not supported")
@@ -337,7 +419,7 @@ def handle_payload(payload: Any) -> dict[str, Any] | None:
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {
                     "tools": {"listChanged": False},
-                    "resources": {"subscribe": False, "listChanged": False},
+                    "resources": {"subscribe": True, "listChanged": False},
                     "prompts": {"listChanged": False},
                 },
                 "serverInfo": SERVER_INFO,
@@ -357,6 +439,10 @@ def handle_payload(payload: Any) -> dict[str, Any] | None:
         )
     if method == "resources/read":
         return _read_resource(request_id, params)
+    if method == "resources/subscribe":
+        return _subscribe_resource(request_id, params, session_id)
+    if method == "resources/unsubscribe":
+        return _unsubscribe_resource(request_id, params, session_id)
     if method == "prompts/list":
         return _result_payload(request_id, {"prompts": _prompt_defs()})
     if method == "prompts/get":
@@ -447,17 +533,120 @@ def _decode_body(raw: bytes, max_bytes: int) -> tuple[Any, dict[str, Any] | None
 
 @router.post("/mcp")
 async def mcp_endpoint(request: Request) -> Response:
-    """HTTP JSON-RPC transport (request/response in one round trip)."""
+    """Streamable HTTP POST: one JSON-RPC round trip, optionally as SSE.
+
+    initialize creates a session and returns its id in ``Mcp-Session-Id`` so
+    the client can open GET /mcp for server-initiated notifications.
+    """
     _check_access(request)
     settings = get_hub_settings()
     raw = await request.body()
     payload, early = _decode_body(raw, settings.mcp_max_bytes)
     if early is not None:
         return JSONResponse(status_code=200, content=early)
-    response = handle_payload(payload)
+
+    session_id = request.headers.get("mcp-session-id", "")
+    if session_id and session_id not in _stream_sessions:
+        raise HTTPException(status_code=404, detail="unknown MCP session")
+    if (
+        not session_id
+        and isinstance(payload, dict)
+        and payload.get("method") == "initialize"
+    ):
+        if len(_stream_sessions) >= MAX_STREAM_SESSIONS:
+            raise HTTPException(status_code=503, detail="too many MCP sessions")
+        session_id = uuid.uuid4().hex
+        _stream_sessions[session_id] = asyncio.Queue()
+        params = payload.get("params") or {}
+        _stream_tenants[session_id] = (
+            _request_tenant(params) if isinstance(params, dict) else ""
+        )
+
+    response = handle_payload(payload, session_id)
+    headers = {"Mcp-Session-Id": session_id} if session_id else {}
     if response is None:
-        return Response(status_code=202)
-    return JSONResponse(status_code=200, content=response)
+        return Response(status_code=202, headers=headers)
+    if "text/event-stream" in request.headers.get("accept", ""):
+        async def one_shot():
+            data = json.dumps(response, ensure_ascii=False, default=str)
+            yield f"event: message\ndata: {data}\n\n"
+
+        return StreamingResponse(
+            one_shot(),
+            media_type="text/event-stream",
+            headers={
+                **headers,
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    return JSONResponse(status_code=200, content=response, headers=headers)
+
+
+@router.get("/mcp")
+async def mcp_stream(request: Request) -> StreamingResponse:
+    """Streamable HTTP GET: server-initiated messages for a session.
+
+    Subscribed resources are diffed on every keepalive tick and emitted as
+    ``notifications/resources/updated`` when their snapshot changes.
+    """
+    _check_access(request)
+    if "text/event-stream" not in request.headers.get("accept", ""):
+        raise HTTPException(
+            status_code=406, detail="Accept must include text/event-stream"
+        )
+    session_id = request.headers.get("mcp-session-id", "")
+    if session_id:
+        if session_id not in _stream_sessions:
+            raise HTTPException(status_code=404, detail="unknown MCP session")
+    else:
+        if len(_stream_sessions) >= MAX_STREAM_SESSIONS:
+            raise HTTPException(status_code=503, detail="too many MCP sessions")
+        session_id = uuid.uuid4().hex
+        _stream_sessions[session_id] = asyncio.Queue()
+        _stream_tenants[session_id] = ""
+    queue = _stream_sessions[session_id]
+
+    async def event_stream():
+        try:
+            yield ": connected\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    message = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except TimeoutError:
+                    for update in _collect_updates(session_id):
+                        data = json.dumps(update, ensure_ascii=False, default=str)
+                        yield f"event: message\ndata: {data}\n\n"
+                    yield ": keepalive\n\n"
+                    continue
+                data = json.dumps(message, ensure_ascii=False, default=str)
+                yield f"event: message\ndata: {data}\n\n"
+        finally:
+            _drop_stream_session(session_id)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Mcp-Session-Id": session_id,
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.delete("/mcp")
+async def mcp_close(request: Request) -> Response:
+    """Terminates a streamable HTTP session and its subscriptions."""
+    _check_access(request)
+    session_id = request.headers.get("mcp-session-id", "")
+    if not session_id or session_id not in _stream_sessions:
+        raise HTTPException(status_code=404, detail="unknown MCP session")
+    _drop_stream_session(session_id)
+    return Response(status_code=204)
 
 
 @router.get("/mcp/sse")
