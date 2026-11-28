@@ -104,6 +104,9 @@ services:
       # Persist ratings/implicit feedback even when tracing is a no-op.
       FEEDBACK_DRIVER: postgres
       FEEDBACK_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
+      # Tenant API keys for the OpenAI-compatible endpoint.
+      API_KEY_DRIVER: postgres
+      API_KEY_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
       METRICS_ADDR: ""
     healthcheck:
       <<: *healthcheck

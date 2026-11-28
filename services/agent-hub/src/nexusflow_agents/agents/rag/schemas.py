@@ -1,6 +1,11 @@
 from pydantic import BaseModel, Field
 
 
+class ChatMessage(BaseModel):
+    role: str = Field(pattern="^(system|user|assistant)$")
+    content: str = Field(max_length=8000)
+
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
     conversation_id: str | None = None
@@ -9,6 +14,10 @@ class ChatRequest(BaseModel):
     filters: dict[str, str] | None = None
     # Approved high-risk tool call to replay after /v1/approvals/{id}/decide.
     approval_id: str | None = Field(default=None, max_length=64)
+    # Stateless callers (OpenAI-compatible endpoint) send their own history and
+    # opt out of conversation persistence.
+    history: list[ChatMessage] | None = Field(default=None, max_length=50)
+    stateless: bool = False
 
 
 class Citation(BaseModel):

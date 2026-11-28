@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nexusflow/nexusflow/backend/internal/apikey"
 	"github.com/nexusflow/nexusflow/backend/internal/identity"
 	pb "github.com/nexusflow/nexusflow/backend/pb/vectorization/v1"
 )
@@ -149,11 +150,29 @@ func (g *Gateway) listKnowledgeBasePermissions(c *gin.Context) {
 // resolveKnowledgeBase validates that the requested namespace exists and is
 // visible to the caller, returning the caller's effective kb role.
 func (g *Gateway) resolveKnowledgeBase(c *gin.Context, rawID string) (string, string, bool) {
+	id := strings.TrimSpace(rawID)
+	// API keys are not users in the identity store, so they carry their own
+	// allow-list instead of a kb role. An empty list grants the whole tenant.
+	if key, ok := apikey.From(c.Request.Context()); ok {
+		if id == "" {
+			if len(key.AllowedKBIDs) > 0 {
+				id = key.AllowedKBIDs[0]
+			} else {
+				id = identity.DefaultKnowledgeBaseID
+			}
+		}
+		if !key.AllowsKB(id) {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error": "api key is not allowed to access knowledge base " + id,
+			})
+			return "", "", false
+		}
+		return id, identity.KBRoleViewer, true
+	}
 	if g.knowledgeBases == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "knowledge base service not configured"})
 		return "", "", false
 	}
-	id := strings.TrimSpace(rawID)
 	if id == "" {
 		id = identity.DefaultKnowledgeBaseID
 	}

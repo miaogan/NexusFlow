@@ -36,6 +36,9 @@ data:
   CONNECTOR_TARGET: "http://ingestion:9098"
   CONNECTOR_DRIVER: "postgres"
   CONNECTOR_DATABASE_URL: "postgresql://nexusflow:change-me@postgres.nexusflow.svc:5432/nexusflow"
+  # Tenant API keys for the OpenAI-compatible endpoint.
+  API_KEY_DRIVER: "postgres"
+  API_KEY_DATABASE_URL: "postgresql://nexusflow:change-me@postgres.nexusflow.svc:5432/nexusflow"
   QUERY_TARGET: "query-service:9094"
   SANDBOX_TARGET: "sandbox-execution:9093"
   AUTH_TARGET: "auth-service:9096"

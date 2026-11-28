@@ -1,12 +1,15 @@
 package gateway
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/nexusflow/nexusflow/backend/internal/apikey"
 	"github.com/nexusflow/nexusflow/backend/internal/revocation"
 	"github.com/nexusflow/nexusflow/backend/internal/tenant"
 	"golang.org/x/time/rate"
@@ -25,9 +28,11 @@ func Trace() gin.HandlerFunc {
 	}
 }
 
-// Auth validates the JWT, rejects revoked tokens and injects the tenant
-// principal into the context. A nil blacklist disables the revocation check.
-func Auth(secret string, allowAnonymous bool, blacklist revocation.Blacklist) gin.HandlerFunc {
+// Auth validates the bearer credential and injects the tenant principal into
+// the context. A token starting with the API-key prefix is resolved against the
+// key store; everything else is verified as a JWT. A nil key store or blacklist
+// disables that check.
+func Auth(secret string, allowAnonymous bool, blacklist revocation.Blacklist, keys apikey.Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
 		if header == "" {
@@ -48,7 +53,35 @@ func Auth(secret string, allowAnonymous bool, blacklist revocation.Blacklist) gi
 			return
 		}
 
-		info, err := tenant.ParseTokenInfo(secret, bearerToken(header), tenant.TokenTypeAccess)
+		raw := bearerToken(header)
+		if keys != nil && apikey.LooksLike(raw) {
+			key, err := keys.FindByHash(c.Request.Context(), apikey.Hash(raw))
+			if err != nil {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid api key"})
+				return
+			}
+			if key.Status != apikey.StatusActive {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "api key is not active"})
+				return
+			}
+			if key.Expired(time.Now()) {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "api key expired"})
+				return
+			}
+			ctx := tenant.With(c.Request.Context(), key.Principal())
+			ctx = apikey.With(ctx, key)
+			c.Request = c.Request.WithContext(ctx)
+			// Usage bookkeeping must not delay the request or be cancelled with it.
+			go func(id, tenantID string) {
+				touchCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				_ = keys.Touch(touchCtx, tenantID, id, time.Now().UTC())
+			}(key.ID, key.TenantID)
+			c.Next()
+			return
+		}
+
+		info, err := tenant.ParseTokenInfo(secret, raw, tenant.TokenTypeAccess)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 			return
@@ -74,6 +107,63 @@ func RequirePermission(perm string) gin.HandlerFunc {
 		p, _ := tenant.From(c.Request.Context())
 		if !tenant.HasPermission(p, perm) {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden: requires " + perm})
+			return
+		}
+		c.Next()
+	}
+}
+
+// RequireAnyPermission admits callers holding at least one of the keys. It
+// keeps the OpenAI-compatible endpoint usable by both API keys
+// (chat:completions) and console users (search:use).
+func RequireAnyPermission(perms ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		p, _ := tenant.From(c.Request.Context())
+		for _, perm := range perms {
+			if tenant.HasPermission(p, perm) {
+				c.Next()
+				return
+			}
+		}
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"error": "forbidden: requires one of " + strings.Join(perms, ", "),
+		})
+	}
+}
+
+// APIKeyRateLimit enforces the per-key requests-per-minute budget recorded on
+// api_keys.rate_limit_rpm. JWT callers are handled by RateLimit instead.
+func APIKeyRateLimit() gin.HandlerFunc {
+	var mu sync.Mutex
+	limiters := make(map[string]*rate.Limiter)
+
+	return func(c *gin.Context) {
+		key, ok := apikey.From(c.Request.Context())
+		if !ok || key.RateLimitRPM <= 0 {
+			c.Next()
+			return
+		}
+
+		mu.Lock()
+		lim, exists := limiters[key.ID]
+		if !exists {
+			burst := key.RateLimitRPM / 6
+			if burst < 1 {
+				burst = 1
+			}
+			lim = rate.NewLimiter(rate.Limit(float64(key.RateLimitRPM)/60.0), burst)
+			limiters[key.ID] = lim
+		}
+		mu.Unlock()
+
+		if !lim.Allow() {
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
+				"error": gin.H{
+					"message": "api key rate limit exceeded",
+					"type":    "rate_limit_error",
+					"code":    "rate_limit_exceeded",
+				},
+			})
 			return
 		}
 		c.Next()

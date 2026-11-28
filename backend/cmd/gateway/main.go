@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nexusflow/nexusflow/backend/internal/apikey"
 	"github.com/nexusflow/nexusflow/backend/internal/config"
 	"github.com/nexusflow/nexusflow/backend/internal/feedback"
 	"github.com/nexusflow/nexusflow/backend/internal/gateway"
@@ -40,6 +41,13 @@ func main() {
 		os.Exit(1)
 	}
 	defer feedbackStore.Close()
+
+	apiKeyStore, err := apikey.NewStore(cfg.APIKeyDriver, cfg.APIKeyDatabaseURL)
+	if err != nil {
+		logger.Error("init api key store", "error", err)
+		os.Exit(1)
+	}
+	defer apiKeyStore.Close()
 
 	meterStore, err := metering.NewStore(cfg.MeteringDriver, cfg.RedisAddr)
 	if err != nil {
@@ -103,6 +111,7 @@ func main() {
 		gateway.WithWorkflow(cfg.WorkflowTarget, cfg.WorkflowServiceToken),
 		gateway.WithConnectors(cfg.ConnectorTarget),
 		gateway.WithFeedbackStore(feedbackStore),
+		gateway.WithAPIKeys(apiKeyStore),
 		gateway.WithMetering(meterStore, metering.Quota{
 			MaxStorageBytes: cfg.QuotaMaxStorageBytes,
 			MaxFiles:        cfg.QuotaMaxFiles,

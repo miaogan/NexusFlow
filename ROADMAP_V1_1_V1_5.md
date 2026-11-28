@@ -1,6 +1,6 @@
 # NexusFlow v1.1.0 – v1.5.0 企业级能力演进方案（ROADMAP_V1_1_V1_5）
 
-> **定位**：本文件是面向 v1.1.0 至 v1.5.0 的能力演进方案，共 5 个 Milestone、11 个结构化任务；已交付 9 个，其余 2 个为当前待做项。
+> **定位**：本文件是面向 v1.1.0 至 v1.5.0 的能力演进方案，共 5 个 Milestone、11 个结构化任务；已交付 10 个，其余 1 个为当前待做项。
 > **2026-11-27 增补**：Agent Hub × Workflow × MCP × HITL 已按规划文档 `.trae/documents/agent-hub-workflow-mcp-hitl.md` 交付；Task 3.2 完成（运行状态持久化由 Task 3.3 补齐），Task 5.2 的 MCP Server 部分提前落地，其余任务状态不变。
 > **v1.2.0 已交付**：自定义 SubAgent（存储 + 多租户注册表 + SandboxAgentExecutor + 动态技能路由 + `/subagents` 控制台）已按 [ROADMAP_V1_2.md](ROADMAP_V1_2.md) Milestone 1–3 完成。本文件 Milestone 2（多模态、Connector）未能进入该版本，顺延为待做项，其原 v1.2.0 版本标签不再使用。
 > **与 `ROADMAP_V1_1.md` 的关系**：`ROADMAP_V1_1.md` 是上一轮已执行完毕的交付清单（知识库实体、级联删除、配额计量、K8s HPA，对应提交 c880e64 / 44b9284 / 9bc2c01 / a244bd7）。本文件在此基础上重新规划更完整的企业级能力，Milestone 1 为增量升级。
@@ -11,7 +11,6 @@
 
 | 任务 | 内容 | 状态 | 现状与前置 |
 | --- | --- | --- | --- |
-| Task 5.1 | API Key 鉴权 + OpenAI 兼容端点 | 未开始 | 需与现有 JWT 并存，作用域可绑定知识库 |
 | Task 5.2 | 租户级 Webhook 订阅（HMAC + 退避重试） | 部分完成 | MCP Server 已交付（`POST /mcp`）；Webhook 未开始 |
 
 ---
@@ -78,8 +77,10 @@
 
 ## Milestone 5: 生态集成与对外服务能力（v1.5.0）
 
-* **[ ] Task 5.1: 支持独立 API Key 鉴权体系，并提供兼容 OpenAI 协议的 /v1/openai/chat/completions 对外接入端点**
+* **[x] Task 5.1: 支持独立 API Key 鉴权体系，并提供兼容 OpenAI 协议的 /v1/openai/chat/completions 对外接入端点**
   * 新增租户级 API Key 的签发、吊销与作用域控制（可绑定知识库），与现有 JWT 鉴权并存；实现 OpenAI Chat Completions 兼容端点，支持流式与非流式响应、引用透传。
+  * 交付情况：新增 `backend/internal/apikey`（`api_keys` 表，SHA-256 存储、展示前缀、`allowed_kb_ids` / `scopes` / `rate_limit_rpm` / 过期时间，memory 与 postgres 双实现）；网关鉴权同时接受 `nf-sk-*` 与 JWT，按 Key 独立限流；`/v1/api-keys` 提供签发/列表/吊销（`apikey:write`）；`/v1/openai/chat/completions` 支持流式 `chat.completion.chunk` + `[DONE]` 与非流式 `chat.completion`，引用在 message 与顶层透传；Hub 新增 `stateless` + `history`，外部请求不写会话库。
+  * 边界：API Key 为只读集成凭证（`chat:completions` / `search:use`，前者隐含后者以支持检索），不可获得管理权限；OpenAI `system` 消息暂不单独生效，`max_tokens` / temperature 由上游模型决定；非流式 `usage` 为字符估算值。
 
 * **[ ] Task 5.2: 支持租户级异步事件 Webhook 订阅（HMAC 签名与指数退避重试）以及标准 MCP Server 适配模块**
   * 提供事件订阅管理（任务完成、索引完成、审批结果等），投递时携带 HMAC 签名，失败按指数退避重试并记录投递日志；实现标准 MCP Server，暴露检索、问答与工作流能力供外部 Agent 调用。

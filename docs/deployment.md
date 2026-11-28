@@ -271,6 +271,15 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 - 配额：`LLM_DAILY_TOKEN_LIMIT > 0` 时按租户 + UTC 日预扣 token，超限前置返回 `429 quota_exceeded`；多副本部署使用 `LLM_QUOTA_DRIVER=redis`。
 - 客户端若未设置 `max_tokens`，按 512 预留额度，响应后按实际 `usage.total_tokens` 修正。
 
+**API Key 与 OpenAI 兼容端点**
+
+- 存储：`API_KEY_DRIVER=memory|postgres`；Postgres 需 `API_KEY_DATABASE_URL`，启动幂等创建 `api_keys`，多副本必须使用 Postgres（或共享库）。
+- 签发：`POST /v1/api-keys`（需 `apikey:write`），body 支持 `name`、`allowed_kb_ids`、`scopes`（`chat:completions` / `search:use`）、`rate_limit_rpm`（默认 60）、`expires_in_days`（0 表示不过期）。响应中的 `key`（`nf-sk-...`）只返回一次，请立即保存。
+- 吊销：`DELETE /v1/api-keys/{id}` 将状态置为 `REVOKED`，已吊销或过期的密钥立即返回 401。
+- 调用：把 OpenAI SDK 的 `base_url` 指向 `http://gateway:8080/v1/openai`，`api_key` 填 `nf-sk-...`，模型名任意；`kb_id` 可放在请求体、`metadata.kb_id` 或 `X-KB-ID` 头。未指定时使用 Key 白名单中的第一个知识库，白名单为空则使用 `default`。
+- 流式响应为标准 SSE（`chat.completion.chunk` + `data: [DONE]`）；引用位于最终 chunk 的 `citations` 字段，非流式同时在 `choices[0].message.citations` 与顶层 `citations`。
+- 每个 Key 按 `rate_limit_rpm` 独立限流，超限返回 429（`rate_limit_exceeded`）；Key 的使用量为只读作用域，不会获得 `kb:write` / `user:write` 等管理权限。`chat:completions` 会隐含 `search:use`，因为 RAG 问答需要回调网关检索。
+
 **审批**
 
 - 工具审批（Hub）：`GET /v1/approvals?status=pending` 查看待办，`POST /v1/approvals/{id}/decide` 提交 `{"decision":"approve|reject","reason":"..."}`；两条路径经 Gateway 时均要求 `workflow:run`。

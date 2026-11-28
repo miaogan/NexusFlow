@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from starlette.concurrency import run_in_threadpool
 
@@ -103,6 +105,42 @@ class ChatService:
             for m in messages[start:]
         ]
         return history, summary
+
+    @staticmethod
+    def _request_history(req: ChatRequest) -> list[dict[str, str]]:
+        """History supplied by stateless callers (OpenAI-compatible facade)."""
+        items: list[dict[str, str]] = []
+        for m in req.history or []:
+            if m.role in ("user", "assistant") and m.content.strip():
+                items.append({"role": m.role, "content": m.content})
+        return items
+
+    @staticmethod
+    def _ephemeral_message(role: str, content: str) -> dict[str, str]:
+        """Envelope for stateless turns that are never written to the store."""
+        return {
+            "id": str(uuid4()),
+            "role": role,
+            "content": content,
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+
+    async def _persist_reply(
+        self,
+        conv: dict[str, Any] | None,
+        answer: str,
+        citations: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Stores the assistant turn, or returns an ephemeral envelope."""
+        if conv is None:
+            return self._ephemeral_message("assistant", answer)
+        return await run_in_threadpool(
+            self._store.append, conv["id"], "assistant", answer, citations
+        )
+
+    @staticmethod
+    def _conversation_id(conv: dict[str, Any] | None) -> str:
+        return conv["id"] if conv is not None else ""
 
     def _remember(
         self, tenant_id: str, user_id: str, message: str, answer: str
@@ -310,21 +348,27 @@ class ChatService:
         auth_header: str | None,
     ) -> ChatResponse:
         message = req.message.strip()
-        if req.conversation_id:
-            conv = self._store.get(tenant_id, user_id, req.conversation_id)
-            if conv is None:
-                raise ConversationNotFound("conversation not found")
+        if req.stateless:
+            conv = None
+            history = self._request_history(req)
+            summary = ""
         else:
-            conv = self._store.create(tenant_id, user_id, message[:40])
+            if req.conversation_id:
+                conv = self._store.get(tenant_id, user_id, req.conversation_id)
+                if conv is None:
+                    raise ConversationNotFound("conversation not found")
+            else:
+                conv = self._store.create(tenant_id, user_id, message[:40])
+            history, summary = self._prepare_history(conv)
 
-        history, summary = self._prepare_history(conv)
         memories = self._memory.recall(
             tenant_id, user_id, message, self._settings.memory_top_k
         )
 
         # Persist the user turn before generation so a failed generation still
-        # leaves the question visible for a retry.
-        self._store.append(conv["id"], "user", message, [])
+        # leaves the question visible for a retry. Stateless turns own no record.
+        if conv is not None:
+            self._store.append(conv["id"], "user", message, [])
 
         top_k = req.top_k or self._settings.default_top_k
         top_k = max(1, min(top_k, self._settings.max_top_k))
@@ -443,11 +487,14 @@ class ChatService:
 
         answer = session.output(answer)
         self._audit_pii(session, tenant_id, user_id, trace_id)
-        msg = self._store.append(conv["id"], "assistant", answer, citations)
+        if conv is not None:
+            msg = self._store.append(conv["id"], "assistant", answer, citations)
+        else:
+            msg = self._ephemeral_message("assistant", answer)
         self._remember(tenant_id, user_id, masked_message, answer)
 
         return ChatResponse(
-            conversation_id=conv["id"],
+            conversation_id=conv["id"] if conv is not None else "",
             message_id=msg["id"],
             answer=answer,
             citations=citations,
@@ -468,19 +515,24 @@ class ChatService:
         console (stage timeline, source panel, inline [n] jumps).
         """
         message = req.message.strip()
-        if req.conversation_id:
-            conv = await run_in_threadpool(
-                self._store.get, tenant_id, user_id, req.conversation_id
-            )
-            if conv is None:
-                yield {"type": "error", "error": "conversation not found"}
-                return
+        if req.stateless:
+            conv = None
+            history = self._request_history(req)
+            summary = ""
         else:
-            conv = await run_in_threadpool(
-                self._store.create, tenant_id, user_id, message[:40]
-            )
+            if req.conversation_id:
+                conv = await run_in_threadpool(
+                    self._store.get, tenant_id, user_id, req.conversation_id
+                )
+                if conv is None:
+                    yield {"type": "error", "error": "conversation not found"}
+                    return
+            else:
+                conv = await run_in_threadpool(
+                    self._store.create, tenant_id, user_id, message[:40]
+                )
+            history, summary = await run_in_threadpool(self._prepare_history, conv)
 
-        history, summary = await run_in_threadpool(self._prepare_history, conv)
         memories = await run_in_threadpool(
             self._memory.recall,
             tenant_id,
@@ -488,7 +540,10 @@ class ChatService:
             message,
             self._settings.memory_top_k,
         )
-        await run_in_threadpool(self._store.append, conv["id"], "user", message, [])
+        if conv is not None:
+            await run_in_threadpool(
+                self._store.append, conv["id"], "user", message, []
+            )
 
         session = self._pii_session()
         masked_message = session.mask(message)
@@ -528,14 +583,12 @@ class ChatService:
                 answer = session.output(answer)
                 self._audit_pii(session, tenant_id, user_id, trace_id)
                 yield {"type": "token", "content": answer}
-                msg = await run_in_threadpool(
-                    self._store.append, conv["id"], "assistant", answer, []
-                )
+                msg = await self._persist_reply(conv, answer, [])
                 self._remember(tenant_id, user_id, masked_message, answer)
                 yield {"type": "stage", "stage": "skill", "status": "done", "skill": skill}
                 yield {
                     "type": "done",
-                    "conversation_id": conv["id"],
+                    "conversation_id": self._conversation_id(conv),
                     "message_id": msg["id"],
                     "answer": answer,
                     "citations": [],
@@ -573,13 +626,11 @@ class ChatService:
 
             answer = session.output("".join(intent_parts))
             self._audit_pii(session, tenant_id, user_id, None)
-            msg = await run_in_threadpool(
-                self._store.append, conv["id"], "assistant", answer, []
-            )
+            msg = await self._persist_reply(conv, answer, [])
             self._remember(tenant_id, user_id, masked_message, answer)
             yield {
                 "type": "done",
-                "conversation_id": conv["id"],
+                "conversation_id": self._conversation_id(conv),
                 "message_id": msg["id"],
                 "answer": answer,
                 "citations": [],
@@ -676,13 +727,11 @@ class ChatService:
             answer = "".join(parts)
         answer = session.output(answer)
         self._audit_pii(session, tenant_id, user_id, retrieved.get("trace_id"))
-        msg = await run_in_threadpool(
-            self._store.append, conv["id"], "assistant", answer, citations
-        )
+        msg = await self._persist_reply(conv, answer, citations)
         self._remember(tenant_id, user_id, masked_message, answer)
         yield {
             "type": "done",
-            "conversation_id": conv["id"],
+            "conversation_id": self._conversation_id(conv),
             "message_id": msg["id"],
             "answer": answer,
             "citations": citations,

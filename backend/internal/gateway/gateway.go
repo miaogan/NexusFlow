@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/nexusflow/nexusflow/backend/internal/apikey"
 	"github.com/nexusflow/nexusflow/backend/internal/feedback"
 	"github.com/nexusflow/nexusflow/backend/internal/identity"
 	"github.com/nexusflow/nexusflow/backend/internal/metering"
@@ -64,6 +65,8 @@ type Gateway struct {
 	// metering records storage/query consumption and enforces the quota.
 	metering metering.Store
 	quota    metering.Quota
+	// apiKeys authenticates external OpenAI-compatible callers.
+	apiKeys apikey.Store
 }
 
 // Option configures a Gateway at construction time.
@@ -142,6 +145,16 @@ func WithTokenBlacklist(b revocation.Blacklist) Option {
 	}
 }
 
+// WithAPIKeys enables tenant API-key issuance and bearer authentication for
+// the OpenAI-compatible endpoint.
+func WithAPIKeys(store apikey.Store) Option {
+	return func(g *Gateway) {
+		if store != nil {
+			g.apiKeys = store
+		}
+	}
+}
+
 func New(
 	ingestion pb.IngestionServiceClient,
 	query pb.QueryServiceClient,
@@ -186,7 +199,7 @@ func (g *Gateway) Router() *gin.Engine {
 	pub.POST("/register", g.register)
 	pub.POST("/refresh", g.refresh)
 
-	v1 := r.Group("/v1", Auth(g.secret, g.allowAnon, g.blacklist), RateLimit(50, 100))
+	v1 := r.Group("/v1", Auth(g.secret, g.allowAnon, g.blacklist, g.apiKeys), APIKeyRateLimit(), RateLimit(50, 100))
 	v1.POST("/auth/logout", g.logout)
 	v1.POST("/files", RequirePermission("file:write"), g.uploadFile)
 	// Cascade delete: object storage + retrieval index + task record.
@@ -201,8 +214,8 @@ func (g *Gateway) Router() *gin.Engine {
 	v1.GET("/connectors/:id", RequirePermission("kb:write"), g.getConnector)
 	v1.DELETE("/connectors/:id", RequirePermission("kb:write"), g.deleteConnector)
 	v1.POST("/connectors/:id/sync", RequirePermission("kb:write"), g.syncConnector)
-	v1.GET("/tasks", g.listTasks)
-	v1.GET("/tasks/:id", g.getTask)
+	v1.GET("/tasks", RequirePermission("task:read"), g.listTasks)
+	v1.GET("/tasks/:id", RequirePermission("task:read"), g.getTask)
 	// Parsed images extracted by the processing worker (tenant-scoped key).
 	v1.GET("/media", RequirePermission("search:use"), g.getMedia)
 	v1.DELETE("/tasks/:id", g.deleteTask)
@@ -247,6 +260,15 @@ func (g *Gateway) Router() *gin.Engine {
 	v1.POST("/workflows/runs/:id/approve", RequirePermission("workflow:run"), g.workflowApprove)
 	v1.POST("/workflows/runs/:id/resume", RequirePermission("workflow:run"), g.workflowResume)
 	v1.GET("/me", g.me)
+
+	// Tenant API keys for external integrations. The plaintext key is returned
+	// only once at issuance; listings expose the display prefix.
+	v1.GET("/api-keys", RequirePermission("apikey:write"), g.listAPIKeys)
+	v1.POST("/api-keys", RequirePermission("apikey:write"), g.createAPIKey)
+	v1.DELETE("/api-keys/:id", RequirePermission("apikey:write"), g.revokeAPIKey)
+	// OpenAI-compatible facade: API keys (chat:completions) or console JWTs
+	// (search:use) may call it; citations are relayed on the response.
+	v1.POST("/openai/chat/completions", RequireAnyPermission(apikey.ScopeChatCompletions, "search:use"), g.openAIChat)
 
 	// Knowledge-base management and namespace discovery.
 	v1.GET("/knowledge-bases", RequirePermission("kb:read"), g.listKnowledgeBases)

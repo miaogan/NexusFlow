@@ -89,6 +89,7 @@ var Permissions = []Permission{
 	{"sandbox:execute", "执行沙箱代码"},
 	{"workflow:run", "运行工作流"},
 	{"trace:read", "查看链路追踪"},
+	{"apikey:write", "签发与吊销 API Key"},
 	{Wildcard, "全量权限"},
 }
 

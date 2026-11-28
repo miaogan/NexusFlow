@@ -266,6 +266,14 @@ V2.0 将切块从 Go 迁移至 LlamaIndex 服务。LlamaIndex 按标题层级与
 
 `backend/internal/llmgateway` 提供 OpenAI 兼容的 `/v1/chat/completions`（含 SSE）与 `/v1/embeddings`，供 RAG、Intent、Summary、Memory 等 Agent 统一接入。请求按顺序尝试主/备通道，网络错误、429 与 5xx 触发切换；同一通道连续失败达到阈值后进入冷却（熔断），冷却期内直接跳过。配额按 `x-tenant-id` 与 UTC 日聚合，调用前以「提示词长度估算 + max_tokens」原子预留每日 token，超限返回 `429 quota_exceeded`，响应后按实际 usage 修正预留值；计数可存内存或 Redis（`LLM_QUOTA_DRIVER`），多副本共享。Agent Hub 的 RAG 生成会把租户写入 `x-tenant-id` 请求头，实现租户级计量。
 
+### 6.6 对外 API Key 与 OpenAI 兼容端点
+
+`backend/internal/apikey` 提供租户级 API Key 的签发、吊销与校验，表结构对齐 `api_keys`。密钥形如 `nf-sk-<64 hex>`，明文只在创建响应中出现一次，库中保存 SHA-256 与展示前缀；可配置允许访问的 `allowed_kb_ids`、作用域（`chat:completions` / `search:use`）、每分钟请求上限与过期时间。
+
+网关鉴权同时接受 JWT 与 API Key：`Authorization: Bearer nf-sk-...` 经哈希命中后构造 `tenant_id=apikey:<id>` 的主体，权限点直接取自作用域，并按 Key 的 `rate_limit_rpm` 独立限流；JWT 路径保持不变。API Key 没有知识库角色，因此 `allowed_kb_ids` 即为其知识库边界（空列表代表租户全量），命中后以 viewer 级只读权限访问检索与问答。
+
+`POST /v1/openai/chat/completions` 是 RAG 链路的协议适配层：把 OpenAI `messages` 拆成「最后一条用户消息 + 历史」，以 `stateless=true` 调用 Agent Hub（历史随请求传入、不写会话库），再映射回 `chat.completion`。流式响应把 Hub 的 `token` 事件转成 `chat.completion.chunk`，`sources`/`done` 中的引用透传到最终 chunk，并以 `data: [DONE]` 结束；非流式响应在 `choices[0].message.citations` 与顶层 `citations` 同时返回引用。`kb_id` 可来自请求体、`metadata.kb_id` 或 `X-KB-ID` 头。
+
 ## 7. 动态节点弹性伸缩
 
 当某阶段阻塞时自动扩容，是本系统的关键工程能力。V2.0 中 LlamaIndex 服务因其 CPU+网络混合负载特征，同样纳入统一扩缩容体系。方案分为集群级与应用级两层。
@@ -737,7 +745,9 @@ message FeedbackEvent {
 
 网关层解析 JWT 提取 tenant_id 与权限点，注入下游请求上下文（gRPC metadata `x-tenant-id` / `x-user-id` / `x-roles` / `x-permissions`）随任务全程透传；路由级 `RequirePermission` 中间件据此零回调判定鉴权，并基于 tenant_id 实施 API 限流与配额，形成"一次鉴权、全链携带"的闭环。
 
-权限模型为固定权限点目录（`user:read`、`file:write`、`kb:read`、`kb:write`、`usage:read`、`sandbox:execute`、`trace:read` 等 17 个 + 通配 `*`）与角色组合：内置 `admin`（全量）、`editor`（内容与知识库读写 + 检索/沙箱/工作流）、`viewer`（只读），并支持自定义角色自由组合权限点；内置角色不可修改删除。
+权限模型为固定权限点目录（`user:read`、`file:write`、`kb:read`、`kb:write`、`usage:read`、`sandbox:execute`、`trace:read`、`apikey:write` 等 18 个 + 通配 `*`）与角色组合：内置 `admin`（全量）、`editor`（内容与知识库读写 + 检索/沙箱/工作流）、`viewer`（只读），并支持自定义角色自由组合权限点；内置角色不可修改删除。
+
+对外集成使用独立的 API Key 体系（`backend/internal/apikey`），与 JWT 并存：签发/吊销要求 `apikey:write`，密钥按租户隔离并支持知识库白名单、作用域与 RPM；网关将其映射为只读主体后复用同一套检索与问答链路，详见 6.6。
 
 在全局角色之外，系统还提供知识库级 RBAC：`kb_permissions` 按 `kb_id` 将用户或角色绑定到 `kb:admin` / `kb:editor` / `kb:viewer`。解析优先级为「显式用户绑定 > 角色绑定 > 租户 admin > default 库成员默认 viewer」，未绑定且非 default 的知识库对调用者不可见；网关在文件上传/删除/重建、检索问答与知识库管理入口按该角色校验。
 

@@ -82,7 +82,7 @@ flowchart TB
 
 分层职责：
 
-- **接入层**：Gateway 统一鉴权（JWT → tenant_id + 权限点）、租户级限流、trace 透传；Auth / User 服务负责签发令牌、管理账号与全局角色，并按知识库解析 `kb:admin` / `kb:editor` / `kb:viewer` 权限；Metering 负责租户用量与配额。
+- **接入层**：Gateway 统一鉴权（JWT / API Key → tenant_id + 权限点）、租户级限流、trace 透传；Auth / User 服务负责签发令牌、管理账号与全局角色，并按知识库解析 `kb:admin` / `kb:editor` / `kb:viewer` 权限；Metering 负责租户用量与配额。
 - **编排调度层**：Workflow Engine 解析 DAG、按依赖并发调度；Ingestion 接收上传、连接器增量同步、级联删除并投递任务，Reindex 复用已持久化的解析产物。
 - **执行加工层**：Processing Worker 调用 MinerU 解析并把 Markdown 持久化为 `tenant/kb/parsed/<task>.md`；LlamaIndex Service 负责语义/层级切块、索引与 Embedding；Sandbox Execution 经 OpenSandbox 执行自定义代码。
 - **检索问答层**：Query Service 并行多路召回，RRF 融合，Cross-Encoder 重排，任一非核心路失败 Fail-open；Agent Hub 作为星型调度中心，按 capability 路由到 intent / summary / memory，经 Gateway 复用统一检索链路。
@@ -92,7 +92,7 @@ flowchart TB
 
 | 服务 | 语言 | 目录 | 端口 | 职责 |
 | --- | --- | --- | --- | --- |
-| API Gateway | Go | `backend/cmd/gateway` | 8080 | 鉴权、限流、上传与检索入口 |
+| API Gateway | Go | `backend/cmd/gateway` | 8080 | 鉴权（JWT / API Key）、限流、上传与检索入口、OpenAI 兼容端点 |
 | Auth Service | Go | `backend/cmd/auth-service` | 9096 | 注册 / 登录 / 刷新 / 校验，签发 JWT |
 | User Service | Go | `backend/cmd/user-service` | 9097 | 用户 CRUD、角色与权限（RBAC）管理 |
 | Workflow Engine | Go | `backend/cmd/workflow-engine` | 8081 | DAG 校验与调度执行 |
@@ -315,7 +315,7 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 
 **存储**：`IDENTITY_DRIVER=memory`（默认，dev-all 单进程）、`redis` 或 `postgres`（独立部署时 Auth / User 服务共享同一份用户与角色数据；postgres 使用 `IDENTITY_DATABASE_URL`，启动时自动建 `identity_users` / `identity_roles` / `knowledge_bases` / `kb_permissions` 表，并把旧 `identity_knowledge_bases` 幂等迁入）。
 
-**权限模型**：固定权限点目录（17 个 + 通配 `*`，含 `kb:read` / `kb:write`、`usage:read`）→ 角色组合 → 用户绑定角色。内置三个角色：
+**权限模型**：固定权限点目录（18 个 + 通配 `*`，含 `kb:read` / `kb:write`、`usage:read`、`apikey:write`）→ 角色组合 → 用户绑定角色。内置三个角色：
 
 | 角色 | 权限 | 说明 |
 | --- | --- | --- |
@@ -349,6 +349,9 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 | GET/POST | `/v1/connectors` | `kb:write` | 外部数据源连接器列表 / 创建（配置加密存储） |
 | GET/DELETE | `/v1/connectors/:id` | `kb:write` | 连接器详情（密钥脱敏） / 删除 |
 | POST | `/v1/connectors/:id/sync` | `kb:write` | 手动增量同步，返回创建/跳过/失败计数 |
+| GET/POST | `/v1/api-keys` | `apikey:write` | 列出 / 签发租户 API Key（明文仅创建时返回） |
+| DELETE | `/v1/api-keys/:id` | `apikey:write` | 吊销 API Key |
+| POST | `/v1/openai/chat/completions` | API Key `chat:completions` 或 JWT `search:use` | OpenAI 兼容问答（流式 / 非流式，引用透传） |
 
 首次启动会自动种子管理员：`admin / admin123`（可用 `SEED_ADMIN_*` 覆盖）。控制台 `/login` 登录后，`admin` 可在"用户管理"页创建账号、分配角色、启停用户，并新建自定义角色。未登录可点"以匿名身份浏览"（需 `ALLOW_ANONYMOUS=true`），匿名身份仅有 `search:use`，可使用检索与智能问答，但无任何管理权限。
 
@@ -395,6 +398,7 @@ flowchart LR
 - **安全护栏**：工具风险分级（`read/write/execute/external`）、入参 JSON Schema、输出截断、预算超限 429、工具与审批审计（`GET /v1/audit`），工具结果以不可信数据包裹以防提示注入；网关侧 `/v1/sandbox/execute` 要求 `sandbox:execute`。
 - **PII 脱敏**（`RAG_PII_ENABLED`）：提示词、历史、检索片段、摘要、记忆与纠正答案在进入模型前替换为稳定占位符（`{{EMAIL_1}}` / `{{PHONE_1}}` 等，支持邮箱、手机号、身份证、银行卡与 IPv4）；检索仍使用原始 query，保证按手机号/邮箱检索可用。回复默认保持脱敏并对模型新生成的 PII 再次脱敏，`RAG_PII_RESTORE_OUTPUT=true` 可还原。每次命中会写入 `pii.mask` 审计事件（类型与数量），可按租户与时间检索。
 - **LLM 网关**（`backend/internal/llmgateway`）：OpenAI 兼容 `POST /v1/chat/completions`（含 SSE）与 `/v1/embeddings`，按主/备通道自动切换，连续失败触发熔断（阈值/冷却可配）；按 `x-tenant-id` 累计每日 token，超限前置返回 `429 quota_exceeded`，预留额度原子扣减并在响应后按实际 usage 修正。把 `RAG_LLM_BASE_URL` 等指向 `http://llm-gateway:8082/v1` 即可复用；RAG 生成会透传租户头。
+- **开放 API / OpenAI 兼容**（`API_KEY_DRIVER=memory|postgres`）：管理员通过 `POST /v1/api-keys` 签发 `nf-sk-*` 密钥（明文仅返回一次，库中只存 SHA-256），可限定 `allowed_kb_ids`、`scopes`（`chat:completions` / `search:use`）、`rate_limit_rpm` 与 `expires_in_days`；`DELETE /v1/api-keys/{id}` 吊销，密钥与 JWT 并存。`POST /v1/openai/chat/completions` 兼容 OpenAI Chat Completions：非流式返回 `chat.completion`，流式逐 token 返回 `chat.completion.chunk` 并以 `data: [DONE]` 结束；`messages` 转为 Hub 无状态调用（历史随请求传入、不写会话库），引用在 `choices[0].message.citations` 与顶层 `citations` 透传，`kb_id` 可放在请求体、`metadata.kb_id` 或 `X-KB-ID` 头。
 - **图文多模态**：MinerU 结果 ZIP 中的图片由 Worker 提取并落盘到 `<tenant>/<kb>/parsed/<task>/images/`，Markdown 图片链接改写为 `/v1/media`；切块把 `image_urls` 写入节点 metadata，检索结果与问答引用返回配图，控制台展示缩略图并支持点击放大。
 
 新增 / 变更接口：
@@ -413,6 +417,8 @@ flowchart LR
 | `POST /v1/agents/{name}/call` | `search:use`；sandbox agent 另需 `sandbox:execute` | Gateway 调用自定义 SubAgent |
 | `GET /v1/skills` | Hub 内部 | 租户可见技能（供 Intent/Router 使用） |
 | `POST /mcp` | `AGENT_HUB_MCP_ENABLED` | MCP Server：initialize / tools/list / tools/call（直连 Agent Hub） |
+| `GET/POST /v1/api-keys`、`DELETE /v1/api-keys/{id}` | `apikey:write` | 签发 / 列出 / 吊销租户 API Key（明文仅创建时返回） |
+| `POST /v1/openai/chat/completions` | API Key `chat:completions` 或 JWT `search:use` | OpenAI 兼容问答（流式 / 非流式，引用透传） |
 | `GET/POST /v1/agents`、`GET/DELETE /v1/agents/{name}` | Hub 内部；写操作需 `AGENT_HUB_DYNAMIC_REGISTRATION` | 租户级自定义 SubAgent CRUD |
 
 > `/v1/call` 的 agent 分支始终可用，tool 分支需 `AGENT_HUB_TOOLS_ENABLED`；`/mcp`、`/v1/call`、`/v1/tools` 为 Hub 内部入口，外部经 Gateway 的 `/v1/agents/{name}/call` 调用自定义 SubAgent。

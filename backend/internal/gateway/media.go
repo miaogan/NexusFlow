@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nexusflow/nexusflow/backend/internal/apikey"
 	"github.com/nexusflow/nexusflow/backend/internal/tenant"
 )
 
@@ -30,6 +31,15 @@ func (g *Gateway) getMedia(c *gin.Context) {
 	if !validMediaKey(key, principal.TenantID) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "media not found"})
 		return
+	}
+	// API keys are additionally limited to their knowledge-base allow-list
+	// (the kb id is the second path segment of the media key).
+	if keyInfo, ok := apikey.From(c.Request.Context()); ok {
+		segments := strings.Split(key, "/")
+		if !keyInfo.AllowsKB(segments[1]) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "media not found"})
+			return
+		}
 	}
 	reader, err := g.objects.Get(c.Request.Context(), key)
 	if err != nil {

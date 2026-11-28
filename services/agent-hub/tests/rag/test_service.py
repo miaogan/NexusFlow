@@ -4,7 +4,7 @@ import asyncio
 from typing import Any
 
 from nexusflow_agents.agents.rag.core.config import Settings
-from nexusflow_agents.agents.rag.schemas import ChatRequest
+from nexusflow_agents.agents.rag.schemas import ChatMessage, ChatRequest
 from nexusflow_agents.agents.rag.services.chat import ChatService
 from nexusflow_agents.agents.rag.services.store import (
     ConversationNotFound,
@@ -31,6 +31,7 @@ class FakeStreamGraph:
     def __init__(self) -> None:
         self.retrieve_calls: list[dict[str, Any]] = []
         self.stream_corrected: list[dict[str, Any]] | None = None
+        self.stream_history: list[dict[str, str]] | None = None
 
     def retrieve(self, **kwargs: Any) -> dict[str, Any]:
         self.retrieve_calls.append(kwargs)
@@ -56,6 +57,7 @@ class FakeStreamGraph:
         self, query, history, chunks, summary="", memories=None, corrected=None, tenant_id=""
     ):
         self.stream_corrected = corrected
+        self.stream_history = history
         for piece in ("hello ", "world"):
             yield piece
 
@@ -170,6 +172,55 @@ def test_chat_reuses_conversation_history() -> None:
     detail = store.get("t1", "u1", first.conversation_id)
     assert detail is not None
     assert len(detail["messages"]) == 4
+
+
+def test_chat_stateless_uses_request_history_without_persisting() -> None:
+    service, store, graph = _service()
+    resp = service.chat(
+        ChatRequest(
+            message="second",
+            stateless=True,
+            history=[
+                ChatMessage(role="user", content="first"),
+                ChatMessage(role="assistant", content="reply"),
+            ],
+        ),
+        "t1",
+        "u1",
+        None,
+    )
+
+    assert resp.answer == "generated answer"
+    assert resp.conversation_id == ""
+    assert graph.calls[0]["history"] == [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "reply"},
+    ]
+    _, total = store.list("t1", "u1", 10, 0)
+    assert total == 0
+
+
+def test_chat_stream_stateless_uses_request_history() -> None:
+    store = InMemoryConversationStore()
+    graph = FakeStreamGraph()
+    service = ChatService(store, graph, Settings(_env_file=None))
+
+    events = _collect_stream(
+        service,
+        ChatRequest(
+            message="hi",
+            stateless=True,
+            history=[ChatMessage(role="user", content="earlier")],
+        ),
+        "t1",
+        "u1",
+    )
+
+    assert events[-1]["type"] == "done"
+    assert events[-1]["conversation_id"] == ""
+    assert graph.stream_history == [{"role": "user", "content": "earlier"}]
+    _, total = store.list("t1", "u1", 10, 0)
+    assert total == 0
 
 
 def test_chat_rejects_unknown_conversation() -> None:

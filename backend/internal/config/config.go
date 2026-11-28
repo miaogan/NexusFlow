@@ -81,6 +81,10 @@ type Config struct {
 	ConnectorDatabaseURL   string
 	ConnectorEncryptionKey string
 
+	// APIKeyDriver selects the tenant API-key store: memory | postgres.
+	APIKeyDriver      string
+	APIKeyDatabaseURL string
+
 	ObjectStoreDir  string
 	ObjectStoreBase string
 	// ObjectStoreAllowedHosts restricts presigned upload URLs to trusted hosts
@@ -211,6 +215,9 @@ func Load() Config {
 		ConnectorDriver:        env("CONNECTOR_DRIVER", "memory"),
 		ConnectorDatabaseURL:   env("CONNECTOR_DATABASE_URL", ""),
 		ConnectorEncryptionKey: env("CONNECTOR_ENCRYPTION_KEY", ""),
+
+		APIKeyDriver:      env("API_KEY_DRIVER", "memory"),
+		APIKeyDatabaseURL: env("API_KEY_DATABASE_URL", ""),
 
 		ObjectStoreDir:          env("OBJECT_STORE_DIR", "/tmp/nexusflow-objects"),
 		ObjectStoreBase:         env("OBJECT_STORE_BASE", "http://127.0.0.1:9000/nexusflow"),
