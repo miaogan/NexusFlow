@@ -1,12 +1,16 @@
 package ingestion
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -178,6 +182,118 @@ func (s *Service) UploadFile(ctx context.Context, req *pb.UploadFileRequest) (*p
 		Message: "task accepted",
 		Created: true,
 	}, nil
+}
+
+// RegisterContent persists connector-fetched bytes as a normal document task.
+// The SHA-256 content hash makes repeated syncs idempotent per tenant and
+// knowledge base, so unchanged external documents are skipped.
+func (s *Service) RegisterContent(
+	ctx context.Context,
+	tenantID, kbID, connectorID, externalID, fileName, fileType string,
+	content []byte,
+) (string, bool, error) {
+	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(kbID) == "" {
+		return "", false, fmt.Errorf("connector register: tenant_id and kb_id are required")
+	}
+	if !validFileType(fileType) {
+		return "", false, fmt.Errorf("connector register: unsupported file_type %q", fileType)
+	}
+	if len(content) == 0 {
+		return "", false, fmt.Errorf("connector register: empty content")
+	}
+	name := connectorFileName(fileName, externalID, fileType)
+	digest := sha256.Sum256(content)
+	contentHash := hex.EncodeToString(digest[:])
+	taskID := uuid.NewString()
+	objectKey := fmt.Sprintf("%s/%s/connector/%s/%s/%s", tenantID, kbID, connectorID, taskID, name)
+	metadata := map[string]string{
+		"kb_id":        kbID,
+		"file_name":    name,
+		"file_type":    fileType,
+		"file_size":    strconv.Itoa(len(content)),
+		"content_hash": contentHash,
+		"connector_id": connectorID,
+		"external_id":  externalID,
+		"source":       "connector",
+	}
+	task, created, err := s.machine.Create(ctx, state.Task{
+		ID:          taskID,
+		TenantID:    tenantID,
+		State:       state.Pending,
+		ContentHash: contentHash,
+		Metadata:    metadata,
+	})
+	if err != nil {
+		return "", false, err
+	}
+	if !created {
+		return task.ID, false, nil
+	}
+	if err := s.objects.Put(ctx, objectKey, bytes.NewReader(content), int64(len(content)), contentTypeForFile(fileType)); err != nil {
+		if _, terr := s.machine.Transition(ctx, task.ID, state.Failed, "store connector content: "+err.Error()); terr != nil {
+			s.logger.Warn("rollback connector task failed", "task_id", task.ID, "error", terr)
+		}
+		return "", false, err
+	}
+	evt, _ := json.Marshal(uploadedEvent{
+		TaskID:    task.ID,
+		TenantID:  tenantID,
+		FileURL:   s.presignBase + "/" + objectKey,
+		FileType:  fileType,
+		FileName:  name,
+		ObjectKey: objectKey,
+		Metadata:  metadata,
+	})
+	if err := s.pub.Publish(ctx, queue.Message{
+		Topic:   s.topicUploaded,
+		Key:     task.ID,
+		Payload: evt,
+		Headers: map[string]string{"tenant_id": tenantID},
+	}); err != nil {
+		if _, terr := s.machine.Transition(ctx, task.ID, state.Failed, "enqueue: "+err.Error()); terr != nil {
+			s.logger.Warn("rollback connector task failed", "task_id", task.ID, "error", terr)
+		}
+		return "", false, err
+	}
+	s.logger.Info("connector document registered", "task_id", task.ID, "tenant", tenantID,
+		"kb_id", kbID, "connector_id", connectorID, "external_id", externalID)
+	return task.ID, true, nil
+}
+
+// connectorFileName keeps one path-safe segment with the declared extension.
+func connectorFileName(name, externalID, fileType string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = externalID
+	}
+	name = path.Base(strings.ReplaceAll(name, "\\", "/"))
+	ext := strings.ToLower(strings.TrimPrefix(path.Ext(name), "."))
+	if ext != fileType {
+		name = strings.TrimSuffix(name, path.Ext(name)) + "." + fileType
+	}
+	name = strings.Trim(name, ". ")
+	if name == "" || name == ".." {
+		name = "document." + fileType
+	}
+	if len(name) > 120 {
+		name = name[:120-len(fileType)-1] + "." + fileType
+	}
+	return name
+}
+
+func contentTypeForFile(fileType string) string {
+	switch fileType {
+	case "pdf":
+		return "application/pdf"
+	case "docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case "html":
+		return "text/html; charset=utf-8"
+	case "md":
+		return "text/markdown; charset=utf-8"
+	default:
+		return "text/plain; charset=utf-8"
+	}
 }
 
 func taskKnowledgeBaseID(task state.Task) string {

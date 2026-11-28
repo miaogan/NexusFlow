@@ -13,8 +13,12 @@ import (
 type Config struct {
 	Env string
 
-	GatewayHTTPAddr    string
-	IngestionGRPCAddr  string
+	GatewayHTTPAddr   string
+	IngestionGRPCAddr string
+	// IngestionHTTPAddr serves the connector management/sync API.
+	IngestionHTTPAddr string
+	// ConnectorTarget is the ingestion connector API base URL used by the gateway.
+	ConnectorTarget    string
 	ProcessingGRPCAddr string
 	SandboxGRPCAddr    string
 	QueryGRPCAddr      string
@@ -71,6 +75,11 @@ type Config struct {
 	// and implicit signals across restarts.
 	FeedbackDriver      string
 	FeedbackDatabaseURL string
+
+	// External data connectors: memory | postgres for definitions and cursors.
+	ConnectorDriver        string
+	ConnectorDatabaseURL   string
+	ConnectorEncryptionKey string
 
 	ObjectStoreDir  string
 	ObjectStoreBase string
@@ -142,6 +151,8 @@ func Load() Config {
 
 		GatewayHTTPAddr:        env("GATEWAY_HTTP_ADDR", ":8080"),
 		IngestionGRPCAddr:      env("INGESTION_GRPC_ADDR", ":9095"),
+		IngestionHTTPAddr:      env("INGESTION_HTTP_ADDR", ":9098"),
+		ConnectorTarget:        env("CONNECTOR_TARGET", ""),
 		ProcessingGRPCAddr:     env("PROCESSING_GRPC_ADDR", ":9092"),
 		SandboxGRPCAddr:        env("SANDBOX_GRPC_ADDR", ":9093"),
 		QueryGRPCAddr:          env("QUERY_GRPC_ADDR", ":9094"),
@@ -182,6 +193,10 @@ func Load() Config {
 
 		FeedbackDriver:      env("FEEDBACK_DRIVER", "memory"),
 		FeedbackDatabaseURL: env("FEEDBACK_DATABASE_URL", ""),
+
+		ConnectorDriver:        env("CONNECTOR_DRIVER", "memory"),
+		ConnectorDatabaseURL:   env("CONNECTOR_DATABASE_URL", ""),
+		ConnectorEncryptionKey: env("CONNECTOR_ENCRYPTION_KEY", ""),
 
 		ObjectStoreDir:          env("OBJECT_STORE_DIR", "/tmp/nexusflow-objects"),
 		ObjectStoreBase:         env("OBJECT_STORE_BASE", "http://127.0.0.1:9000/nexusflow"),

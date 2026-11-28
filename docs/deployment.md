@@ -33,7 +33,7 @@
 
 | PVC | 挂载点 | 使用方 | 说明 |
 | --- | --- | --- | --- |
-| `object-store` | `/data/objects` | gateway / ingestion / processing-worker | 上传落地、级联删除、解析回读与重建索引需共享同一份数据；解析产物落盘为 `tenant/kb/parsed/<task>.md`，图片落盘为 `tenant/kb/parsed/<task>/images/` 并由 Gateway `GET /v1/media` 鉴权读取 |
+| `object-store` | `/data/objects` | gateway / ingestion / processing-worker | 上传落地、连接器同步、级联删除、解析回读与重建索引需共享同一份数据；解析产物落盘为 `tenant/kb/parsed/<task>.md`，图片落盘为 `tenant/kb/parsed/<task>/images/` 并由 Gateway `GET /v1/media` 鉴权读取，连接器原文落盘为 `tenant/kb/connector/<connector>/<task>/` |
 | `sandbox-work` | `/data/sandboxes` | sandbox-execution | 沙箱工作目录 |
 
 ```bash
@@ -248,6 +248,14 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 - 自定义 Agent 可声明 `skills`（最多 16 个，格式同 Agent 名）；`GET /v1/skills` 返回当前租户可见技能。Chat 的 Intent 节点会携带该列表，命中时直接调用 SubAgent，失败自动回退 RAG。
 - 启用 `AGENT_HUB_ADMIN_TOKEN` 时，Gateway / Workflow 需通过 `AGENT_HUB_TOKEN` 配置同一值；否则经 Gateway 的 `/v1/call`、审批与审计请求会被 Hub 拒绝。
 - 控制台 `/subagents` 的写操作需 `AGENT_HUB_DYNAMIC_REGISTRATION=true` 且调用者具备 `user:write`；Compose 默认开启并使用本地演示 token，生产应按 Secret 覆盖。
+
+**外部数据连接器**
+
+- `GET/POST /v1/connectors`、`GET/DELETE /v1/connectors/{id}`、`POST /v1/connectors/{id}/sync` 需要 `kb:write`（连接器可持有 S3/DB 凭据，按租户管理员授权）。
+- 定义与游标：`CONNECTOR_DRIVER=memory|postgres`；Postgres 需 `CONNECTOR_DATABASE_URL`，启动幂等创建 `data_connectors`。数据库不可用时回退内存并告警。
+- 配置加密：生产必须设置 `CONNECTOR_ENCRYPTION_KEY`（AES-256-GCM）；为空时以 `plain:` 前缀存明文，仅限本地开发。
+- 三类连接器：`web_crawler`（urls / max_depth / max_pages / allow_private）、`s3_bucket`（endpoint / bucket / prefix / region / access_key / secret_key / use_ssl / max_objects）、`db_query`（dsn / sql / id_column / batch_size）。`db_query` 只允许单条 SELECT，建议使用 SELECT-only 角色并提供稳定 `ORDER BY`。
+- 同步为手动触发（`POST .../sync`）；`schedule_cron` 仅保存配置，定时调度留给后续调度器。同步通过 ingestion 创建普通任务，可在“任务中心”查看解析与索引进度。
 
 **审批**
 

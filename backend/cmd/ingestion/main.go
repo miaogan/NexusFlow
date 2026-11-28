@@ -2,15 +2,19 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/nexusflow/nexusflow/backend/internal/config"
+	"github.com/nexusflow/nexusflow/backend/internal/connector"
 	"github.com/nexusflow/nexusflow/backend/internal/indexing"
 	"github.com/nexusflow/nexusflow/backend/internal/ingestion"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/broker"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/grpcserver"
+	"github.com/nexusflow/nexusflow/backend/internal/platform/httpserver"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/log"
 	"github.com/nexusflow/nexusflow/backend/internal/platform/metrics"
 	"github.com/nexusflow/nexusflow/backend/internal/state"
@@ -56,6 +60,29 @@ func main() {
 		opts = append(opts, ingestion.WithParsedTopic(cfg.QueueTopicParsed))
 	}
 	svc := ingestion.NewService(objects, st, b, logger, cfg.ObjectStoreBase, cfg.QueueTopicUploaded, opts...)
+
+	// Connector definitions and sync cursors live in Postgres in production;
+	// without an encryption key configuration is stored as plaintext (dev only).
+	cipher := connector.NewCipher(cfg.ConnectorEncryptionKey)
+	if cipher == nil {
+		logger.Warn("CONNECTOR_ENCRYPTION_KEY is empty; connector configs are stored as plaintext")
+	}
+	connStore := connector.NewStore(ctx, cfg.ConnectorDriver, cfg.ConnectorDatabaseURL, cipher)
+	if closer, ok := connStore.(interface{ Close() error }); ok {
+		defer func() { _ = closer.Close() }()
+	}
+	connSvc := connector.NewService(connStore, svc, logger,
+		connector.WebSource{}, connector.S3Source{}, connector.DBSource{})
+	connSrv := &http.Server{
+		Addr:              cfg.IngestionHTTPAddr,
+		Handler:           connector.NewHandler(connSvc),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go func() {
+		if err := httpserver.Serve(ctx, connSrv, logger); err != nil {
+			logger.Warn("connector http server stopped", "error", err)
+		}
+	}()
 
 	go func() {
 		if err := metrics.Serve(ctx, cfg.MetricsAddr, logger); err != nil {

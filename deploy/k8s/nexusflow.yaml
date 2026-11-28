@@ -31,6 +31,11 @@ data:
   OPENSANDBOX_NODE_IMAGE: "node:18"
   METRICS_ADDR: ":9100"
   INGESTION_TARGET: "ingestion:9095"
+  # Connector management/sync API served by ingestion and proxied by gateway.
+  INGESTION_HTTP_ADDR: ":9098"
+  CONNECTOR_TARGET: "http://ingestion:9098"
+  CONNECTOR_DRIVER: "postgres"
+  CONNECTOR_DATABASE_URL: "postgresql://nexusflow:change-me@postgres.nexusflow.svc:5432/nexusflow"
   QUERY_TARGET: "query-service:9094"
   SANDBOX_TARGET: "sandbox-execution:9093"
   AUTH_TARGET: "auth-service:9096"
@@ -103,6 +108,8 @@ stringData:
   # Gateway -> hub service token; keep equal to AGENT_HUB_ADMIN_TOKEN.
   AGENT_HUB_TOKEN: ""
   AGENT_HUB_ADMIN_TOKEN: ""
+  # AES-GCM key for connector configs at rest; empty stores plaintext (dev only).
+  CONNECTOR_ENCRYPTION_KEY: ""
   LLAMAINDEX_EMBEDDING_API_KEY: ""
   RAG_LLM_BASE_URL: ""
   RAG_LLM_API_KEY: ""
@@ -335,6 +342,7 @@ spec:
           image: ghcr.io/nexusflow/ingestion:4.0.0
           ports:
             - containerPort: 9095
+            - containerPort: 9098
             - containerPort: 9100
           envFrom:
             - configMapRef:
@@ -372,6 +380,8 @@ spec:
   ports:
     - port: 9095
       targetPort: 9095
+    - port: 9098
+      targetPort: 9098
 ---
 apiVersion: apps/v1
 kind: Deployment

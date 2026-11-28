@@ -55,6 +55,8 @@ type Gateway struct {
 	rag *ragProxy
 	// workflow proxies DAG validate/run calls to the workflow engine.
 	workflow *workflowProxy
+	// connectors proxies connector management to the ingestion HTTP listener.
+	connectors *connectorProxy
 	// blacklist rejects revoked access tokens at the edge.
 	blacklist revocation.Blacklist
 	// allowedUploadHosts restricts presigned upload URLs; empty disables the check.
@@ -191,6 +193,14 @@ func (g *Gateway) Router() *gin.Engine {
 	v1.DELETE("/files/:id", RequirePermission("file:delete"), g.deleteFile)
 	// In-place index rebuild from the persisted parsed markdown.
 	v1.POST("/files/:id/reindex", RequirePermission("task:write"), g.reindexFile)
+	// External data connectors (proxied to the ingestion HTTP listener).
+	// Definitions may hold S3/DB credentials, so management requires the
+	// tenant-wide kb:write permission.
+	v1.GET("/connectors", RequirePermission("kb:write"), g.listConnectors)
+	v1.POST("/connectors", RequirePermission("kb:write"), g.createConnector)
+	v1.GET("/connectors/:id", RequirePermission("kb:write"), g.getConnector)
+	v1.DELETE("/connectors/:id", RequirePermission("kb:write"), g.deleteConnector)
+	v1.POST("/connectors/:id/sync", RequirePermission("kb:write"), g.syncConnector)
 	v1.GET("/tasks", g.listTasks)
 	v1.GET("/tasks/:id", g.getTask)
 	// Parsed images extracted by the processing worker (tenant-scoped key).

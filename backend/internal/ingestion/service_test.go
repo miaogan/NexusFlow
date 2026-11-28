@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 
@@ -564,3 +565,44 @@ func TestReindexTaskRollsBackWhenEnqueueFails(t *testing.T) {
 
 // Ensure the fake object store satisfies the interface at compile time.
 var _ store.ObjectStore = (*fakeObjectStore)(nil)
+
+func TestRegisterContentDedupesAndPublishes(t *testing.T) {
+	m := state.NewMachine()
+	objects := newFakeObjectStore()
+	pub := &fakePublisher{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc := NewService(objects, m, pub, logger, "http://objects", "file.uploaded")
+
+	payload := []byte("<html><body>connector page</body></html>")
+	taskID, created, err := svc.RegisterContent(context.Background(),
+		"default", "kb1", "conn-1", "https://example.com/a", "a.html", "html", payload)
+	if err != nil || !created || taskID == "" {
+		t.Fatalf("register: id=%q created=%v err=%v", taskID, created, err)
+	}
+
+	// Same bytes → content hash dedupe returns the existing task.
+	again, createdAgain, err := svc.RegisterContent(context.Background(),
+		"default", "kb1", "conn-1", "https://example.com/a", "a.html", "html", payload)
+	if err != nil || createdAgain || again != taskID {
+		t.Fatalf("duplicate: id=%q created=%v err=%v want=%q", again, createdAgain, err, taskID)
+	}
+	if pub.count() != 1 {
+		t.Fatalf("published %d messages, want 1", pub.count())
+	}
+
+	got := 0
+	for key := range objects.objects {
+		if strings.Contains(key, "/connector/conn-1/") {
+			got++
+		}
+	}
+	if got != 1 {
+		t.Fatalf("stored %d connector objects, want 1", got)
+	}
+
+	task, ok, _ := m.Get(context.Background(), taskID)
+	if !ok || task.Metadata["external_id"] != "https://example.com/a" ||
+		task.Metadata["connector_id"] != "conn-1" {
+		t.Fatalf("task metadata = %+v ok=%v", task.Metadata, ok)
+	}
+}

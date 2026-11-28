@@ -99,6 +99,8 @@ services:
       # DAG validate/run proxy (RBAC: workflow:run).
       WORKFLOW_TARGET: "http://workflow-engine:8081"
       WORKFLOW_SERVICE_TOKEN: ${WORKFLOW_SERVICE_TOKEN:-}
+      # External data connectors (proxied to the ingestion HTTP listener).
+      CONNECTOR_TARGET: "http://ingestion:9098"
       # Persist ratings/implicit feedback even when tracing is a no-op.
       FEEDBACK_DRIVER: postgres
       FEEDBACK_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
@@ -174,6 +176,12 @@ services:
     environment:
       <<: *app-env
       INGESTION_GRPC_ADDR: ":9095"
+      # Connector management/sync API (gateway proxies /v1/connectors here).
+      INGESTION_HTTP_ADDR: ":9098"
+      CONNECTOR_DRIVER: ${CONNECTOR_DRIVER:-postgres}
+      CONNECTOR_DATABASE_URL: postgresql://nexusflow:${POSTGRES_PASSWORD:-nexusflow}@postgres:5432/nexusflow
+      # Configs hold S3/DB credentials; empty keeps plaintext for local demos.
+      CONNECTOR_ENCRYPTION_KEY: ${CONNECTOR_ENCRYPTION_KEY:-}
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9100/healthz"]
@@ -181,6 +189,8 @@ services:
       redis:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     volumes: ["objects:/data/objects"]
 

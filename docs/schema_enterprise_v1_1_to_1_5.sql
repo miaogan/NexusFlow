@@ -22,8 +22,10 @@
 --   * audit_logs 已落地：Agent Hub 在 AGENT_HUB_AUDIT_DRIVER=postgres 时启动幂等建表，
 --     记录工具调用与审批事件；Agent Hub 的 HITL 工具审批使用本文件末尾的
 --     agent_approvals（工作流审批仍走 workflow_approvals），两者不要混用。
---   * Milestone 2 及之后的其余表（data_connectors、document_media_assets 等）仍为规划草案，
---     代码中尚未建表。
+--   * data_connectors 已落地：ingestion 在 CONNECTOR_DRIVER=postgres 时启动幂等建表，
+--     配置以 AES-256-GCM 加密后写入 config_encrypted（CONNECTOR_ENCRYPTION_KEY 为空时
+--     以 plain: 前缀存明文，仅限开发），sync_cursor 保存增量水位线。
+--   * document_media_assets 等其余表仍为规划草案，代码中尚未建表。
 --   * 所有状态/枚举字段以字符串存储，应用层常量必须与本文件的取值保持一致。
 --   * audit_logs 在生产环境建议按月分区（本文件只保留基表定义）并配置保留策略。
 -- ============================================================================
@@ -69,7 +71,7 @@ CREATE INDEX IF NOT EXISTS idx_kb_perm_lookup
 -- Milestone 2: 多模态与外部数据源连接器 (v1.2.0)
 -- ----------------------------------------------------------------------------
 
--- 3. 外部数据源连接器配置表
+-- 3. 外部数据源连接器配置表（web_crawler / s3_bucket / db_query 增量同步）
 CREATE TABLE IF NOT EXISTS data_connectors (
     id               VARCHAR(64) PRIMARY KEY,
     tenant_id        VARCHAR(64) NOT NULL,
