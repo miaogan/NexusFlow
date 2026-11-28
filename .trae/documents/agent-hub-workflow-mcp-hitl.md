@@ -149,12 +149,12 @@ Agent Hub 已完成单容器与星型调度，但目前仍是固定能力（inte
 
 ## 剩余工作（P6+）
 
-1. **持久化**：将 `MemoryRunStore` / `ApprovalService` / `AuditLog` 接入 `docs/schema_enterprise_v1_1_to_1_5.sql` 已定义的 `workflow_executions` / `workflow_approvals` / `audit_logs`；解决多副本下的 run 粘性路由与审批一致性。
+1. **持久化**：`MemoryRunStore` / `ApprovalService` / `AuditLog` 的 Postgres 驱动（`workflow_executions` / `workflow_approvals` / `audit_logs`）与审批 CAS 已交付；剩余审计表按月分区与保留策略（见第 6 条）。
 2. **MCP 传输与能力**：Streamable HTTP、`resources/subscribe` 与三种原语均已交付；剩余 `resources/listChanged` 主动推送，以及会话/订阅跨副本共享（当前需粘性会话）。
 3. **推理流式体验**：最终回答已改为逐 token 流式下发；剩余为 `tool_call` 进度事件与单工具超时控制。
-4. **控制台**：新增审批收件箱、run 时间线 / 挂起恢复入口、审计查询页；与 `workflow:run` / `trace:read` 权限联动。
+4. **控制台**：审批收件箱、run 详情/挂起恢复与审计查询页（`/audit`）已交付；run 节点时间线可视化可继续增强。
 5. **端到端验证**：Gateway 发起 `agent → query` DAG 并核对 Go/Hub 两侧 trace；Chat 高风险工具审批 → 重试 → 结果；外部 MCP 工具在推理循环中调用。
-6. **安全增强**：PII 脱敏、审计持久化与按月分区、MCP 外部域白名单与出口审计。
+6. **安全增强**：PII 脱敏与审计持久化已交付；剩余 `audit_logs` 按月分区与保留策略、MCP 外部域白名单与出口审计。
 
 ## 关键文件
 

@@ -103,7 +103,7 @@ flowchart TB
 | Query Service | Go | `backend/cmd/query-service` | 9094 | 多路召回、RRF、重排、流式回答 |
 | LlamaIndex Service | Python | `services/llamaindex` | 8000 | 切块、索引、Embedding、检索策略 |
 | Agent Hub | Python | `services/agent-hub` | 8001（拆分 8002–8004） | 星型调度 + RAG 多轮问答；默认单容器内置 intent / summary / memory，可用 `ROLE` 拆分 |
-| Web Console | React | `web` | 5173 / 8088 | 控制台：知识库切换与授权 / 文件 / 任务 / 检索 / 问答 / 沙箱 / DAG / 审批 / API Key / Webhook |
+| Web Console | React | `web` | 5173 / 8088 | 控制台：知识库切换与授权 / 文件 / 任务 / 检索 / 问答 / 沙箱 / DAG / 审批 / 审计 / API Key / Webhook |
 
 ```text
 .
@@ -207,10 +207,11 @@ make web-dev        # http://localhost:5173
 | 沙箱 Playground | `/sandbox` | 自定义代码执行与输入/输出合约调试 |
 | 工作流编排 | `/workflow` | 拖拽节点、连线、DAG 校验与试运行 |
 | 审批中心 | `/approvals` | 工具审批收件箱与工作流运行列表 / 节点时间线 / 批准恢复（需 `workflow:run`） |
+| 审计日志 | `/audit` | 按动作、决策与时间范围查询工具调用、审批与 PII 脱敏记录（需 `trace:read`） |
 | API Key | `/api-keys` | 签发、吊销、作用域与知识库绑定，明文仅创建时展示（需 `apikey:write`） |
 | Webhook | `/webhooks` | 事件订阅、签名密钥一次性展示、投递日志与载荷查看（需 `webhook:write`） |
 
-访问控制台会跳转 `/login`：用种子管理员 `admin / admin123` 登录，或自助注册（默认 viewer 角色），也可点"以匿名身份浏览"（需 `ALLOW_ANONYMOUS=true`）。登录后右上角显示当前身份、知识库切换器与当前库角色（管理员/编辑者/只读），导航按权限动态显示：拥有 `user:read` 可见"SubAgent 管理"与"用户管理"，`workflow:run` 可见"审批中心"，`apikey:write` / `webhook:write` 分别可见"API Key"与"Webhook"。SubAgent 页面写操作需 `user:write`，且 Hub 需开启 `AGENT_HUB_DYNAMIC_REGISTRATION`。知识库管理员可在"管理"弹窗中改名、删除与授权成员。
+访问控制台会跳转 `/login`：用种子管理员 `admin / admin123` 登录，或自助注册（默认 viewer 角色），也可点"以匿名身份浏览"（需 `ALLOW_ANONYMOUS=true`）。登录后右上角显示当前身份、知识库切换器与当前库角色（管理员/编辑者/只读），导航按权限动态显示：拥有 `user:read` 可见"SubAgent 管理"与"用户管理"，`workflow:run` 可见"审批中心"，`trace:read` 可见"审计日志"，`apikey:write` / `webhook:write` 分别可见"API Key"与"Webhook"。SubAgent 页面写操作需 `user:write`，且 Hub 需开启 `AGENT_HUB_DYNAMIC_REGISTRATION`。知识库管理员可在"管理"弹窗中改名、删除与授权成员。
 
 ### 3. 完整容器编排
 
