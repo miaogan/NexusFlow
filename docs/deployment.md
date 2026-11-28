@@ -278,7 +278,7 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 - 吊销：`DELETE /v1/api-keys/{id}` 将状态置为 `REVOKED`，已吊销或过期的密钥立即返回 401。
 - 调用：把 OpenAI SDK 的 `base_url` 指向 `http://gateway:8080/v1/openai`，`api_key` 填 `nf-sk-...`，模型名任意；`kb_id` 可放在请求体、`metadata.kb_id` 或 `X-KB-ID` 头。未指定时使用 Key 白名单中的第一个知识库，白名单为空则使用 `default`。
 - 流式响应为标准 SSE（`chat.completion.chunk` + `data: [DONE]`）；引用位于最终 chunk 的 `citations` 字段，非流式同时在 `choices[0].message.citations` 与顶层 `citations`。
-- 生成参数：`system` / `developer` 消息拼接为 `system_prompt`（上限 8000 字符）注入；`temperature` 取值 0–2，`max_tokens`（兼容 `max_completion_tokens`）取值 1–32768，越界返回 400。`usage` 为字符估算值，并把 system prompt 计入 `prompt_tokens`。
+- 生成参数：`system` / `developer` 消息拼接为 `system_prompt`（上限 8000 字符）注入；`temperature` 取值 0–2，`max_tokens`（兼容 `max_completion_tokens`）取值 1–32768，越界返回 400。`usage` 优先使用上游真实 token 用量，未配置模型时回退字符估算；流式需设置 `stream_options.include_usage=true` 才会在 `[DONE]` 前收到 usage chunk。
 - 每个 Key 按 `rate_limit_rpm` 独立限流，超限返回 429（`rate_limit_exceeded`）；Key 的使用量为只读作用域，不会获得 `kb:write` / `user:write` 等管理权限。`chat:completions` 会隐含 `search:use`，因为 RAG 问答需要回调网关检索。
 
 **事件 Webhook**

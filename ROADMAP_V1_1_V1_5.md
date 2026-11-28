@@ -78,7 +78,7 @@ Milestone 1–5 的 11 个任务已全部交付，无待做项。
 * **[x] Task 5.1: 支持独立 API Key 鉴权体系，并提供兼容 OpenAI 协议的 /v1/openai/chat/completions 对外接入端点**
   * 新增租户级 API Key 的签发、吊销与作用域控制（可绑定知识库），与现有 JWT 鉴权并存；实现 OpenAI Chat Completions 兼容端点，支持流式与非流式响应、引用透传。
   * 交付情况：新增 `backend/internal/apikey`（`api_keys` 表，SHA-256 存储、展示前缀、`allowed_kb_ids` / `scopes` / `rate_limit_rpm` / 过期时间，memory 与 postgres 双实现）；网关鉴权同时接受 `nf-sk-*` 与 JWT，按 Key 独立限流；`/v1/api-keys` 提供签发/列表/吊销（`apikey:write`）；`/v1/openai/chat/completions` 支持流式 `chat.completion.chunk` + `[DONE]` 与非流式 `chat.completion`，引用在 message 与顶层透传，并透传 `system` / `temperature` / `max_tokens`；Hub 新增 `stateless` + `history`，外部请求不写会话库。
-  * 边界：API Key 为只读集成凭证（`chat:completions` / `search:use`，前者隐含后者以支持检索），不可获得管理权限；OpenAI `system` / `developer` 消息拼接为 `system_prompt` 注入生成，`temperature`（0–2）与 `max_tokens`（兼容 `max_completion_tokens`，上限 32768）透传给上游模型；非流式 `usage` 仍为字符估算值（system prompt 计入 `prompt_tokens`）。
+  * 边界：API Key 为只读集成凭证（`chat:completions` / `search:use`，前者隐含后者以支持检索），不可获得管理权限；OpenAI `system` / `developer` 消息拼接为 `system_prompt` 注入生成，`temperature`（0–2）与 `max_tokens`（兼容 `max_completion_tokens`，上限 32768）透传给上游模型；`usage` 优先采用上游真实 token 用量，未配置 LLM 时回退为字符估算（system prompt 计入 `prompt_tokens`），流式需显式开启 `stream_options.include_usage`。
 
 * **[x] Task 5.2: 支持租户级异步事件 Webhook 订阅（HMAC 签名与指数退避重试）以及标准 MCP Server 适配模块**
   * 提供事件订阅管理（任务完成、索引完成、审批结果等），投递时携带 HMAC 签名，失败按指数退避重试并记录投递日志；实现标准 MCP Server，暴露检索、问答与工作流能力供外部 Agent 调用。

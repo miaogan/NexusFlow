@@ -29,16 +29,28 @@ type openAIMessage struct {
 }
 
 type openAIChatRequest struct {
-	Model               string            `json:"model"`
-	Messages            []openAIMessage   `json:"messages"`
-	Stream              bool              `json:"stream"`
-	Metadata            map[string]string `json:"metadata"`
-	KBID                string            `json:"kb_id"`
-	ConversationID      string            `json:"conversation_id"`
-	TopK                int               `json:"top_k"`
-	Temperature         *float64          `json:"temperature"`
-	MaxTokens           *int              `json:"max_tokens"`
-	MaxCompletionTokens *int              `json:"max_completion_tokens"`
+	Model               string              `json:"model"`
+	Messages            []openAIMessage     `json:"messages"`
+	Stream              bool                `json:"stream"`
+	StreamOptions       *openAIStreamOption `json:"stream_options"`
+	Metadata            map[string]string   `json:"metadata"`
+	KBID                string              `json:"kb_id"`
+	ConversationID      string              `json:"conversation_id"`
+	TopK                int                 `json:"top_k"`
+	Temperature         *float64            `json:"temperature"`
+	MaxTokens           *int                `json:"max_tokens"`
+	MaxCompletionTokens *int                `json:"max_completion_tokens"`
+}
+
+type openAIStreamOption struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
+// openAIUsage carries real token counts reported by the RAG agent.
+type openAIUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
 }
 
 type openAIHistoryMessage struct {
@@ -67,6 +79,7 @@ type openAIUpstreamResponse struct {
 	Citations      []map[string]any `json:"citations"`
 	TraceID        string           `json:"trace_id"`
 	CreatedAt      string           `json:"created_at"`
+	Usage          *openAIUsage     `json:"usage"`
 }
 
 // openAIChat is the OpenAI-compatible facade over the RAG agent. It accepts
@@ -271,8 +284,19 @@ func (g *Gateway) openAIComplete(
 	}
 	g.recordQuery(c)
 
-	promptTokens := promptTokenCount
-	completionTokens := approxTokens(out.Answer)
+	// Prefer real token usage from the RAG agent; fall back to a character
+	// estimate for hubs that do not report usage.
+	usage := openAIUsage{
+		PromptTokens:     promptTokenCount,
+		CompletionTokens: approxTokens(out.Answer),
+	}
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	if out.Usage != nil && (out.Usage.PromptTokens > 0 || out.Usage.CompletionTokens > 0) {
+		usage = *out.Usage
+		if usage.TotalTokens == 0 {
+			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"id":      "chatcmpl-" + uuid.NewString(),
@@ -288,11 +312,7 @@ func (g *Gateway) openAIComplete(
 			},
 			"finish_reason": "stop",
 		}},
-		"usage": gin.H{
-			"prompt_tokens":     promptTokens,
-			"completion_tokens": completionTokens,
-			"total_tokens":      promptTokens + completionTokens,
-		},
+		"usage":           usage,
 		"citations":       nonNilCitations(out.Citations),
 		"conversation_id": out.ConversationID,
 		"trace_id":        out.TraceID,
@@ -330,6 +350,7 @@ func (g *Gateway) openAIStream(
 	created := time.Now().Unix()
 	model := openAIModel(req)
 	citations := []map[string]any{}
+	var usage *openAIUsage
 	sentContent := false
 
 	writeChunk := func(delta gin.H, finish string) bool {
@@ -388,6 +409,7 @@ func (g *Gateway) openAIStream(
 			Error     string           `json:"error"`
 			Answer    string           `json:"answer"`
 			Citations []map[string]any `json:"citations"`
+			Usage     *openAIUsage     `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
 			continue
@@ -404,6 +426,10 @@ func (g *Gateway) openAIStream(
 		case "sources", "done":
 			if len(event.Citations) > 0 {
 				citations = event.Citations
+			}
+			if event.Usage != nil {
+				event.Usage.TotalTokens = event.Usage.PromptTokens + event.Usage.CompletionTokens
+				usage = event.Usage
 			}
 			// Some intent/skill paths only emit the final answer in done.
 			if event.Type == "done" && !sentContent && event.Answer != "" {
@@ -427,6 +453,23 @@ func (g *Gateway) openAIStream(
 
 	if !writeChunk(gin.H{}, "stop") {
 		return
+	}
+	if req.StreamOptions != nil && req.StreamOptions.IncludeUsage && usage != nil {
+		// OpenAI streams usage in a final chunk with an empty choices array
+		// when the caller asks for include_usage.
+		chunk := gin.H{
+			"id":      id,
+			"object":  "chat.completion.chunk",
+			"created": created,
+			"model":   model,
+			"choices": []gin.H{},
+			"usage":   usage,
+		}
+		if data, err := json.Marshal(chunk); err == nil {
+			if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", data); err != nil {
+				return
+			}
+		}
 	}
 	if flusher != nil {
 		flusher.Flush()

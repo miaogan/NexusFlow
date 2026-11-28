@@ -272,7 +272,7 @@ V2.0 将切块从 Go 迁移至 LlamaIndex 服务。LlamaIndex 按标题层级与
 
 网关鉴权同时接受 JWT 与 API Key：`Authorization: Bearer nf-sk-...` 经哈希命中后构造 `tenant_id=apikey:<id>` 的主体，权限点直接取自作用域，并按 Key 的 `rate_limit_rpm` 独立限流；JWT 路径保持不变。API Key 没有知识库角色，因此 `allowed_kb_ids` 即为其知识库边界（空列表代表租户全量），命中后以 viewer 级只读权限访问检索与问答。
 
-`POST /v1/openai/chat/completions` 是 RAG 链路的协议适配层：把 OpenAI `messages` 拆成「最后一条用户消息 + 历史」，以 `stateless=true` 调用 Agent Hub（历史随请求传入、不写会话库），再映射回 `chat.completion`。`system` / `developer` 消息会拼接为 `system_prompt`（上限 8000 字符）注入生成；`temperature`（0–2）与 `max_tokens`（兼容 `max_completion_tokens`，上限 32768）透传到 Hub，由 `GenerationOptions` 在当前请求上下文内绑定到 LLM。流式响应把 Hub 的 `token` 事件转成 `chat.completion.chunk`，`sources`/`done` 中的引用透传到最终 chunk，并以 `data: [DONE]` 结束；非流式响应在 `choices[0].message.citations` 与顶层 `citations` 同时返回引用。`usage` 仍按字符数估算（约 4 字符/token），并把 system prompt 计入 `prompt_tokens`。`kb_id` 可来自请求体、`metadata.kb_id` 或 `X-KB-ID` 头。
+`POST /v1/openai/chat/completions` 是 RAG 链路的协议适配层：把 OpenAI `messages` 拆成「最后一条用户消息 + 历史」，以 `stateless=true` 调用 Agent Hub（历史随请求传入、不写会话库），再映射回 `chat.completion`。`system` / `developer` 消息会拼接为 `system_prompt`（上限 8000 字符）注入生成；`temperature`（0–2）与 `max_tokens`（兼容 `max_completion_tokens`，上限 32768）透传到 Hub，由 `GenerationOptions` 在当前请求上下文内绑定到 LLM。流式响应把 Hub 的 `token` 事件转成 `chat.completion.chunk`，`sources`/`done` 中的引用透传到最终 chunk，并以 `data: [DONE]` 结束；非流式响应在 `choices[0].message.citations` 与顶层 `citations` 同时返回引用。`usage` 优先采用 Hub 返回的真实 token 用量（`GenerationOptions` 同名上下文中的 `TokenUsage` 累积器），未配置 LLM 或上游未报告时回退为字符估算（约 4 字符/token，system prompt 计入 `prompt_tokens`）；流式请求设置 `stream_options.include_usage=true` 时，网关在 `[DONE]` 前追加带 `usage` 的空 choices chunk。`kb_id` 可来自请求体、`metadata.kb_id` 或 `X-KB-ID` 头。
 
 ### 6.7 事件 Webhook 与投递
 

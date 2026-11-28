@@ -110,7 +110,7 @@ func TestOpenAICompletionsWithAPIKey(t *testing.T) {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&received)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"conversation_id":"","message_id":"m1","answer":"hello","citations":[{"chunk_id":"c1","content":"ctx","score":0.5,"meta":{}}],"trace_id":"tr-1","created_at":"now"}`))
+		_, _ = w.Write([]byte(`{"conversation_id":"","message_id":"m1","answer":"hello","citations":[{"chunk_id":"c1","content":"ctx","score":0.5,"meta":{}}],"trace_id":"tr-1","created_at":"now","usage":{"prompt_tokens":21,"completion_tokens":3,"total_tokens":24}}`))
 	}))
 	defer hub.Close()
 
@@ -160,6 +160,10 @@ func TestOpenAICompletionsWithAPIKey(t *testing.T) {
 	if len(citations) != 1 {
 		t.Fatalf("citations = %v", resp["citations"])
 	}
+	usage, _ := resp["usage"].(map[string]any)
+	if usage["prompt_tokens"] != float64(21) || usage["total_tokens"] != float64(24) {
+		t.Fatalf("usage = %v", resp["usage"])
+	}
 }
 
 func TestOpenAIStreamWithAPIKey(t *testing.T) {
@@ -174,7 +178,7 @@ func TestOpenAIStreamWithAPIKey(t *testing.T) {
 			`{"type":"sources","citations":[{"chunk_id":"c1"}]}`,
 			`{"type":"token","content":"hel"}`,
 			`{"type":"token","content":"lo"}`,
-			`{"type":"done","answer":"hello","citations":[{"chunk_id":"c1"}]}`,
+			`{"type":"done","answer":"hello","citations":[{"chunk_id":"c1"}],"usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}}`,
 		} {
 			_, _ = io.WriteString(w, "data: "+event+"\n\n")
 			if flusher != nil {
@@ -189,7 +193,7 @@ func TestOpenAIStreamWithAPIKey(t *testing.T) {
 	g.rag = newRAGProxy(hub.URL)
 	plain, _ := createTestKey(t, store, nil, []string{apikey.ScopeChatCompletions})
 
-	body := `{"model":"gpt-test","stream":true,"messages":[{"role":"user","content":"hi"}]}`
+	body := `{"model":"gpt-test","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"hi"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/openai/chat/completions", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+plain)
 	rec := httptest.NewRecorder()
@@ -204,6 +208,7 @@ func TestOpenAIStreamWithAPIKey(t *testing.T) {
 		`"content":"hel"`,
 		`"finish_reason":"stop"`,
 		`"citations":[{"chunk_id":"c1"}]`,
+		`"usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}`,
 		"data: [DONE]",
 	} {
 		if !strings.Contains(out, want) {

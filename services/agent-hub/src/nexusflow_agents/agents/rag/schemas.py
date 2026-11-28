@@ -32,6 +32,12 @@ class Citation(BaseModel):
     meta: dict[str, str] = Field(default_factory=dict)
 
 
+class ChatUsage(BaseModel):
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
 class ChatResponse(BaseModel):
     conversation_id: str
     message_id: str
@@ -39,6 +45,7 @@ class ChatResponse(BaseModel):
     citations: list[Citation] = Field(default_factory=list)
     trace_id: str | None = None
     created_at: str
+    usage: ChatUsage | None = None
 
 
 class ConversationSummary(BaseModel):

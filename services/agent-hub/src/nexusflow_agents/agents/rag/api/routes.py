@@ -17,7 +17,9 @@ from nexusflow_agents.agents.rag.services.chat import ChatService
 from nexusflow_agents.agents.rag.services.llm import (
     GenerationOptions,
     reset_generation_options,
+    reset_usage,
     set_generation_options,
+    start_usage,
 )
 from nexusflow_agents.agents.rag.services.retrieval import RetrievalUnavailable
 from nexusflow_agents.agents.rag.services.store import ConversationNotFound
@@ -52,6 +54,7 @@ async def chat(
 ) -> ChatResponse:
     tenant_id, user_id, auth_header = caller_identity(request)
     token = set_generation_options(generation_options(req))
+    usage_token = start_usage()
     try:
         return await run_in_threadpool(
             service.chat, req, tenant_id, user_id, auth_header
@@ -61,6 +64,7 @@ async def chat(
     except RetrievalUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     finally:
+        reset_usage(usage_token)
         reset_generation_options(token)
 
 
@@ -74,6 +78,7 @@ async def chat_stream(
 
     async def event_source():
         token = set_generation_options(generation_options(req))
+        usage_token = start_usage()
         try:
             async for event in service.chat_stream(
                 req, tenant_id, user_id, auth_header
@@ -83,6 +88,7 @@ async def chat_stream(
             payload = json.dumps({"type": "error", "error": str(exc)}, ensure_ascii=False)
             yield f"data: {payload}\n\n"
         finally:
+            reset_usage(usage_token)
             reset_generation_options(token)
 
     return StreamingResponse(

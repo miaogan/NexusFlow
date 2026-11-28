@@ -22,6 +22,7 @@ from nexusflow_agents.agents.rag.services.corrected import (
     NullCorrectedAnswerProvider,
 )
 from nexusflow_agents.agents.rag.services.intent import HttpIntentClassifier, IntentClassifier
+from nexusflow_agents.agents.rag.services.llm import current_usage
 from nexusflow_agents.agents.rag.services.memory import ConversationMemory, HttpMemoryClient
 from nexusflow_agents.agents.rag.services.reasoning import ApprovalPending, ReasoningLoop
 from nexusflow_agents.agents.rag.services.retrieval import RetrievalUnavailable
@@ -141,6 +142,18 @@ class ChatService:
     @staticmethod
     def _conversation_id(conv: dict[str, Any] | None) -> str:
         return conv["id"] if conv is not None else ""
+
+    @staticmethod
+    def _usage_payload() -> dict[str, int] | None:
+        """Real token usage reported by the LLM, or None when unavailable."""
+        usage = current_usage()
+        if usage is None or usage.total_tokens == 0:
+            return None
+        return {
+            "prompt_tokens": usage.prompt_tokens,
+            "completion_tokens": usage.completion_tokens,
+            "total_tokens": usage.total_tokens,
+        }
 
     def _remember(
         self, tenant_id: str, user_id: str, message: str, answer: str
@@ -500,6 +513,7 @@ class ChatService:
             citations=citations,
             trace_id=trace_id,
             created_at=msg["created_at"],
+            usage=self._usage_payload(),
         )
 
     async def chat_stream(
@@ -594,6 +608,7 @@ class ChatService:
                     "citations": [],
                     "trace_id": trace_id,
                     "created_at": msg["created_at"],
+                    "usage": self._usage_payload(),
                 }
                 return
             # Stale/unavailable skill: continue as knowledge QA.
@@ -636,6 +651,7 @@ class ChatService:
                 "citations": [],
                 "trace_id": None,
                 "created_at": msg["created_at"],
+                "usage": self._usage_payload(),
             }
             return
 
@@ -737,6 +753,7 @@ class ChatService:
             "citations": citations,
             "trace_id": retrieved.get("trace_id"),
             "created_at": msg["created_at"],
+            "usage": self._usage_payload(),
         }
 
     def list_conversations(

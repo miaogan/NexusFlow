@@ -46,9 +46,22 @@ class GenerationOptions:
     max_tokens: int | None = None
 
 
+@dataclass
+class TokenUsage:
+    """Accumulated token usage reported by the LLM for one request."""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+
 _options: ContextVar[GenerationOptions | None] = ContextVar(
     "rag_generation_options", default=None
 )
+_usage: ContextVar[TokenUsage | None] = ContextVar("rag_token_usage", default=None)
 
 
 def set_generation_options(options: GenerationOptions | None):
@@ -58,6 +71,39 @@ def set_generation_options(options: GenerationOptions | None):
 
 def reset_generation_options(token) -> None:
     _options.reset(token)
+
+
+def start_usage() -> Any:
+    """Starts a fresh usage accumulator for the current request context."""
+    return _usage.set(TokenUsage())
+
+
+def reset_usage(token) -> TokenUsage:
+    """Restores the previous context and returns the accumulated usage."""
+    usage = _usage.get() or TokenUsage()
+    _usage.reset(token)
+    return usage
+
+
+def current_usage() -> TokenUsage | None:
+    return _usage.get()
+
+
+def _record_usage(message: Any) -> None:
+    """Accumulates usage_metadata from a LangChain message or stream chunk."""
+    usage = _usage.get()
+    if usage is None or message is None:
+        return
+    meta = getattr(message, "usage_metadata", None)
+    if not isinstance(meta, dict):
+        return
+    try:
+        prompt = int(meta.get("input_tokens") or 0)
+        completion = int(meta.get("output_tokens") or 0)
+    except (TypeError, ValueError):
+        return
+    usage.prompt_tokens += max(prompt, 0)
+    usage.completion_tokens += max(completion, 0)
 
 
 def chunk_images(chunk: dict[str, Any]) -> list[str]:
@@ -103,6 +149,9 @@ class AnswerGenerator:
                 api_key=api_key,
                 timeout=timeout_seconds,
                 temperature=0.2,
+                # Ask OpenAI-compatible upstreams to report usage on the final
+                # stream chunk so callers can surface real token counts.
+                stream_usage=True,
             )
 
     @property
@@ -164,6 +213,7 @@ class AnswerGenerator:
         async for delta in self._model().astream(  # type: ignore[union-attr]
             messages, **self._tenant_headers(tenant_id)
         ):
+            _record_usage(delta)
             text = str(getattr(delta, "content", "") or "")
             if text:
                 yield text
@@ -184,6 +234,7 @@ class AnswerGenerator:
             self._intent_messages(intent, message, history, summary, memories),
             **self._tenant_headers(tenant_id),
         )
+        _record_usage(result)
         return str(getattr(result, "content", result)).strip()
 
     async def astream_intent(
@@ -202,6 +253,7 @@ class AnswerGenerator:
         async for delta in self._model().astream(  # type: ignore[union-attr]
             messages, **self._tenant_headers(tenant_id)
         ):
+            _record_usage(delta)
             text = str(getattr(delta, "content", "") or "")
             if text:
                 yield text
@@ -384,4 +436,5 @@ class AnswerGenerator:
             self._messages(query, history, chunks, summary, memories, corrected),
             **self._tenant_headers(tenant_id),
         )
+        _record_usage(result)
         return str(getattr(result, "content", result)).strip()
