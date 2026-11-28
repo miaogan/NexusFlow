@@ -54,7 +54,12 @@ def _authorize(request: Request) -> None:
     settings = get_hub_settings()
     if not settings.dynamic_registration:
         raise HTTPException(status_code=403, detail="dynamic registration is disabled")
-    if settings.admin_token and request.headers.get("x-admin-token") != settings.admin_token:
+    # The gateway relays admin writes with x-service-token (never exposing the
+    # admin token to browsers); accept both headers like /v1/call does.
+    supplied = request.headers.get("x-admin-token") or request.headers.get(
+        "x-service-token"
+    )
+    if settings.admin_token and supplied != settings.admin_token:
         raise HTTPException(status_code=401, detail="invalid admin token")
 
 

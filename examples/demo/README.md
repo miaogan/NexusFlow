@@ -28,8 +28,15 @@ python scripts/seed_demo_data.py
 - `demo-viewer / Demo@12345`（只读，`kb:viewer`）
 - `demo-editor / Demo@12345`（可编辑，`kb:editor`）
 - `demo-openai` API Key（明文只显示一次）
+- 默认知识库 1 篇文档，使概览、文件、任务与检索在首次登录时就有数据
+- 引用型知识库「示例知识库（引用）」，复用源库向量
+- 5 个工作流示例：发布 v1/v2、条件分流草稿、人工审批、失败运行
+- 完成/失败/待审批三种运行记录，以及待审批/已批准/已拒绝工具审批
+- 沙箱 SubAgent `demo.chart`、2 个 Webhook（含一条测试投递）、
+  `demo-search` / `demo-revoked` API Key、审计事件与各知识库聊天记录
 
-重复运行是安全的：已存在的知识库、文档、用户会被跳过，权限会重新确认。
+重复运行是安全的：已存在的知识库、文档、用户、工作流与 Webhook 会被跳过。
+只想要知识库与账号时加 `--skip-platform`。
 
 ## 工作流示例
 

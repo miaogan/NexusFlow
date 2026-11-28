@@ -268,6 +268,37 @@ def test_custom_agent_writes_require_dynamic_registration(
     )
 
 
+def test_custom_agent_writes_accept_the_gateway_service_token(
+    client: tuple[TestClient, AgentRegistry, InMemoryAgentStore],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    http, _, _ = client
+    monkeypatch.setattr(
+        admin_api,
+        "get_hub_settings",
+        lambda: HubSettings(
+            _env_file=None, dynamic_registration=True, admin_token="svc-token"
+        ),
+    )
+
+    # The console never sees the admin token; the gateway relays it as
+    # x-service-token, so admin writes must accept that header.
+    created = http.post(
+        "/v1/agents",
+        json=_body(name="gateway.agent"),
+        headers={"x-tenant-id": "t1", "x-service-token": "svc-token"},
+    )
+    assert created.status_code == 201
+    assert (
+        http.post(
+            "/v1/agents",
+            json=_body(name="bad.agent"),
+            headers={"x-tenant-id": "t1", "x-service-token": "wrong"},
+        ).status_code
+        == 401
+    )
+
+
 def test_custom_agent_persist_failure_does_not_register(
     client: tuple[TestClient, AgentRegistry, InMemoryAgentStore],
     monkeypatch: pytest.MonkeyPatch,
