@@ -313,7 +313,7 @@ if not hmac.compare_digest(expected, request.headers["X-NexusFlow-Signature"]):
 - Server 传输：HTTP JSON-RPC `POST /mcp`、HTTP+SSE `GET /mcp/sse` + `POST /mcp/messages?session_id=...`、本地 stdio `python -m nexusflow_agents.mcp.stdio`；网关不代理，建议仅在内网暴露并设置 `AGENT_HUB_ADMIN_TOKEN` 保护。SSE 会话保存在进程内，多副本必须使用粘性会话。
 - `AGENT_HUB_MCP_SERVERS=name=url,...` 在启动时连接外部 MCP；不可达只记录告警并跳过，不影响 Hub 启动。
 - 外部工具注册为 `mcp.<server>.<tool>`，默认 `risk=external` 且需审批；`sandbox.execute` 默认不暴露，确需开放时设置 `AGENT_HUB_MCP_ALLOW_SANDBOX=true`。
-- 三种传输均支持 `initialize` / `tools/list` / `tools/call`；resources / prompts 原语尚未实现。
+- 三种传输均支持 `initialize`、`tools/list|call`、`resources/list|templates/list|read`、`prompts/list|get`。资源为只读：`nexusflow://agents` / `nexusflow://skills` / `nexusflow://tools`（支持 `nexusflow://agents/{name}`、`nexusflow://tools/{name}`）；提示词为 `rag_answer` / `summarize` / `intent_classify`。`resources/subscribe` 与变更推送未实现。
 
 **审计**
 

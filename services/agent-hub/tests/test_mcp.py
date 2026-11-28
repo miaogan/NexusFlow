@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from nexusflow_agents.core.config import HubSettings
+from nexusflow_agents.core.registry import AgentRegistry, AgentSpec
 from nexusflow_agents.core.tooling import ToolRegistry, ToolService, ToolSpec
 from nexusflow_agents.mcp import server as mcp_server
 from nexusflow_agents.mcp import stdio as mcp_stdio
@@ -49,12 +50,22 @@ def _service() -> ToolService:
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     service = _service()
+    registry = AgentRegistry()
+    registry.register(
+        AgentSpec(
+            name="rag",
+            capabilities=frozenset({"intent.classify"}),
+            kind="local",
+            skills=frozenset({"kb.search"}),
+        )
+    )
     monkeypatch.setattr(
         mcp_server,
         "get_hub_settings",
         lambda: HubSettings(_env_file=None, mcp_enabled=True),
     )
     monkeypatch.setattr(mcp_server, "get_tools", lambda: service)
+    monkeypatch.setattr(mcp_server, "get_registry", lambda: registry)
     app = FastAPI()
     app.include_router(mcp_server.router)
     return TestClient(app)
@@ -70,12 +81,94 @@ def _rpc(client: TestClient, method: str, params: dict[str, Any] | None = None):
 def test_mcp_initialize_and_list_hides_sandbox(client: TestClient) -> None:
     init = _rpc(client, "initialize")
     assert init.status_code == 200
+    caps = init.json()["result"]["capabilities"]
+    assert "resources" in caps and "prompts" in caps
     assert init.json()["result"]["serverInfo"]["name"] == "nexusflow-agent-hub"
 
     listing = _rpc(client, "tools/list").json()["result"]["tools"]
     names = {tool["name"] for tool in listing}
     assert "search.query" in names
     assert "sandbox.execute" not in names
+
+
+def test_mcp_lists_and_reads_resources(client: TestClient) -> None:
+    resources = _rpc(client, "resources/list").json()["result"]["resources"]
+    assert {item["uri"] for item in resources} == {
+        "nexusflow://agents",
+        "nexusflow://skills",
+        "nexusflow://tools",
+    }
+
+    templates = _rpc(client, "resources/templates/list").json()["result"][
+        "resourceTemplates"
+    ]
+    assert {item["uriTemplate"] for item in templates} == {
+        "nexusflow://agents/{name}",
+        "nexusflow://tools/{name}",
+    }
+
+    agents = _read_resource(client, "nexusflow://agents")
+    assert [item["name"] for item in agents["agents"]] == ["rag"]
+
+    tool_names = {
+        item["name"] for item in _read_resource(client, "nexusflow://tools")["tools"]
+    }
+    assert "search.query" in tool_names
+    assert "sandbox.execute" not in tool_names
+
+    skills = _read_resource(client, "nexusflow://skills")["skills"]
+    assert skills[0]["skill"] == "kb.search"
+
+
+def test_mcp_reads_single_resource(client: TestClient) -> None:
+    agent = _read_resource(client, "nexusflow://agents/rag")
+    assert agent["name"] == "rag" and agent["kind"] == "local"
+
+    tool = _read_resource(client, "nexusflow://tools/search.query")
+    assert tool["name"] == "search.query"
+    assert tool["inputSchema"]["required"] == ["query"]
+
+    missing = _rpc(
+        client, "resources/read", {"uri": "nexusflow://tools/unknown"}
+    ).json()
+    assert missing["error"]["code"] == -32002
+
+
+def test_mcp_lists_and_gets_prompts(client: TestClient) -> None:
+    prompts = _rpc(client, "prompts/list").json()["result"]["prompts"]
+    names = {item["name"] for item in prompts}
+    assert names == {"rag_answer", "summarize", "intent_classify"}
+
+    result = _rpc(
+        client,
+        "prompts/get",
+        {
+            "name": "rag_answer",
+            "arguments": {"question": "what is RRF?", "context": "[1] fusion"},
+        },
+    ).json()["result"]
+    text = result["messages"][0]["content"]["text"]
+    assert "what is RRF?" in text and "[1] fusion" in text
+
+    summary = _rpc(
+        client,
+        "prompts/get",
+        {"name": "summarize", "arguments": {"text": "long text", "max_chars": "300"}},
+    ).json()["result"]
+    assert "300 字" in summary["messages"][0]["content"]["text"]
+
+    missing = _rpc(
+        client, "prompts/get", {"name": "summarize", "arguments": {}}
+    ).json()
+    assert missing["error"]["code"] == -32602
+
+    unknown = _rpc(client, "prompts/get", {"name": "nope", "arguments": {}}).json()
+    assert unknown["error"]["code"] == -32602
+
+
+def _read_resource(client: TestClient, uri: str) -> dict[str, Any]:
+    resp = _rpc(client, "resources/read", {"uri": uri}).json()
+    return json.loads(resp["result"]["contents"][0]["text"])
 
 
 def test_mcp_calls_tool(client: TestClient) -> None:

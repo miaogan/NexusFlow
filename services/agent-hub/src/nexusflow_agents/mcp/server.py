@@ -5,12 +5,13 @@ import json
 import logging
 import uuid
 from typing import Any
+from urllib.parse import unquote
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from nexusflow_agents.core.config import get_hub_settings
-from nexusflow_agents.core.runtime import get_tools
+from nexusflow_agents.core.runtime import get_registry, get_tools
 from nexusflow_agents.core.tooling import ApprovalRequired, ToolError
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,13 @@ router = APIRouter(tags=["mcp"])
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "nexusflow-agent-hub", "version": "1.0.0"}
+
+# Read-only MCP resources expose the live Hub registry and tool catalog.
+RESOURCE_AGENTS = "nexusflow://agents"
+RESOURCE_SKILLS = "nexusflow://skills"
+RESOURCE_TOOLS = "nexusflow://tools"
+AGENTS_PREFIX = RESOURCE_AGENTS + "/"
+TOOLS_PREFIX = RESOURCE_TOOLS + "/"
 
 # HTTP+SSE transport sessions: session_id -> response queue. Sessions are
 # process-local; multi-replica deployments need sticky sessions or the
@@ -57,6 +65,229 @@ def _tool_snapshot() -> list[dict[str, Any]]:
             }
         )
     return tools
+
+
+def _request_tenant(params: dict[str, Any]) -> str:
+    meta = params.get("_meta") or {}
+    if not isinstance(meta, dict):
+        return ""
+    return str(meta.get("tenantId") or meta.get("tenant_id") or "")
+
+
+def _resource_defs() -> list[dict[str, Any]]:
+    return [
+        {
+            "uri": RESOURCE_AGENTS,
+            "name": "agents",
+            "description": "Registered agents with health, capabilities and skills.",
+            "mimeType": "application/json",
+        },
+        {
+            "uri": RESOURCE_SKILLS,
+            "name": "skills",
+            "description": "Skills visible to the caller tenant.",
+            "mimeType": "application/json",
+        },
+        {
+            "uri": RESOURCE_TOOLS,
+            "name": "tools",
+            "description": "Tools exposed over MCP with their input schemas.",
+            "mimeType": "application/json",
+        },
+    ]
+
+
+def _resource_templates() -> list[dict[str, Any]]:
+    return [
+        {
+            "uriTemplate": AGENTS_PREFIX + "{name}",
+            "name": "agent",
+            "description": "A single registered agent by name.",
+            "mimeType": "application/json",
+        },
+        {
+            "uriTemplate": TOOLS_PREFIX + "{name}",
+            "name": "tool",
+            "description": "A single MCP tool by name.",
+            "mimeType": "application/json",
+        },
+    ]
+
+
+def _read_resource(request_id: Any, params: dict[str, Any]) -> dict[str, Any]:
+    uri = params.get("uri")
+    if not isinstance(uri, str) or not uri:
+        return error_payload(request_id, -32602, "resource uri is required")
+    tenant = _request_tenant(params)
+
+    if uri == RESOURCE_AGENTS:
+        body: Any = {"agents": get_registry().snapshot(tenant)}
+    elif uri == RESOURCE_SKILLS:
+        body = {"skills": get_registry().available_skills(tenant)}
+    elif uri == RESOURCE_TOOLS:
+        body = {"tools": _tool_snapshot()}
+    elif uri.startswith(AGENTS_PREFIX):
+        name = unquote(uri[len(AGENTS_PREFIX) :])
+        matches = [
+            item
+            for item in get_registry().snapshot(tenant)
+            if item.get("name") == name
+        ]
+        if not matches:
+            return error_payload(request_id, -32002, f"resource not found: {uri}")
+        body = matches[0]
+    elif uri.startswith(TOOLS_PREFIX):
+        name = unquote(uri[len(TOOLS_PREFIX) :])
+        body = next(
+            (item for item in _tool_snapshot() if item.get("name") == name), None
+        )
+        if body is None:
+            return error_payload(request_id, -32002, f"resource not found: {uri}")
+    else:
+        return error_payload(request_id, -32002, f"resource not found: {uri}")
+
+    return _result_payload(
+        request_id,
+        {
+            "contents": [
+                {
+                    "uri": uri,
+                    "mimeType": "application/json",
+                    "text": json.dumps(body, ensure_ascii=False, default=str),
+                }
+            ]
+        },
+    )
+
+
+def _prompt_defs() -> list[dict[str, Any]]:
+    return [
+        {
+            "name": "rag_answer",
+            "description": "Answer a question strictly from supplied context.",
+            "arguments": [
+                {"name": "question", "description": "User question.", "required": True},
+                {
+                    "name": "context",
+                    "description": "Retrieved context blocks.",
+                    "required": False,
+                },
+                {
+                    "name": "system",
+                    "description": "Extra system instructions.",
+                    "required": False,
+                },
+            ],
+        },
+        {
+            "name": "summarize",
+            "description": "Compress a conversation or document into a summary.",
+            "arguments": [
+                {"name": "text", "description": "Text to summarize.", "required": True},
+                {
+                    "name": "max_chars",
+                    "description": "Target length in characters (100-4000).",
+                    "required": False,
+                },
+            ],
+        },
+        {
+            "name": "intent_classify",
+            "description": "Classify a user message into the Hub intent space.",
+            "arguments": [
+                {"name": "message", "description": "User message.", "required": True},
+                {
+                    "name": "skills",
+                    "description": "Comma-separated skill names.",
+                    "required": False,
+                },
+            ],
+        },
+    ]
+
+
+def _prompt_text(request_id: Any, params: dict[str, Any]) -> tuple[str, str] | dict:
+    name = str(params.get("name") or "")
+    arguments = params.get("arguments") or {}
+    if not name:
+        return error_payload(request_id, -32602, "prompt name is required")
+    if not isinstance(arguments, dict):
+        return error_payload(request_id, -32602, "arguments must be an object")
+
+    def arg(key: str) -> str:
+        value = arguments.get(key)
+        return str(value).strip() if value is not None else ""
+
+    if name == "rag_answer":
+        question = arg("question")
+        if not question:
+            return error_payload(request_id, -32602, "question is required")
+        from nexusflow_agents.agents.rag.services.llm import SYSTEM_PROMPT
+
+        parts = [SYSTEM_PROMPT]
+        extra = arg("system")
+        if extra:
+            parts.append(extra)
+        context = arg("context")
+        if context:
+            parts.append(f"资料（位于 <context> 标签内）：\n<context>\n{context}\n</context>")
+        parts.append(f"问题：{question}")
+        return name, "\n\n".join(parts)
+
+    if name == "summarize":
+        text = arg("text")
+        if not text:
+            return error_payload(request_id, -32602, "text is required")
+        raw_budget = arg("max_chars")
+        if raw_budget:
+            try:
+                budget = int(raw_budget)
+            except ValueError:
+                return error_payload(request_id, -32602, "max_chars must be an integer")
+        else:
+            budget = 1200
+        budget = max(100, min(budget, 4000))
+        return (
+            name,
+            f"请将以下内容压缩为不超过 {budget} 字的中文摘要，"
+            "保留关键事实、结论与未决问题：\n\n" + text,
+        )
+
+    if name == "intent_classify":
+        message = arg("message")
+        if not message:
+            return error_payload(request_id, -32602, "message is required")
+        skills = arg("skills") or "无"
+        return (
+            name,
+            (
+                "请对用户消息做意图分类，只输出 JSON："
+                '{"intent": "knowledge|chitchat|clarify|skill", '
+                '"skill": "<技能名或空>"}。\n'
+                f"可用技能：{skills}\n用户消息：{message}"
+            ),
+        )
+
+    return error_payload(request_id, -32602, f"unknown prompt: {name}")
+
+
+def _get_prompt(request_id: Any, params: dict[str, Any]) -> dict[str, Any]:
+    result = _prompt_text(request_id, params)
+    if isinstance(result, dict):
+        return result
+    name, text = result
+    description = next(
+        (item["description"] for item in _prompt_defs() if item["name"] == name), ""
+    )
+    return _result_payload(
+        request_id,
+        {
+            "description": description,
+            "messages": [
+                {"role": "user", "content": {"type": "text", "text": text}}
+            ],
+        },
+    )
 
 
 def error_payload(
@@ -104,7 +335,11 @@ def handle_payload(payload: Any) -> dict[str, Any] | None:
             request_id,
             {
                 "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {"tools": {"listChanged": False}},
+                "capabilities": {
+                    "tools": {"listChanged": False},
+                    "resources": {"subscribe": False, "listChanged": False},
+                    "prompts": {"listChanged": False},
+                },
                 "serverInfo": SERVER_INFO,
             },
         )
@@ -114,6 +349,18 @@ def handle_payload(payload: Any) -> dict[str, Any] | None:
         return _result_payload(request_id, {"tools": _tool_snapshot()})
     if method == "tools/call":
         return _call_tool(request_id, params)
+    if method == "resources/list":
+        return _result_payload(request_id, {"resources": _resource_defs()})
+    if method == "resources/templates/list":
+        return _result_payload(
+            request_id, {"resourceTemplates": _resource_templates()}
+        )
+    if method == "resources/read":
+        return _read_resource(request_id, params)
+    if method == "prompts/list":
+        return _result_payload(request_id, {"prompts": _prompt_defs()})
+    if method == "prompts/get":
+        return _get_prompt(request_id, params)
     return error_payload(request_id, -32601, f"method not found: {method}")
 
 
