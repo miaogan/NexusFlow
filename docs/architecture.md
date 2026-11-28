@@ -178,7 +178,7 @@ Agent Hub 是 intent / summary / memory 的中心节点，Hub 与 Agent 构成�
 - **统一契约**：`ToolSpec{name, description, input_schema, output_schema, risk, timeout_ms, requires_approval}`、`CallEnvelope{tenant_id, user_id, trace_id, request_id, approval_id, deadline_ms, budget}`；`AgentSpec` 同步暴露 schema/version/permissions/tenant_scope/tools，供动态注册与 MCP 复用。
 - **推理循环**：`AGENT_HUB_REASONING_ENABLED` 开启后，Chat 在检索后进入 `plan → tool_call → observe → answer`；`max_turns`、工具调用数、Token 与总时限构成硬预算，重复 `tool+args` 抑制，失败回退原 `generate`。SSE 新增 `tool_call` / `tool_result` / `approval_required`。
 - **双向联动**：DAG 的 `agent` 节点将 `config.{agent,capability,input}` 与运行身份发往 Hub `/v1/call`；Hub 的 `workflow.run` 工具优先经网关（携带用户 Bearer）调用 DAG，无用户身份时使用 `WORKFLOW_SERVICE_TOKEN` 直连。网关统一校验 `workflow:run`，workflow 服务校验服务令牌，防止绕过网关。
-- **MCP**：Hub 作为 MCP Server 暴露 `initialize` / `tools/list` / `tools/call`（`POST /mcp`），工具来源为 `ToolRegistry`；作为 Client 通过 `AGENT_HUB_MCP_SERVERS=name=url` 注册外部工具为 `mcp.<server>.<tool>`，外部工具默认 `risk=external` 且需审批，sandbox 默认不暴露。
+- **MCP**：Hub 作为 MCP Server 暴露 `initialize` / `tools/list` / `tools/call`，支持 HTTP JSON-RPC（`POST /mcp`）、HTTP+SSE（`GET /mcp/sse` + `POST /mcp/messages`）与 stdio（`python -m nexusflow_agents.mcp.stdio`）三种传输；工具来源为 `ToolRegistry`。作为 Client 通过 `AGENT_HUB_MCP_SERVERS=name=url` 注册外部工具为 `mcp.<server>.<tool>`，外部工具默认 `risk=external` 且需审批，sandbox 默认不暴露。
 - **人机协同**：高风险工具返回 202 + `approval_id`，`ApprovalService` 保存一次性决策（TTL、租户隔离、重复决策 409）；DAG 的 `human_approval` 节点将运行挂起为 `WAITING_APPROVAL`，检查点写入 `RunStore`，批准后从已完成节点继续，拒绝则终止为 `REJECTED`。`WORKFLOW_RUN_STORE_DRIVER=postgres` 时运行快照与审批单写入 `workflow_executions` / `workflow_approvals`，审批以行锁 + 状态 CAS 保证跨副本只生效一次。
 - **安全与审计**：风险分级、JSON Schema 入参校验、输出大小截断、预算超限 429、工具结果包裹为不可信数据；`AuditLog` 记录工具调用与审批决策，可通过 `GET /v1/audit` 按租户/动作查询；`AGENT_HUB_AUDIT_DRIVER=postgres` 时写入 `audit_logs`。
 - **PII 脱敏**（`RAG_PII_ENABLED`）：模型调用边界统一脱敏提示词、历史、检索片段、摘要、记忆与纠正答案，使用稳定占位符（`{{EMAIL_1}}` / `{{PHONE_1}}` 等）；检索仍用原始 query，回复默认保持脱敏或按配置还原。命中数量写入 `pii.mask` 审计事件，`GET /v1/audit` 支持 `since` / `until` 时间范围检索。
@@ -188,7 +188,7 @@ Agent Hub 是 intent / summary / memory 的中心节点，Hub 与 Agent 构成�
 - 运行、审批与审计状态：默认仍为进程内实现（`MemoryRunStore` / `ApprovalService` / `AuditLog`），重启即丢失；设置 `WORKFLOW_RUN_STORE_DRIVER=postgres`、`AGENT_HUB_APPROVAL_DRIVER=postgres`、`AGENT_HUB_AUDIT_DRIVER=postgres`（配合 `WORKFLOW_RUN_DATABASE_URL` / `AGENT_HUB_STATE_DATABASE_URL`）后分别落库 `workflow_executions` / `workflow_approvals`、`agent_approvals`、`audit_logs`，多副本共享。
 - 多副本：Postgres 模式下同一 run 的挂起与审批对所有副本可见；审批使用 `SELECT ... FOR UPDATE` + 状态 CAS，重复/并发决策返回 409。若继续使用内存模式，仍需粘性路由。
 - 审计留存：`audit_logs` 当前为单表，生产建议按月分区并配置保留策略；Hub 自身仍保留进程内环形缓冲作为降级路径。
-- MCP：仅 HTTP JSON-RPC（initialize / tools/list / tools/call），未实现 SSE / stdio 传输与 resources / prompts 原语。
+- MCP：支持 HTTP JSON-RPC / HTTP+SSE / stdio 三种传输（initialize / tools/list / tools/call），resources / prompts 原语尚未实现；SSE 会话为进程内存储，多副本需粘性会话。
 - 推理输出：工具调用与结果逐条流式，最终回答以单个 `token` 事件下发；预算耗尽或工具异常回退普通生成。
 - `/v1/call` 的 agent 分支始终可用，tool 分支需 `AGENT_HUB_TOOLS_ENABLED`；`/mcp`、`/v1/call`、`/v1/tools` 为 Hub 内部接口，外部经 Gateway `/v1/agents/{name}/call` 调用自定义 SubAgent。
 
@@ -272,7 +272,7 @@ V2.0 将切块从 Go 迁移至 LlamaIndex 服务。LlamaIndex 按标题层级与
 
 网关鉴权同时接受 JWT 与 API Key：`Authorization: Bearer nf-sk-...` 经哈希命中后构造 `tenant_id=apikey:<id>` 的主体，权限点直接取自作用域，并按 Key 的 `rate_limit_rpm` 独立限流；JWT 路径保持不变。API Key 没有知识库角色，因此 `allowed_kb_ids` 即为其知识库边界（空列表代表租户全量），命中后以 viewer 级只读权限访问检索与问答。
 
-`POST /v1/openai/chat/completions` 是 RAG 链路的协议适配层：把 OpenAI `messages` 拆成「最后一条用户消息 + 历史」，以 `stateless=true` 调用 Agent Hub（历史随请求传入、不写会话库），再映射回 `chat.completion`。流式响应把 Hub 的 `token` 事件转成 `chat.completion.chunk`，`sources`/`done` 中的引用透传到最终 chunk，并以 `data: [DONE]` 结束；非流式响应在 `choices[0].message.citations` 与顶层 `citations` 同时返回引用。`kb_id` 可来自请求体、`metadata.kb_id` 或 `X-KB-ID` 头。
+`POST /v1/openai/chat/completions` 是 RAG 链路的协议适配层：把 OpenAI `messages` 拆成「最后一条用户消息 + 历史」，以 `stateless=true` 调用 Agent Hub（历史随请求传入、不写会话库），再映射回 `chat.completion`。`system` / `developer` 消息会拼接为 `system_prompt`（上限 8000 字符）注入生成；`temperature`（0–2）与 `max_tokens`（兼容 `max_completion_tokens`，上限 32768）透传到 Hub，由 `GenerationOptions` 在当前请求上下文内绑定到 LLM。流式响应把 Hub 的 `token` 事件转成 `chat.completion.chunk`，`sources`/`done` 中的引用透传到最终 chunk，并以 `data: [DONE]` 结束；非流式响应在 `choices[0].message.citations` 与顶层 `citations` 同时返回引用。`usage` 仍按字符数估算（约 4 字符/token），并把 system prompt 计入 `prompt_tokens`。`kb_id` 可来自请求体、`metadata.kb_id` 或 `X-KB-ID` 头。
 
 ### 6.7 事件 Webhook 与投递
 
@@ -280,7 +280,7 @@ V2.0 将切块从 Go 迁移至 LlamaIndex 服务。LlamaIndex 按标题层级与
 
 事件源分两类：网关在审批决策成功后直接产生 `approval.decided`；processing-worker 在解析失败/索引完成时产生 `task.failed` / `index.completed` / `task.completed`，workflow-engine 在持久化 run 结束时产生 `workflow.completed` / `workflow.failed`。工作流引擎还通过节点级 `EventSink` 发出 `workflow.node.started` / `completed` / `failed` / `waiting_approval` / `skipped`（循环子运行标记 `Nested` 不重复上报）。后两者通过 `GATEWAY_URL` 调用 `POST /v1/internal/events`，由网关用 `WEBHOOK_EVENTS_TOKEN` 校验后统一分发，避免每个服务各自维护订阅库。
 
-投递采用 HTTP POST，body 为 `{id,type,tenant_id,created_at,data}`，签名头为 `X-NexusFlow-Signature: sha256=HMAC_SHA256(secret, body)`，另有 `X-NexusFlow-Event` / `X-NexusFlow-Delivery` / `X-NexusFlow-Timestamp`。非 2xx 或网络错误按指数退避重试（默认 5 次，基数 1s，上限 60s），每条订阅独立投递并记录响应码与响应体（截断 2KB）；订阅删除时级联清理投递日志。运维接口提供 `test`（合成 `webhook.test`）、`rotate-secret`（轮换密钥）与 `deliveries/{id}/replay`（重放历史载荷），均异步执行并写入投递日志。
+投递采用 HTTP POST，body 为 `{id,type,tenant_id,created_at,data}`，签名头为 `X-NexusFlow-Signature: sha256=HMAC_SHA256(secret, body)`，另有 `X-NexusFlow-Event` / `X-NexusFlow-Delivery` / `X-NexusFlow-Timestamp`。目标策略默认拒绝回环/私网/链路本地地址，并在创建与每次投递时重新解析主机（`WEBHOOK_ALLOW_PRIVATE` 可放宽）。非 2xx 或网络错误按指数退避重试（默认 5 次，基数 1s，上限 60s），每条订阅独立投递并记录响应码与响应体（截断 2KB）；订阅删除时级联清理投递日志。运维接口提供 `test`（合成 `webhook.test`）、`rotate-secret`（轮换密钥）与 `deliveries/{id}/replay`（重放历史载荷），均异步执行并写入投递日志。
 
 ## 7. 动态节点弹性伸缩
 

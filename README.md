@@ -360,7 +360,7 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 | POST | `/v1/webhooks/:id/test` | `webhook:write` | 测试投递（`webhook.test`） |
 | POST | `/v1/webhooks/:id/rotate-secret` | `webhook:write` | 轮换签名密钥 |
 | POST | `/v1/webhooks/:id/deliveries/:deliveryId/replay` | `webhook:write` | 重放历史投递 |
-| POST | `/v1/openai/chat/completions` | API Key `chat:completions` 或 JWT `search:use` | OpenAI 兼容问答（流式 / 非流式，引用透传） |
+| POST | `/v1/openai/chat/completions` | API Key `chat:completions` 或 JWT `search:use` | OpenAI 兼容问答（流式 / 非流式，引用透传；支持 `system`、`temperature`、`max_tokens`） |
 
 首次启动会自动种子管理员：`admin / admin123`（可用 `SEED_ADMIN_*` 覆盖）。控制台 `/login` 登录后，`admin` 可在"用户管理"页创建账号、分配角色、启停用户，并新建自定义角色。未登录可点"以匿名身份浏览"（需 `ALLOW_ANONYMOUS=true`），匿名身份仅有 `search:use`，可使用检索与智能问答，但无任何管理权限。
 
@@ -402,13 +402,13 @@ flowchart LR
 - **工具契约与通用调用**（`AGENT_HUB_TOOLS_ENABLED`）：`ToolSpec{input/output schema, risk, timeout, requires_approval}` 与 `CallEnvelope{tenant,user,trace,request,approval,deadline,budget}` 统一；`POST /v1/call` 的 agent 分支始终可用，tool 分支需开启该开关；`GET /v1/tools` 列出工具。
 - **多轮自助推理**（`AGENT_HUB_REASONING_ENABLED`）：LLM `bind_tools` 后循环 `plan → tool_call → observe → answer`；受 `MAX_TURNS` / 工具调用数 / Token / 总时限预算约束，重复 `tool+args` 自动抑制，工具失败交回模型决策，预算耗尽回退原生成。
 - **DAG 双向联动**（`AGENT_HUB_WORKFLOW_ENABLED` / `WORKFLOW_AGENT_NODE`）：DAG 新增 `agent` 节点调用 Hub `/v1/call`；Hub 的 `workflow.run` 工具经网关（携带用户身份）或服务令牌触发 DAG。`x-tenant-id` / `x-trace-id` / deadline 全程透传；网关 `/v1/workflows/*` 统一要求 `workflow:run`。
-- **MCP**（`AGENT_HUB_MCP_ENABLED`）：`POST /mcp` 提供 `initialize` / `tools/list` / `tools/call`；`AGENT_HUB_MCP_SERVERS=name=url,...` 接入外部 MCP，工具注册为 `mcp.<server>.<tool>`。外部工具默认需审批，sandbox 默认不对外暴露。
+- **MCP**（`AGENT_HUB_MCP_ENABLED`）：`POST /mcp` 提供 HTTP JSON-RPC；`GET /mcp/sse` + `POST /mcp/messages?session_id=...` 提供 HTTP+SSE 传输；本地 stdio 通过 `python -m nexusflow_agents.mcp.stdio` 使用（newline-delimited JSON-RPC，日志走 stderr）。`AGENT_HUB_MCP_SERVERS=name=url,...` 接入外部 MCP，工具注册为 `mcp.<server>.<tool>`。外部工具默认需审批，sandbox 默认不对外暴露。
 - **人机协同**（`AGENT_HUB_HITL_ENABLED` / `HITL_ENABLED`）：高风险工具不执行，返回 202 + `approval_id`，由 `POST /v1/approvals/{id}/decide` 批准/拒绝后重试；DAG 的 `human_approval` 节点使 run 进入 `WAITING_APPROVAL` 并落盘检查点，经 `/v1/workflows/runs/{id}/approve|resume` 恢复，重复审批返回 409。`WORKFLOW_RUN_STORE_DRIVER=postgres` 时运行与审批写入 `workflow_executions` / `workflow_approvals`，跨副本共享且审批只生效一次。
 - **安全护栏**：工具风险分级（`read/write/execute/external`）、入参 JSON Schema、输出截断、预算超限 429、工具与审批审计（`GET /v1/audit`），工具结果以不可信数据包裹以防提示注入；网关侧 `/v1/sandbox/execute` 要求 `sandbox:execute`。
 - **PII 脱敏**（`RAG_PII_ENABLED`）：提示词、历史、检索片段、摘要、记忆与纠正答案在进入模型前替换为稳定占位符（`{{EMAIL_1}}` / `{{PHONE_1}}` 等，支持邮箱、手机号、身份证、银行卡与 IPv4）；检索仍使用原始 query，保证按手机号/邮箱检索可用。回复默认保持脱敏并对模型新生成的 PII 再次脱敏，`RAG_PII_RESTORE_OUTPUT=true` 可还原。每次命中会写入 `pii.mask` 审计事件（类型与数量），可按租户与时间检索。
 - **LLM 网关**（`backend/internal/llmgateway`）：OpenAI 兼容 `POST /v1/chat/completions`（含 SSE）与 `/v1/embeddings`，按主/备通道自动切换，连续失败触发熔断（阈值/冷却可配）；按 `x-tenant-id` 累计每日 token，超限前置返回 `429 quota_exceeded`，预留额度原子扣减并在响应后按实际 usage 修正。把 `RAG_LLM_BASE_URL` 等指向 `http://llm-gateway:8082/v1` 即可复用；RAG 生成会透传租户头。
 - **开放 API / OpenAI 兼容**（`API_KEY_DRIVER=memory|postgres`）：管理员通过 `POST /v1/api-keys` 签发 `nf-sk-*` 密钥（明文仅返回一次，库中只存 SHA-256），可限定 `allowed_kb_ids`、`scopes`（`chat:completions` / `search:use`）、`rate_limit_rpm` 与 `expires_in_days`；`DELETE /v1/api-keys/{id}` 吊销，密钥与 JWT 并存。`POST /v1/openai/chat/completions` 兼容 OpenAI Chat Completions：非流式返回 `chat.completion`，流式逐 token 返回 `chat.completion.chunk` 并以 `data: [DONE]` 结束；`messages` 转为 Hub 无状态调用（历史随请求传入、不写会话库），引用在 `choices[0].message.citations` 与顶层 `citations` 透传，`kb_id` 可放在请求体、`metadata.kb_id` 或 `X-KB-ID` 头。
-- **事件 Webhook**（`WEBHOOK_DRIVER=memory|postgres`）：`POST /v1/webhooks` 按租户订阅 `task.completed` / `task.failed` / `index.completed` / `workflow.completed` / `workflow.failed` / `workflow.node.*` / `approval.decided`（或 `*`），可指定目标 URL 与签名密钥（未提供时自动生成并仅返回一次）。投递携带 `X-NexusFlow-Signature: sha256=<HMAC>`、事件、投递 ID 与时间戳头；失败按指数退避重试（`WEBHOOK_MAX_ATTEMPTS` / `WEBHOOK_RETRY_BASE`），每次尝试写入 `webhook_deliveries`，可经 `GET /v1/webhooks/{id}/deliveries` 查看。支持 `POST /v1/webhooks/{id}/test` 测试投递、`POST .../rotate-secret` 轮换密钥（新密钥仅返回一次）与 `POST .../deliveries/{deliveryId}/replay` 重放历史载荷。processing-worker 与 workflow-engine 通过 `GATEWAY_URL` + `WEBHOOK_EVENTS_TOKEN` 回调 `POST /v1/internal/events`，由网关统一分发；审批结果由网关直接产生。Workflow 引擎的节点级 `EventSink` 会发出 `workflow.node.started` / `completed` / `failed` / `waiting_approval` / `skipped`，循环子运行不重复上报。
+- **事件 Webhook**（`WEBHOOK_DRIVER=memory|postgres`）：`POST /v1/webhooks` 按租户订阅 `task.completed` / `task.failed` / `index.completed` / `workflow.completed` / `workflow.failed` / `workflow.node.*` / `approval.decided`（或 `*`），可指定目标 URL 与签名密钥（未提供时自动生成并仅返回一次）。目标 URL 默认拒绝回环/私网/链路本地地址，并在每次投递时重新解析以防 DNS rebinding（`WEBHOOK_ALLOW_PRIVATE` 可放宽，仅建议本地开发使用）。投递携带 `X-NexusFlow-Signature: sha256=<HMAC>`、事件、投递 ID 与时间戳头；失败按指数退避重试（`WEBHOOK_MAX_ATTEMPTS` / `WEBHOOK_RETRY_BASE`），每次尝试写入 `webhook_deliveries`，可经 `GET /v1/webhooks/{id}/deliveries` 查看。支持 `POST /v1/webhooks/{id}/test` 测试投递、`POST .../rotate-secret` 轮换密钥（新密钥仅返回一次）与 `POST .../deliveries/{deliveryId}/replay` 重放历史载荷。processing-worker 与 workflow-engine 通过 `GATEWAY_URL` + `WEBHOOK_EVENTS_TOKEN` 回调 `POST /v1/internal/events`，由网关统一分发；审批结果由网关直接产生。Workflow 引擎的节点级 `EventSink` 会发出 `workflow.node.started` / `completed` / `failed` / `waiting_approval` / `skipped`，循环子运行不重复上报。
 - **图文多模态**：MinerU 结果 ZIP 中的图片由 Worker 提取并落盘到 `<tenant>/<kb>/parsed/<task>/images/`，Markdown 图片链接改写为 `/v1/media`；切块把 `image_urls` 写入节点 metadata，检索结果与问答引用返回配图，控制台展示缩略图并支持点击放大。
 
 新增 / 变更接口：
@@ -426,9 +426,11 @@ flowchart LR
 | `GET /v1/tools` | `AGENT_HUB_TOOLS_ENABLED` 或 `AGENT_HUB_WORKFLOW_ENABLED` | 工具契约列表 |
 | `POST /v1/agents/{name}/call` | `search:use`；sandbox agent 另需 `sandbox:execute` | Gateway 调用自定义 SubAgent |
 | `GET /v1/skills` | Hub 内部 | 租户可见技能（供 Intent/Router 使用） |
-| `POST /mcp` | `AGENT_HUB_MCP_ENABLED` | MCP Server：initialize / tools/list / tools/call（直连 Agent Hub） |
+| `POST /mcp` | `AGENT_HUB_MCP_ENABLED` | MCP Server（HTTP JSON-RPC）：initialize / tools/list / tools/call |
+| `GET /mcp/sse`、`POST /mcp/messages?session_id=` | `AGENT_HUB_MCP_ENABLED` | MCP Server（HTTP+SSE 传输） |
+| `python -m nexusflow_agents.mcp.stdio` | `AGENT_HUB_MCP_ENABLED` | MCP Server（stdio 传输，本地进程） |
 | `GET/POST /v1/api-keys`、`DELETE /v1/api-keys/{id}` | `apikey:write` | 签发 / 列出 / 吊销租户 API Key（明文仅创建时返回） |
-| `POST /v1/openai/chat/completions` | API Key `chat:completions` 或 JWT `search:use` | OpenAI 兼容问答（流式 / 非流式，引用透传） |
+| `POST /v1/openai/chat/completions` | API Key `chat:completions` 或 JWT `search:use` | OpenAI 兼容问答（流式 / 非流式，引用透传；支持 `system`、`temperature`、`max_tokens`） |
 | `GET/POST /v1/webhooks`、`DELETE /v1/webhooks/{id}` | `webhook:write` | Webhook 订阅列表 / 创建 / 删除 |
 | `GET /v1/webhooks/{id}/deliveries` | `webhook:write` | 投递日志（状态、尝试次数、HTTP 状态与响应） |
 | `POST /v1/webhooks/{id}/test` | `webhook:write` | 发送 `webhook.test` 测试投递 |
@@ -657,6 +659,6 @@ make up / down     # 容器编排启停
 - 用户与角色支持三种存储：`memory`（dev-all 单进程默认）、`redis`（`IDENTITY_DRIVER=redis`）与 `postgres`（`IDENTITY_DRIVER=postgres` + `IDENTITY_DATABASE_URL`），后两者供独立部署的 Auth / User 服务跨进程共享；postgres 启动时自动建表并复用内置角色种子。Compose 真机冒烟已验证自动建表、种子管理员登录及 Gateway 身份读取。
 - 登出通过令牌吊销名单即时生效：JWT 携带 `jti`，登出时将该 id 写入 `TOKEN_BLACKLIST_DRIVER`（`memory` 单进程 / `redis` 供 gateway 与 auth-service 共享）并设置剩余有效期 TTL；网关在每次鉴权时拦截已吊销的 access token，auth-service 在 validate/refresh 时拒绝已吊销的 refresh token。Redis 不可用时自动降级为内存名单并告警。
 - 工具调用、审批、审计与工作流运行状态默认仍为进程内实现（`ToolService` / `ApprovalService` / `AuditLog` / `MemoryRunStore`），重启会丢失；生产多副本按需开启 `AGENT_HUB_APPROVAL_DRIVER=postgres`、`AGENT_HUB_AUDIT_DRIVER=postgres`（`AGENT_HUB_STATE_DATABASE_URL`）与 `WORKFLOW_RUN_STORE_DRIVER=postgres`（`WORKFLOW_RUN_DATABASE_URL`），分别落库 `agent_approvals` / `audit_logs` 与 `workflow_executions` / `workflow_approvals`。`audit_logs` 建议按月分区并配置保留策略。
-- MCP 当前实现 HTTP JSON-RPC（`initialize` / `tools/list` / `tools/call`），未实现 SSE / stdio 传输及 resources / prompts 原语；外部工具默认 `risk=external` 且需审批，`sandbox.execute` 默认不通过 MCP 暴露（`AGENT_HUB_MCP_ALLOW_SANDBOX` 显式开启）。
+- MCP 支持 HTTP JSON-RPC（`POST /mcp`）、HTTP+SSE（`GET /mcp/sse` + `POST /mcp/messages`）与 stdio（`python -m nexusflow_agents.mcp.stdio`）三种传输，均复用同一套 `initialize` / `tools/list` / `tools/call` 分发；resources / prompts 原语尚未实现。外部工具默认 `risk=external` 且需审批，`sandbox.execute` 默认不通过 MCP 暴露（`AGENT_HUB_MCP_ALLOW_SANDBOX` 显式开启）。
 - 推理模式为保证工具循环的确定性，最终回答以单个 `token` 事件下发，`tool_call` / `tool_result` 逐条下发；预算耗尽或工具异常会回退到普通生成。
 - 审批重试：Chat 请求携带 `approval_id` 重放同一问题；`/v1/call` 通过 `envelope.approval_id` 重放；DAG 审批使用 `/v1/workflows/runs/{id}/approve|resume`。

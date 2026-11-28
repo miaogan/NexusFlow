@@ -20,7 +20,7 @@ Agent Hub 已完成单容器与星型调度，但目前仍是固定能力（inte
 | P0 统一契约 | 已完成 | `ToolSpec` / `ToolRegistry` / `ToolService`、`CallEnvelope`、`AgentSpec` 契约扩展、`POST /v1/call`、`GET /v1/tools` | — |
 | P1 双向联动 | 已完成 | Go `agent` 节点、`ExecutionContext` 身份元数据、Gateway `/v1/workflows/*` 代理、服务令牌、Hub `workflow.run` 工具 | `/v1/call` 的 agent 分支恒可用；tool 分支需 `AGENT_HUB_TOOLS_ENABLED` |
 | P2 推理循环 | 已完成 | `ReasoningLoop`（预算/重复检测/失败回退）、`tool_call` / `tool_result` / `approval_required` SSE、`ChatService` 集成 | 推理模式的最终回答以单个 `token` 事件下发 |
-| P3 MCP 与契约 | 已完成 | `POST /mcp`（initialize / tools/list / tools/call）、MCP Client、`mcp.<server>.<tool>`、动态注册复用同一 Schema | HTTP JSON-RPC；SSE / stdio 传输未实现 |
+| P3 MCP 与契约 | 已完成 | `POST /mcp`（initialize / tools/list / tools/call）、`GET /mcp/sse` + `POST /mcp/messages`、stdio 入口、MCP Client、`mcp.<server>.<tool>`、动态注册复用同一 Schema | 支持 HTTP JSON-RPC / HTTP+SSE / stdio；resources / prompts 未实现 |
 | P4 人机协同 | 已完成 | `ApprovalService`、高风险工具 202 + `approval_id`、审批 API、`human_approval` 节点、`RunStore`、runs / approve / resume、Web `/approvals` | Postgres 运行/审批/审计已接入；节点级 `EventSink` 已交付（`workflow.node.*`） |
 | P5 安全护栏 | 已完成 | 风险分级、JSON Schema、输出截断、预算 429、审计、工具结果不可信包裹、sandbox 权限与 local 后端生产保护 | 审计为进程内环形缓冲；PII 脱敏不属于本期 |
 
@@ -84,7 +84,7 @@ Agent Hub 已完成单容器与星型调度，但目前仍是固定能力（inte
 - `AgentSpec` 暴露 `input_schema` / `output_schema` / `version` / `permissions` / `tenant_scope`。
 - 动态注册接口复用同一校验；MCP tool schema 与 `ToolSpec` 同源。
 
-验证：`curl :8001/mcp` 完成 initialize/list/call；外部 MCP tool 注册后需审批，批准后可在 ReasoningLoop 中被调用。
+验证：`curl :8001/mcp` 完成 initialize/list/call；`GET /mcp/sse` 获取 endpoint 后经 `POST /mcp/messages` 收发；`python -m nexusflow_agents.mcp.stdio` 处理 stdin/stdout JSON-RPC；外部 MCP tool 注册后需审批，批准后可在 ReasoningLoop 中被调用。
 
 ## P4 人机协同（HITL）
 

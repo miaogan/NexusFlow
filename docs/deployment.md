@@ -278,6 +278,7 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 - 吊销：`DELETE /v1/api-keys/{id}` 将状态置为 `REVOKED`，已吊销或过期的密钥立即返回 401。
 - 调用：把 OpenAI SDK 的 `base_url` 指向 `http://gateway:8080/v1/openai`，`api_key` 填 `nf-sk-...`，模型名任意；`kb_id` 可放在请求体、`metadata.kb_id` 或 `X-KB-ID` 头。未指定时使用 Key 白名单中的第一个知识库，白名单为空则使用 `default`。
 - 流式响应为标准 SSE（`chat.completion.chunk` + `data: [DONE]`）；引用位于最终 chunk 的 `citations` 字段，非流式同时在 `choices[0].message.citations` 与顶层 `citations`。
+- 生成参数：`system` / `developer` 消息拼接为 `system_prompt`（上限 8000 字符）注入；`temperature` 取值 0–2，`max_tokens`（兼容 `max_completion_tokens`）取值 1–32768，越界返回 400。`usage` 为字符估算值，并把 system prompt 计入 `prompt_tokens`。
 - 每个 Key 按 `rate_limit_rpm` 独立限流，超限返回 429（`rate_limit_exceeded`）；Key 的使用量为只读作用域，不会获得 `kb:write` / `user:write` 等管理权限。`chat:completions` 会隐含 `search:use`，因为 RAG 问答需要回调网关检索。
 
 **事件 Webhook**
@@ -297,7 +298,8 @@ if not hmac.compare_digest(expected, request.headers["X-NexusFlow-Signature"]):
 - 重试：非 2xx 或网络错误按指数退避（`WEBHOOK_MAX_ATTEMPTS` 默认 5，`WEBHOOK_RETRY_BASE` 默认 1s，上限 60s）；每次尝试更新 `webhook_deliveries`，`GET /v1/webhooks/{id}/deliveries` 查看状态、HTTP 码与响应体（截断 2KB）。
 - 运维操作：`POST /v1/webhooks/{id}/test` 发送 `webhook.test` 测试投递；`POST /v1/webhooks/{id}/rotate-secret` 轮换 HMAC 密钥（新密钥仅返回一次，旧密钥立即失效）；`POST /v1/webhooks/{id}/deliveries/{deliveryId}/replay` 以保存的载荷重新投递。三者均为异步调度，结果写入投递日志。
 - 事件接入：processing-worker / workflow-engine 使用 `GATEWAY_URL` + `WEBHOOK_EVENTS_TOKEN` 调用 `POST /v1/internal/events`；`WEBHOOK_EVENTS_TOKEN` 为空时该端点禁用（返回 503），审批事件仍由网关本地产生。
-- 边界：目标 URL 仅校验 `http(s)` 与主机名，未做私网地址黑名单，生产环境需在出口侧限制可达网段。
+- 目标策略：`WEBHOOK_ALLOW_PRIVATE` 默认在 `APP_ENV=prod` 时为 `false`，拒绝回环、私网、链路本地与组播地址；创建订阅与每次投递都会重新解析主机，防止 DNS rebinding。本地联调需要指向 `127.0.0.1` 时显式设为 `true`。
+- 边界：投放目标仅支持 `http(s)`；未做域名白名单，如需更严格控制可在出口网关限制可达网段。
 
 **审批**
 
@@ -308,10 +310,10 @@ if not hmac.compare_digest(expected, request.headers["X-NexusFlow-Signature"]):
 
 **MCP**
 
-- Server 入口为 Agent Hub 的 `POST /mcp`（HTTP JSON-RPC），网关不代理；建议仅在内网暴露，并设置 `AGENT_HUB_ADMIN_TOKEN` 保护。
+- Server 传输：HTTP JSON-RPC `POST /mcp`、HTTP+SSE `GET /mcp/sse` + `POST /mcp/messages?session_id=...`、本地 stdio `python -m nexusflow_agents.mcp.stdio`；网关不代理，建议仅在内网暴露并设置 `AGENT_HUB_ADMIN_TOKEN` 保护。SSE 会话保存在进程内，多副本必须使用粘性会话。
 - `AGENT_HUB_MCP_SERVERS=name=url,...` 在启动时连接外部 MCP；不可达只记录告警并跳过，不影响 Hub 启动。
 - 外部工具注册为 `mcp.<server>.<tool>`，默认 `risk=external` 且需审批；`sandbox.execute` 默认不暴露，确需开放时设置 `AGENT_HUB_MCP_ALLOW_SANDBOX=true`。
-- 当前仅支持 `initialize` / `tools/list` / `tools/call`，未实现 SSE / stdio 传输与 resources / prompts。
+- 三种传输均支持 `initialize` / `tools/list` / `tools/call`；resources / prompts 原语尚未实现。
 
 **审计**
 
