@@ -108,6 +108,30 @@ func (s *PostgresStore) CreateSubscription(ctx context.Context, sub Subscription
 	return sub, nil
 }
 
+func (s *PostgresStore) UpdateSubscription(ctx context.Context, sub Subscription) (Subscription, error) {
+	events, err := json.Marshal(nonNilStrings(sub.Events))
+	if err != nil {
+		return Subscription{}, fmt.Errorf("webhook: marshal events: %w", err)
+	}
+	row := s.db.QueryRowContext(ctx,
+		`UPDATE webhooks SET
+			name = $3, target_url = $4, secret_encrypted = $5, events = $6,
+			is_active = $7, updated_at = now()
+		 WHERE tenant_id = $1 AND id = $2
+		 RETURNING `+subscriptionColumns,
+		sub.TenantID, sub.ID, sub.Name, sub.TargetURL, sub.SecretEncrypted,
+		events, sub.IsActive,
+	)
+	updated, err := scanSubscription(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Subscription{}, ErrNotFound
+	}
+	if err != nil {
+		return Subscription{}, fmt.Errorf("webhook: update subscription: %w", err)
+	}
+	return updated, nil
+}
+
 func (s *PostgresStore) ListSubscriptions(ctx context.Context, tenantID string) ([]Subscription, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+subscriptionColumns+` FROM webhooks WHERE tenant_id = $1 ORDER BY created_at DESC`,
@@ -198,6 +222,22 @@ func (s *PostgresStore) UpdateDelivery(ctx context.Context, d Delivery) error {
 		return fmt.Errorf("webhook: update delivery: %w", err)
 	}
 	return nil
+}
+
+func (s *PostgresStore) GetDelivery(ctx context.Context, tenantID, webhookID, id string) (Delivery, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+deliveryColumns+` FROM webhook_deliveries
+		 WHERE id = $1 AND tenant_id = $2 AND webhook_id = $3`,
+		id, tenantID, webhookID,
+	)
+	delivery, err := scanDelivery(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Delivery{}, ErrNotFound
+	}
+	if err != nil {
+		return Delivery{}, fmt.Errorf("webhook: get delivery: %w", err)
+	}
+	return delivery, nil
 }
 
 func (s *PostgresStore) ListDeliveries(ctx context.Context, tenantID, webhookID string, limit int) ([]Delivery, error) {

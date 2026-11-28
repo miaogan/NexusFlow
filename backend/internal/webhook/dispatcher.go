@@ -71,12 +71,65 @@ func (d *Dispatcher) Publish(_ context.Context, evt Event) {
 		return
 	}
 	evt = normalizeEvent(evt)
-	go func() {
-		d.sem <- struct{}{}
-		defer func() { <-d.sem }()
+	d.enqueue(func() {
 		if err := d.Dispatch(context.Background(), evt); err != nil {
 			d.logger.Warn("webhook dispatch failed", "type", evt.Type, "error", err)
 		}
+	})
+}
+
+// SendTest delivers a synthetic webhook.test event directly to one
+// subscription, bypassing its event filter.
+func (d *Dispatcher) SendTest(ctx context.Context, tenantID, webhookID string) error {
+	sub, err := d.store.GetSubscription(ctx, tenantID, webhookID)
+	if err != nil {
+		return err
+	}
+	evt := normalizeEvent(Event{
+		Type: EventWebhookTest, TenantID: tenantID,
+		Payload: map[string]any{
+			"webhook_id": webhookID,
+			"message":    "NexusFlow webhook test delivery",
+		},
+	})
+	d.enqueue(func() { d.deliver(context.Background(), sub, evt) })
+	return nil
+}
+
+// Replay re-delivers a stored delivery payload to its subscription. Missing
+// deliveries or subscriptions return ErrNotFound.
+func (d *Dispatcher) Replay(ctx context.Context, tenantID, webhookID, deliveryID string) error {
+	delivery, err := d.store.GetDelivery(ctx, tenantID, webhookID, deliveryID)
+	if err != nil {
+		return err
+	}
+	sub, err := d.store.GetSubscription(ctx, tenantID, webhookID)
+	if err != nil {
+		return err
+	}
+	var envelope struct {
+		Type string         `json:"type"`
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(delivery.Payload, &envelope); err != nil {
+		return fmt.Errorf("webhook: decode delivery payload: %w", err)
+	}
+	eventType := envelope.Type
+	if eventType == "" {
+		eventType = delivery.EventType
+	}
+	evt := normalizeEvent(Event{
+		Type: eventType, TenantID: delivery.TenantID, Payload: envelope.Data,
+	})
+	d.enqueue(func() { d.deliver(context.Background(), sub, evt) })
+	return nil
+}
+
+func (d *Dispatcher) enqueue(fn func()) {
+	go func() {
+		d.sem <- struct{}{}
+		defer func() { <-d.sem }()
+		fn()
 	}()
 }
 

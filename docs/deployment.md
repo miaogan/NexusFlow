@@ -295,6 +295,7 @@ if not hmac.compare_digest(expected, request.headers["X-NexusFlow-Signature"]):
 ```
 
 - 重试：非 2xx 或网络错误按指数退避（`WEBHOOK_MAX_ATTEMPTS` 默认 5，`WEBHOOK_RETRY_BASE` 默认 1s，上限 60s）；每次尝试更新 `webhook_deliveries`，`GET /v1/webhooks/{id}/deliveries` 查看状态、HTTP 码与响应体（截断 2KB）。
+- 运维操作：`POST /v1/webhooks/{id}/test` 发送 `webhook.test` 测试投递；`POST /v1/webhooks/{id}/rotate-secret` 轮换 HMAC 密钥（新密钥仅返回一次，旧密钥立即失效）；`POST /v1/webhooks/{id}/deliveries/{deliveryId}/replay` 以保存的载荷重新投递。三者均为异步调度，结果写入投递日志。
 - 事件接入：processing-worker / workflow-engine 使用 `GATEWAY_URL` + `WEBHOOK_EVENTS_TOKEN` 调用 `POST /v1/internal/events`；`WEBHOOK_EVENTS_TOKEN` 为空时该端点禁用（返回 503），审批事件仍由网关本地产生。
 - 边界：目标 URL 仅校验 `http(s)` 与主机名，未做私网地址黑名单，生产环境需在出口侧限制可达网段。
 

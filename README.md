@@ -357,6 +357,9 @@ PENDING → FETCHED → PARSING → PARSED → CHUNKED → EMBEDDED → INDEXED 
 | GET/POST | `/v1/webhooks` | `webhook:write` | 租户 Webhook 订阅列表 / 创建（密钥仅创建时返回） |
 | DELETE | `/v1/webhooks/:id` | `webhook:write` | 删除订阅（级联删除投递日志） |
 | GET | `/v1/webhooks/:id/deliveries` | `webhook:write` | 投递日志与重试状态 |
+| POST | `/v1/webhooks/:id/test` | `webhook:write` | 测试投递（`webhook.test`） |
+| POST | `/v1/webhooks/:id/rotate-secret` | `webhook:write` | 轮换签名密钥 |
+| POST | `/v1/webhooks/:id/deliveries/:deliveryId/replay` | `webhook:write` | 重放历史投递 |
 | POST | `/v1/openai/chat/completions` | API Key `chat:completions` 或 JWT `search:use` | OpenAI 兼容问答（流式 / 非流式，引用透传） |
 
 首次启动会自动种子管理员：`admin / admin123`（可用 `SEED_ADMIN_*` 覆盖）。控制台 `/login` 登录后，`admin` 可在"用户管理"页创建账号、分配角色、启停用户，并新建自定义角色。未登录可点"以匿名身份浏览"（需 `ALLOW_ANONYMOUS=true`），匿名身份仅有 `search:use`，可使用检索与智能问答，但无任何管理权限。
@@ -405,7 +408,7 @@ flowchart LR
 - **PII 脱敏**（`RAG_PII_ENABLED`）：提示词、历史、检索片段、摘要、记忆与纠正答案在进入模型前替换为稳定占位符（`{{EMAIL_1}}` / `{{PHONE_1}}` 等，支持邮箱、手机号、身份证、银行卡与 IPv4）；检索仍使用原始 query，保证按手机号/邮箱检索可用。回复默认保持脱敏并对模型新生成的 PII 再次脱敏，`RAG_PII_RESTORE_OUTPUT=true` 可还原。每次命中会写入 `pii.mask` 审计事件（类型与数量），可按租户与时间检索。
 - **LLM 网关**（`backend/internal/llmgateway`）：OpenAI 兼容 `POST /v1/chat/completions`（含 SSE）与 `/v1/embeddings`，按主/备通道自动切换，连续失败触发熔断（阈值/冷却可配）；按 `x-tenant-id` 累计每日 token，超限前置返回 `429 quota_exceeded`，预留额度原子扣减并在响应后按实际 usage 修正。把 `RAG_LLM_BASE_URL` 等指向 `http://llm-gateway:8082/v1` 即可复用；RAG 生成会透传租户头。
 - **开放 API / OpenAI 兼容**（`API_KEY_DRIVER=memory|postgres`）：管理员通过 `POST /v1/api-keys` 签发 `nf-sk-*` 密钥（明文仅返回一次，库中只存 SHA-256），可限定 `allowed_kb_ids`、`scopes`（`chat:completions` / `search:use`）、`rate_limit_rpm` 与 `expires_in_days`；`DELETE /v1/api-keys/{id}` 吊销，密钥与 JWT 并存。`POST /v1/openai/chat/completions` 兼容 OpenAI Chat Completions：非流式返回 `chat.completion`，流式逐 token 返回 `chat.completion.chunk` 并以 `data: [DONE]` 结束；`messages` 转为 Hub 无状态调用（历史随请求传入、不写会话库），引用在 `choices[0].message.citations` 与顶层 `citations` 透传，`kb_id` 可放在请求体、`metadata.kb_id` 或 `X-KB-ID` 头。
-- **事件 Webhook**（`WEBHOOK_DRIVER=memory|postgres`）：`POST /v1/webhooks` 按租户订阅 `task.completed` / `task.failed` / `index.completed` / `workflow.completed` / `workflow.failed` / `workflow.node.*` / `approval.decided`（或 `*`），可指定目标 URL 与签名密钥（未提供时自动生成并仅返回一次）。投递携带 `X-NexusFlow-Signature: sha256=<HMAC>`、事件、投递 ID 与时间戳头；失败按指数退避重试（`WEBHOOK_MAX_ATTEMPTS` / `WEBHOOK_RETRY_BASE`），每次尝试写入 `webhook_deliveries`，可经 `GET /v1/webhooks/{id}/deliveries` 查看。processing-worker 与 workflow-engine 通过 `GATEWAY_URL` + `WEBHOOK_EVENTS_TOKEN` 回调 `POST /v1/internal/events`，由网关统一分发；审批结果由网关直接产生。Workflow 引擎的节点级 `EventSink` 会发出 `workflow.node.started` / `completed` / `failed` / `waiting_approval` / `skipped`，循环子运行不重复上报。
+- **事件 Webhook**（`WEBHOOK_DRIVER=memory|postgres`）：`POST /v1/webhooks` 按租户订阅 `task.completed` / `task.failed` / `index.completed` / `workflow.completed` / `workflow.failed` / `workflow.node.*` / `approval.decided`（或 `*`），可指定目标 URL 与签名密钥（未提供时自动生成并仅返回一次）。投递携带 `X-NexusFlow-Signature: sha256=<HMAC>`、事件、投递 ID 与时间戳头；失败按指数退避重试（`WEBHOOK_MAX_ATTEMPTS` / `WEBHOOK_RETRY_BASE`），每次尝试写入 `webhook_deliveries`，可经 `GET /v1/webhooks/{id}/deliveries` 查看。支持 `POST /v1/webhooks/{id}/test` 测试投递、`POST .../rotate-secret` 轮换密钥（新密钥仅返回一次）与 `POST .../deliveries/{deliveryId}/replay` 重放历史载荷。processing-worker 与 workflow-engine 通过 `GATEWAY_URL` + `WEBHOOK_EVENTS_TOKEN` 回调 `POST /v1/internal/events`，由网关统一分发；审批结果由网关直接产生。Workflow 引擎的节点级 `EventSink` 会发出 `workflow.node.started` / `completed` / `failed` / `waiting_approval` / `skipped`，循环子运行不重复上报。
 - **图文多模态**：MinerU 结果 ZIP 中的图片由 Worker 提取并落盘到 `<tenant>/<kb>/parsed/<task>/images/`，Markdown 图片链接改写为 `/v1/media`；切块把 `image_urls` 写入节点 metadata，检索结果与问答引用返回配图，控制台展示缩略图并支持点击放大。
 
 新增 / 变更接口：
@@ -428,6 +431,9 @@ flowchart LR
 | `POST /v1/openai/chat/completions` | API Key `chat:completions` 或 JWT `search:use` | OpenAI 兼容问答（流式 / 非流式，引用透传） |
 | `GET/POST /v1/webhooks`、`DELETE /v1/webhooks/{id}` | `webhook:write` | Webhook 订阅列表 / 创建 / 删除 |
 | `GET /v1/webhooks/{id}/deliveries` | `webhook:write` | 投递日志（状态、尝试次数、HTTP 状态与响应） |
+| `POST /v1/webhooks/{id}/test` | `webhook:write` | 发送 `webhook.test` 测试投递 |
+| `POST /v1/webhooks/{id}/rotate-secret` | `webhook:write` | 轮换签名密钥（新密钥仅返回一次） |
+| `POST /v1/webhooks/{id}/deliveries/{deliveryId}/replay` | `webhook:write` | 重放历史投递载荷 |
 | `POST /v1/internal/events` | `WEBHOOK_EVENTS_TOKEN` | 服务间事件接入（processing-worker / workflow-engine） |
 | `GET/POST /v1/agents`、`GET/DELETE /v1/agents/{name}` | Hub 内部；写操作需 `AGENT_HUB_DYNAMIC_REGISTRATION` | 租户级自定义 SubAgent CRUD |
 

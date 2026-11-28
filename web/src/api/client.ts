@@ -829,6 +829,31 @@ export async function listWebhookDeliveries(
   );
 }
 
+export async function testWebhook(id: string): Promise<{ scheduled: boolean }> {
+  return request(`${GATEWAY_BASE}/v1/webhooks/${encodeURIComponent(id)}/test`, {
+    method: "POST",
+  });
+}
+
+export async function rotateWebhookSecret(
+  id: string,
+): Promise<CreateWebhookResponse> {
+  return request<CreateWebhookResponse>(
+    `${GATEWAY_BASE}/v1/webhooks/${encodeURIComponent(id)}/rotate-secret`,
+    { method: "POST" },
+  );
+}
+
+export async function replayWebhookDelivery(
+  id: string,
+  deliveryId: string,
+): Promise<{ scheduled: boolean }> {
+  return request(
+    `${GATEWAY_BASE}/v1/webhooks/${encodeURIComponent(id)}/deliveries/${encodeURIComponent(deliveryId)}/replay`,
+    { method: "POST" },
+  );
+}
+
 // ---------- Approvals & workflow runs ----------
 
 export async function listApprovals(

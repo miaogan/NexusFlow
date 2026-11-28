@@ -5,6 +5,9 @@ import {
   hasPermission,
   listWebhookDeliveries,
   listWebhooks,
+  replayWebhookDelivery,
+  rotateWebhookSecret,
+  testWebhook,
 } from "../api/client";
 import type { WebhookDelivery, WebhookSubscription } from "../types";
 import { Button, Card, EmptyState, PageHeader, Spinner, Tag } from "../components/ui";
@@ -141,16 +144,56 @@ export default function Webhooks() {
       return;
     }
     setSelected(hook.id);
+    await refreshDeliveries(hook.id);
+  };
+
+  const refreshDeliveries = async (hookID: string) => {
     setDeliveryLoading(true);
     setError(null);
     try {
-      const res = await listWebhookDeliveries(hook.id);
+      const res = await listWebhookDeliveries(hookID);
       setDeliveries(res.deliveries ?? []);
     } catch (e) {
       setError(errMsg(e));
       setDeliveries([]);
     } finally {
       setDeliveryLoading(false);
+    }
+  };
+
+  const sendTest = async (hook: WebhookSubscription) => {
+    try {
+      await testWebhook(hook.id);
+      flash("已触发测试投递，稍后查看投递日志");
+      window.setTimeout(() => {
+        if (selected === hook.id) void refreshDeliveries(hook.id);
+      }, 800);
+    } catch (e) {
+      setError(errMsg(e));
+    }
+  };
+
+  const rotate = async (hook: WebhookSubscription) => {
+    if (!window.confirm(`确认轮换「${hook.name}」的签名密钥？旧密钥立即失效。`)) return;
+    try {
+      const res = await rotateWebhookSecret(hook.id);
+      setCreated({ name: hook.name, secret: res.secret });
+      flash("签名密钥已轮换，请更新接收端");
+      await reload();
+    } catch (e) {
+      setError(errMsg(e));
+    }
+  };
+
+  const replay = async (hook: WebhookSubscription, delivery: WebhookDelivery) => {
+    try {
+      await replayWebhookDelivery(hook.id, delivery.id);
+      flash("已触发重放，稍后查看投递日志");
+      window.setTimeout(() => {
+        if (selected === hook.id) void refreshDeliveries(hook.id);
+      }, 800);
+    } catch (e) {
+      setError(errMsg(e));
     }
   };
 
@@ -241,6 +284,12 @@ export default function Webhooks() {
                       创建 {new Date(hook.created_at).toLocaleString()}
                     </span>
                     <div className="ml-auto flex gap-2">
+                      <Button variant="subtle" onClick={() => sendTest(hook)} className="px-2 py-1 text-[10px]">
+                        测试
+                      </Button>
+                      <Button variant="subtle" onClick={() => rotate(hook)} className="px-2 py-1 text-[10px]">
+                        轮换密钥
+                      </Button>
                       <Button variant="subtle" onClick={() => openDeliveries(hook)} className="px-2 py-1 text-[10px]">
                         {selected === hook.id ? "收起日志" : "投递日志"}
                       </Button>
@@ -276,6 +325,13 @@ export default function Webhooks() {
                                 <span className="ml-auto text-slate-600">
                                   {new Date(d.created_at).toLocaleString()}
                                 </span>
+                                <Button
+                                  variant="subtle"
+                                  onClick={() => replay(hook, d)}
+                                  className="px-1.5 py-0.5 text-[9px]"
+                                >
+                                  重放
+                                </Button>
                               </div>
                               {d.response_body && (
                                 <code className="mt-1 block break-all text-[10px] text-slate-500">{d.response_body}</code>

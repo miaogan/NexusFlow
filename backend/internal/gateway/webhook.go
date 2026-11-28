@@ -127,6 +127,82 @@ func (g *Gateway) deleteWebhook(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "id": c.Param("id")})
 }
 
+// testWebhook queues a synthetic webhook.test delivery for one subscription.
+func (g *Gateway) testWebhook(c *gin.Context) {
+	if g.webhooks == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "webhook store not configured (set WEBHOOK_DRIVER)"})
+		return
+	}
+	p, _ := tenant.From(c.Request.Context())
+	if err := g.webhooks.SendTest(c.Request.Context(), p.TenantID, c.Param("id")); err != nil {
+		if errors.Is(err, webhook.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "webhook not found"})
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"scheduled": true})
+}
+
+// rotateWebhookSecret replaces the HMAC signing secret and returns the new
+// plaintext exactly once.
+func (g *Gateway) rotateWebhookSecret(c *gin.Context) {
+	if g.webhooks == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "webhook store not configured (set WEBHOOK_DRIVER)"})
+		return
+	}
+	p, _ := tenant.From(c.Request.Context())
+	sub, err := g.webhooks.Store().GetSubscription(c.Request.Context(), p.TenantID, c.Param("id"))
+	if err != nil {
+		if errors.Is(err, webhook.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "webhook not found"})
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	secret, err := webhook.NewSecret()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "generate secret: " + err.Error()})
+		return
+	}
+	encrypted, err := g.webhooks.EncryptSecret(secret)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "encrypt secret: " + err.Error()})
+		return
+	}
+	sub.SecretEncrypted = encrypted
+	updated, err := g.webhooks.Store().UpdateSubscription(c.Request.Context(), sub)
+	if err != nil {
+		g.logger.Error("rotate webhook secret failed", "tenant", p.TenantID, "error", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"webhook": updated, "secret": secret})
+}
+
+// replayWebhookDelivery re-sends a stored delivery payload as a new attempt.
+func (g *Gateway) replayWebhookDelivery(c *gin.Context) {
+	if g.webhooks == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "webhook store not configured (set WEBHOOK_DRIVER)"})
+		return
+	}
+	p, _ := tenant.From(c.Request.Context())
+	err := g.webhooks.Replay(
+		c.Request.Context(), p.TenantID, c.Param("id"), c.Param("deliveryId"),
+	)
+	if err != nil {
+		if errors.Is(err, webhook.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "delivery or webhook not found"})
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"scheduled": true})
+}
+
 func (g *Gateway) listWebhookDeliveries(c *gin.Context) {
 	if g.webhooks == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "webhook store not configured (set WEBHOOK_DRIVER)"})

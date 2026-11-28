@@ -126,12 +126,14 @@ type Cipher interface {
 // Store persists subscriptions and delivery logs.
 type Store interface {
 	CreateSubscription(ctx context.Context, sub Subscription) (Subscription, error)
+	UpdateSubscription(ctx context.Context, sub Subscription) (Subscription, error)
 	ListSubscriptions(ctx context.Context, tenantID string) ([]Subscription, error)
 	GetSubscription(ctx context.Context, tenantID, id string) (Subscription, error)
 	DeleteSubscription(ctx context.Context, tenantID, id string) error
 	ListActive(ctx context.Context, tenantID string) ([]Subscription, error)
 	CreateDelivery(ctx context.Context, d Delivery) (Delivery, error)
 	UpdateDelivery(ctx context.Context, d Delivery) error
+	GetDelivery(ctx context.Context, tenantID, webhookID, id string) (Delivery, error)
 	ListDeliveries(ctx context.Context, tenantID, webhookID string, limit int) ([]Delivery, error)
 	Close() error
 }

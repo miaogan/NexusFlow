@@ -120,9 +120,54 @@ func TestWebhookManagementAndDelivery(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), webhook.StatusSuccess) {
 		t.Fatalf("deliveries status = %d body=%s", rec.Code, rec.Body.String())
 	}
+	firstDeliveryID := deliveries[0].ID
+
+	// Test delivery, secret rotation and replay are tenant-scoped operations.
+	rec = call(t, g.Router(), http.MethodPost,
+		"/v1/webhooks/"+created.Webhook.ID+"/test", admin, nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("test status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	pollDeliveries(t, store, created.Webhook.ID, 2)
+
+	rec = call(t, g.Router(), http.MethodPost,
+		"/v1/webhooks/"+created.Webhook.ID+"/rotate-secret", admin, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rotate status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var rotated struct {
+		Secret string `json:"secret"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &rotated); err != nil || rotated.Secret == "" {
+		t.Fatalf("rotated secret = %q (%v)", rotated.Secret, err)
+	}
+	if rotated.Secret == created.Secret {
+		t.Fatal("rotated secret equals the original")
+	}
+
+	rec = call(t, g.Router(), http.MethodPost,
+		"/v1/webhooks/"+created.Webhook.ID+"/deliveries/"+firstDeliveryID+"/replay", admin, nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("replay status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	pollDeliveries(t, store, created.Webhook.ID, 3)
 
 	rec = call(t, g.Router(), http.MethodDelete, "/v1/webhooks/"+created.Webhook.ID, admin, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("delete status = %d body=%s", rec.Code, rec.Body.String())
 	}
+}
+
+func pollDeliveries(t *testing.T, store webhook.Store, webhookID string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		items, _ := store.ListDeliveries(context.Background(), "t1", webhookID, 20)
+		if len(items) >= want && items[0].Status == webhook.StatusSuccess {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	items, _ := store.ListDeliveries(context.Background(), "t1", webhookID, 20)
+	t.Fatalf("deliveries = %d, want %d: %+v", len(items), want, items)
 }

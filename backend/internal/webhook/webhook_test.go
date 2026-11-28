@@ -180,6 +180,116 @@ func TestStoreDeleteRemovesDeliveries(t *testing.T) {
 	}
 }
 
+func TestSendTestDelivers(t *testing.T) {
+	store := NewMemoryStore()
+	sub, secret := testSubscription(t, store, "t1", []string{EventTaskCompleted}, true)
+
+	var (
+		mu      sync.Mutex
+		body    []byte
+		sig     string
+		evtType string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		body, _ = io.ReadAll(r.Body)
+		sig = r.Header.Get("X-NexusFlow-Signature")
+		evtType = r.Header.Get("X-NexusFlow-Event")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	sub.TargetURL = server.URL
+	store.subs[sub.ID] = sub
+
+	dispatcher := NewDispatcher(store, plainCipher{}, discardLogger(), 2, time.Millisecond)
+	if err := dispatcher.SendTest(context.Background(), "t1", sub.ID); err != nil {
+		t.Fatalf("SendTest: %v", err)
+	}
+	items := waitForDeliveries(t, store, sub.ID, 1)
+	if items[0].Status != StatusSuccess || items[0].EventType != EventWebhookTest {
+		t.Fatalf("delivery = %+v", items[0])
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if evtType != EventWebhookTest {
+		t.Fatalf("event header = %q", evtType)
+	}
+	if sig != Sign([]byte(secret), body) {
+		t.Fatalf("signature = %q", sig)
+	}
+}
+
+func TestReplayDelivery(t *testing.T) {
+	store := NewMemoryStore()
+	sub, _ := testSubscription(t, store, "t1", []string{EventTaskCompleted}, true)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	sub.TargetURL = target.URL
+	store.subs[sub.ID] = sub
+
+	original, err := store.CreateDelivery(context.Background(), Delivery{
+		TenantID: "t1", WebhookID: sub.ID, EventType: EventTaskCompleted,
+		Payload: json.RawMessage(`{"id":"evt-1","type":"task.completed","tenant_id":"t1","data":{"task_id":"task-1"}}`),
+		Status:  StatusFailed, AttemptCount: 1,
+	})
+	if err != nil {
+		t.Fatalf("CreateDelivery: %v", err)
+	}
+
+	dispatcher := NewDispatcher(store, plainCipher{}, discardLogger(), 2, time.Millisecond)
+	if err := dispatcher.Replay(context.Background(), "t1", sub.ID, original.ID); err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	items := waitForDeliveries(t, store, sub.ID, 2)
+	var replayed *Delivery
+	for i := range items {
+		if items[i].ID != original.ID {
+			replayed = &items[i]
+		}
+	}
+	if replayed == nil || replayed.Status != StatusSuccess || replayed.EventType != EventTaskCompleted {
+		t.Fatalf("deliveries = %+v", items)
+	}
+}
+
+func TestStoreUpdateSubscription(t *testing.T) {
+	store := NewMemoryStore()
+	sub, _ := testSubscription(t, store, "t1", DefaultEvents, true)
+	sub.Name = "updated"
+	sub.SecretEncrypted = "plain:rotated"
+	updated, err := store.UpdateSubscription(context.Background(), sub)
+	if err != nil {
+		t.Fatalf("UpdateSubscription: %v", err)
+	}
+	if updated.Name != "updated" || updated.SecretEncrypted != "plain:rotated" {
+		t.Fatalf("updated = %+v", updated)
+	}
+	if _, err := store.UpdateSubscription(context.Background(), Subscription{
+		ID: "missing", TenantID: "t1",
+	}); err != ErrNotFound {
+		t.Fatalf("missing update error = %v", err)
+	}
+}
+
+func waitForDeliveries(t *testing.T, store *MemoryStore, hookID string, want int) []Delivery {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		items, _ := store.ListDeliveries(context.Background(), "t1", hookID, 20)
+		if len(items) >= want {
+			return items
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	items, _ := store.ListDeliveries(context.Background(), "t1", hookID, 20)
+	t.Fatalf("deliveries = %d, want %d: %+v", len(items), want, items)
+	return nil
+}
+
 func TestNormalizeEventsAndTarget(t *testing.T) {
 	events, err := NormalizeEvents(nil)
 	if err != nil || len(events) != 2 {

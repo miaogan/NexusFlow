@@ -40,6 +40,19 @@ func (s *MemoryStore) CreateSubscription(_ context.Context, sub Subscription) (S
 	return cloneSubscription(sub), nil
 }
 
+func (s *MemoryStore) UpdateSubscription(_ context.Context, sub Subscription) (Subscription, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.subs[sub.ID]
+	if !ok || current.TenantID != sub.TenantID {
+		return Subscription{}, ErrNotFound
+	}
+	sub.CreatedAt = current.CreatedAt
+	sub.UpdatedAt = time.Now().UTC()
+	s.subs[sub.ID] = cloneSubscription(sub)
+	return cloneSubscription(sub), nil
+}
+
 func (s *MemoryStore) ListSubscriptions(_ context.Context, tenantID string) ([]Subscription, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -124,6 +137,16 @@ func (s *MemoryStore) UpdateDelivery(_ context.Context, d Delivery) error {
 	}
 	s.deliveries[d.ID] = cloneDelivery(d)
 	return nil
+}
+
+func (s *MemoryStore) GetDelivery(_ context.Context, tenantID, webhookID, id string) (Delivery, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	delivery, ok := s.deliveries[id]
+	if !ok || delivery.TenantID != tenantID || delivery.WebhookID != webhookID {
+		return Delivery{}, ErrNotFound
+	}
+	return cloneDelivery(delivery), nil
 }
 
 func (s *MemoryStore) ListDeliveries(_ context.Context, tenantID, webhookID string, limit int) ([]Delivery, error) {

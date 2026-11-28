@@ -280,7 +280,7 @@ V2.0 将切块从 Go 迁移至 LlamaIndex 服务。LlamaIndex 按标题层级与
 
 事件源分两类：网关在审批决策成功后直接产生 `approval.decided`；processing-worker 在解析失败/索引完成时产生 `task.failed` / `index.completed` / `task.completed`，workflow-engine 在持久化 run 结束时产生 `workflow.completed` / `workflow.failed`。工作流引擎还通过节点级 `EventSink` 发出 `workflow.node.started` / `completed` / `failed` / `waiting_approval` / `skipped`（循环子运行标记 `Nested` 不重复上报）。后两者通过 `GATEWAY_URL` 调用 `POST /v1/internal/events`，由网关用 `WEBHOOK_EVENTS_TOKEN` 校验后统一分发，避免每个服务各自维护订阅库。
 
-投递采用 HTTP POST，body 为 `{id,type,tenant_id,created_at,data}`，签名头为 `X-NexusFlow-Signature: sha256=HMAC_SHA256(secret, body)`，另有 `X-NexusFlow-Event` / `X-NexusFlow-Delivery` / `X-NexusFlow-Timestamp`。非 2xx 或网络错误按指数退避重试（默认 5 次，基数 1s，上限 60s），每条订阅独立投递并记录响应码与响应体（截断 2KB）；订阅删除时级联清理投递日志。
+投递采用 HTTP POST，body 为 `{id,type,tenant_id,created_at,data}`，签名头为 `X-NexusFlow-Signature: sha256=HMAC_SHA256(secret, body)`，另有 `X-NexusFlow-Event` / `X-NexusFlow-Delivery` / `X-NexusFlow-Timestamp`。非 2xx 或网络错误按指数退避重试（默认 5 次，基数 1s，上限 60s），每条订阅独立投递并记录响应码与响应体（截断 2KB）；订阅删除时级联清理投递日志。运维接口提供 `test`（合成 `webhook.test`）、`rotate-secret`（轮换密钥）与 `deliveries/{id}/replay`（重放历史载荷），均异步执行并写入投递日志。
 
 ## 7. 动态节点弹性伸缩
 
