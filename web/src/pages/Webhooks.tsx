@@ -18,6 +18,11 @@ const EVENTS = [
   "index.completed",
   "workflow.completed",
   "workflow.failed",
+  "workflow.node.started",
+  "workflow.node.completed",
+  "workflow.node.failed",
+  "workflow.node.waiting_approval",
+  "workflow.node.skipped",
   "approval.decided",
   "*",
 ];

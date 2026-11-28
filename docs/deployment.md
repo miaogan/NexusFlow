@@ -285,7 +285,7 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 - 存储：`WEBHOOK_DRIVER=memory|postgres`；Postgres 需 `WEBHOOK_DATABASE_URL`，启动幂等创建 `webhooks` / `webhook_deliveries`。多副本必须使用 Postgres。
 - 密钥加密：`WEBHOOK_ENCRYPTION_KEY`（未设置时回退 `CONNECTOR_ENCRYPTION_KEY`）用于 AES-256-GCM 加密签名密钥；为空时以 `plain:` 前缀存明文，仅限本地开发。
 - 订阅：`POST /v1/webhooks`（需 `webhook:write`），body 支持 `name`、`target_url`、`events`（默认 `task.completed` / `task.failed`，可用 `*`）、`secret`（≥16 位，未提供则自动生成）、`is_active`。响应中的 `secret` 只返回一次；列表与详情不会回显。
-- 事件类型：`task.completed`、`task.failed`、`index.completed`、`workflow.completed`、`workflow.failed`、`approval.decided`。
+- 事件类型：`task.completed`、`task.failed`、`index.completed`、`workflow.completed`、`workflow.failed`、`workflow.node.started`、`workflow.node.completed`、`workflow.node.failed`、`workflow.node.waiting_approval`、`workflow.node.skipped`、`approval.decided`。节点级事件由工作流引擎的 `EventSink` 产生，循环子运行不会重复上报。
 - 签名：请求头 `X-NexusFlow-Signature: sha256=<hex>`，对原始 body 计算 HMAC-SHA256；同时携带 `X-NexusFlow-Event`、`X-NexusFlow-Delivery`、`X-NexusFlow-Timestamp`。校验示例：
 
 ```python

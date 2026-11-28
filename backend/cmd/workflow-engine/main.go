@@ -41,7 +41,7 @@ func main() {
 	registry.Register(workflow.NewLoopNode(registry, logger))
 	engine := workflow.NewEngine(registry, logger)
 	if publisher := webhook.NewHTTPPublisher(cfg.GatewayURL, cfg.WebhookEventsToken, logger); publisher != nil {
-		engine.WithEventPublisher(publisher)
+		engine.WithEventPublisher(publisher).WithEventSink(workflow.NewWebhookSink(publisher))
 	}
 	runStore, closeRunStore := workflow.NewRunStore(
 		ctx, cfg.WorkflowRunStoreDriver, cfg.WorkflowRunDatabaseURL,

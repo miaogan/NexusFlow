@@ -278,7 +278,7 @@ V2.0 将切块从 Go 迁移至 LlamaIndex 服务。LlamaIndex 按标题层级与
 
 `backend/internal/webhook` 提供租户级事件订阅与投递：订阅存于 `webhooks`，密钥以 AES-256-GCM 加密（复用 `CONNECTOR_ENCRYPTION_KEY` 或 `WEBHOOK_ENCRYPTION_KEY`），投递尝试存于 `webhook_deliveries`（`PENDING` → `SUCCESS` / `FAILED`）。
 
-事件源分两类：网关在审批决策成功后直接产生 `approval.decided`；processing-worker 在解析失败/索引完成时产生 `task.failed` / `index.completed` / `task.completed`，workflow-engine 在持久化 run 结束时产生 `workflow.completed` / `workflow.failed`。后两者通过 `GATEWAY_URL` 调用 `POST /v1/internal/events`，由网关用 `WEBHOOK_EVENTS_TOKEN` 校验后统一分发，避免每个服务各自维护订阅库。
+事件源分两类：网关在审批决策成功后直接产生 `approval.decided`；processing-worker 在解析失败/索引完成时产生 `task.failed` / `index.completed` / `task.completed`，workflow-engine 在持久化 run 结束时产生 `workflow.completed` / `workflow.failed`。工作流引擎还通过节点级 `EventSink` 发出 `workflow.node.started` / `completed` / `failed` / `waiting_approval` / `skipped`（循环子运行标记 `Nested` 不重复上报）。后两者通过 `GATEWAY_URL` 调用 `POST /v1/internal/events`，由网关用 `WEBHOOK_EVENTS_TOKEN` 校验后统一分发，避免每个服务各自维护订阅库。
 
 投递采用 HTTP POST，body 为 `{id,type,tenant_id,created_at,data}`，签名头为 `X-NexusFlow-Signature: sha256=HMAC_SHA256(secret, body)`，另有 `X-NexusFlow-Event` / `X-NexusFlow-Delivery` / `X-NexusFlow-Timestamp`。非 2xx 或网络错误按指数退避重试（默认 5 次，基数 1s，上限 60s），每条订阅独立投递并记录响应码与响应体（截断 2KB）；订阅删除时级联清理投递日志。
 

@@ -95,6 +95,7 @@ type Engine struct {
 	registry *Registry
 	logger   *slog.Logger
 	events   webhook.Publisher
+	sink     EventSink
 }
 
 func NewEngine(registry *Registry, logger *slog.Logger) *Engine {
@@ -106,6 +107,14 @@ func NewEngine(registry *Registry, logger *slog.Logger) *Engine {
 func (e *Engine) WithEventPublisher(publisher webhook.Publisher) *Engine {
 	if publisher != nil {
 		e.events = publisher
+	}
+	return e
+}
+
+// WithEventSink emits node-level lifecycle events for top-level runs.
+func (e *Engine) WithEventSink(sink EventSink) *Engine {
+	if sink != nil {
+		e.sink = sink
 	}
 	return e
 }
@@ -201,6 +210,9 @@ type RunOptions struct {
 	Approved       bool
 	ApprovedBy     string
 	ApprovalReason string
+	// Nested marks loop sub-runs so node events are not duplicated by the
+	// parent run.
+	Nested bool
 }
 
 // Run executes a DAG with no request metadata.
@@ -231,6 +243,7 @@ func (e *Engine) RunWithOptions(
 
 	completed := make(map[string]bool, len(dag.Nodes))
 	skipped := make(map[string]bool, len(dag.Nodes))
+	skippedEmitted := make(map[string]bool, len(dag.Nodes))
 	ec := NewExecutionContext(input)
 	result := &RunResult{
 		DAG:    dag.Name,
@@ -294,9 +307,10 @@ func (e *Engine) RunWithOptions(
 				defer wg.Done()
 				spec := specs[id]
 				start := time.Now()
+				e.emitNode(ctx, opts, dag, result.RunID, spec, NodeStatusStarted, 0, "")
 				if spec.Type == "human_approval" {
 					if opts.Approved && opts.Resume != nil && id == opts.Resume.PendingNode {
-						batchResults[i] = NodeResult{
+						res := NodeResult{
 							NodeID: id,
 							Output: map[string]any{
 								"approved": true,
@@ -305,14 +319,18 @@ func (e *Engine) RunWithOptions(
 							},
 							Duration: time.Since(start),
 						}
+						e.emitNode(ctx, opts, dag, result.RunID, spec, NodeStatusCompleted, res.Duration, "")
+						batchResults[i] = res
 						return
 					}
 					batchErrs[i] = ErrWaitingApproval
-					batchResults[i] = NodeResult{
+					res := NodeResult{
 						NodeID:   id,
 						Duration: time.Since(start),
 						Error:    ErrWaitingApproval.Error(),
 					}
+					e.emitNode(ctx, opts, dag, result.RunID, spec, NodeStatusWaitingApproval, res.Duration, res.Error)
+					batchResults[i] = res
 					return
 				}
 				node, _ := e.registry.Get(spec.Type)
@@ -320,6 +338,9 @@ func (e *Engine) RunWithOptions(
 				res := NodeResult{NodeID: id, Output: out, Duration: time.Since(start)}
 				if runErr != nil {
 					res.Error = runErr.Error()
+					e.emitNode(ctx, opts, dag, result.RunID, spec, NodeStatusFailed, res.Duration, res.Error)
+				} else {
+					e.emitNode(ctx, opts, dag, result.RunID, spec, NodeStatusCompleted, res.Duration, "")
 				}
 				batchResults[i] = res
 				batchErrs[i] = runErr
@@ -355,6 +376,15 @@ func (e *Engine) RunWithOptions(
 					return result, err
 				}
 				result.Skipped = skippedIDs(skipped)
+				for skippedID := range skipped {
+					if skippedEmitted[skippedID] {
+						continue
+					}
+					skippedEmitted[skippedID] = true
+					if spec, ok := specs[skippedID]; ok {
+						e.emitNode(ctx, opts, dag, result.RunID, spec, NodeStatusSkipped, 0, "")
+					}
+				}
 			}
 			for _, child := range adj[id] {
 				if completed[child] || skipped[child] {

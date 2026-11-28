@@ -33,8 +33,14 @@ const (
 	EventIndexCompleted    = "index.completed"
 	EventWorkflowCompleted = "workflow.completed"
 	EventWorkflowFailed    = "workflow.failed"
-	EventApprovalDecided   = "approval.decided"
-	EventWebhookTest       = "webhook.test"
+	// Node-level lifecycle events emitted by the workflow engine EventSink.
+	EventWorkflowNodeStarted         = "workflow.node.started"
+	EventWorkflowNodeCompleted       = "workflow.node.completed"
+	EventWorkflowNodeFailed          = "workflow.node.failed"
+	EventWorkflowNodeWaitingApproval = "workflow.node.waiting_approval"
+	EventWorkflowNodeSkipped         = "workflow.node.skipped"
+	EventApprovalDecided             = "approval.decided"
+	EventWebhookTest                 = "webhook.test"
 
 	// EventWildcard subscribes to every event type.
 	EventWildcard = "*"
@@ -50,6 +56,11 @@ var KnownEvents = []string{
 	EventIndexCompleted,
 	EventWorkflowCompleted,
 	EventWorkflowFailed,
+	EventWorkflowNodeStarted,
+	EventWorkflowNodeCompleted,
+	EventWorkflowNodeFailed,
+	EventWorkflowNodeWaitingApproval,
+	EventWorkflowNodeSkipped,
 	EventApprovalDecided,
 	EventWebhookTest,
 }

@@ -235,7 +235,9 @@ func main() {
 	// Control flow: condition branches and bounded concurrent loops.
 	wfRegistry.Register(workflow.ConditionNode{})
 	wfRegistry.Register(workflow.NewLoopNode(wfRegistry, logger))
-	wfEngine := workflow.NewEngine(wfRegistry, logger).WithEventPublisher(webhooks)
+	wfEngine := workflow.NewEngine(wfRegistry, logger).
+		WithEventPublisher(webhooks).
+		WithEventSink(workflow.NewWebhookSink(webhooks))
 	wfRunStore, closeRunStore := workflow.NewRunStore(
 		ctx, cfg.WorkflowRunStoreDriver, cfg.WorkflowRunDatabaseURL,
 	)

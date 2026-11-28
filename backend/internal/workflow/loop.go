@@ -73,7 +73,8 @@ func (n *LoopNode) Run(
 			defer func() { <-sem }()
 
 			run, runErr := engine.RunWithOptions(
-				ctx, subDAG, loopInput(value, index), RunOptions{Meta: ec.Meta()},
+				ctx, subDAG, loopInput(value, index),
+				RunOptions{Meta: ec.Meta(), Nested: true},
 			)
 			if runErr != nil {
 				outcomes[index] = loopOutcome{Index: index, Status: string(RunFailed), Error: runErr.Error()}
