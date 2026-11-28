@@ -1,0 +1,22 @@
+{
+  "dag": {
+    "name": "loop-batch",
+    "nodes": [
+      {
+        "id": "batch",
+        "type": "loop",
+        "config": {
+          "items": ["doc-001", "doc-002", "doc-003"],
+          "max_concurrency": 2,
+          "sub_dag": {
+            "name": "per-item",
+            "nodes": [{ "id": "check", "type": "noop" }],
+            "edges": []
+          }
+        }
+      }
+    ],
+    "edges": []
+  },
+  "input": {}
+}

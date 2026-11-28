@@ -6,6 +6,8 @@
 
 完整设计见 [docs/architecture.md](docs/architecture.md)（系统架构设计文档 V4.0）。
 
+**文档导航**：[用户使用指南](docs/user-guide.md) · [部署与运维](docs/deployment.md) · [系统架构](docs/architecture.md)
+
 > 说明：设计文档标题为 V4.0，正文部分沿用了 V2.0 的演进叙述（“V2.0 新增 LlamaIndex 服务”等），属于保留的历史上下文，不影响当前架构与代码结构。
 
 ## 架构总览
@@ -212,6 +214,14 @@ make web-dev        # http://localhost:5173
 | Webhook | `/webhooks` | 事件订阅、签名密钥一次性展示、投递日志与载荷查看（需 `webhook:write`） |
 
 访问控制台会跳转 `/login`：用种子管理员 `admin / admin123` 登录，或自助注册（默认 viewer 角色），也可点"以匿名身份浏览"（需 `ALLOW_ANONYMOUS=true`）。登录后右上角显示当前身份、知识库切换器与当前库角色（管理员/编辑者/只读），导航按权限动态显示：拥有 `user:read` 可见"SubAgent 管理"与"用户管理"，`workflow:run` 可见"审批中心"，`trace:read` 可见"审计日志"，`apikey:write` / `webhook:write` 分别可见"API Key"与"Webhook"。SubAgent 页面写操作需 `user:write`，且 Hub 需开启 `AGENT_HUB_DYNAMIC_REGISTRATION`。知识库管理员可在"管理"弹窗中改名、删除与授权成员。
+
+首次体验可一键导入示例数据（知识库、三篇文档、演示账号、API Key 与示例工作流）：
+
+```bash
+python scripts/seed_demo_data.py
+```
+
+详见 [用户使用指南](docs/user-guide.md)。
 
 ### 3. 完整容器编排
 

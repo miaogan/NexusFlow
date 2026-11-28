@@ -22,6 +22,24 @@ def test_disabled_without_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     assert lightrag_engine.enabled() is True
 
 
+def test_query_skips_while_indexing_holds_the_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(lightrag_engine.settings, "lightrag_enabled", True)
+    monkeypatch.setattr(lightrag_engine.settings, "llm_base_url", "http://llm/v1")
+    monkeypatch.setattr(lightrag_engine.settings, "llm_api_key", "sk")
+    monkeypatch.setattr(lightrag_engine.settings, "lightrag_query_timeout_seconds", 0.05)
+    monkeypatch.setattr(
+        lightrag_engine,
+        "_query_async",
+        lambda *args, **kwargs: pytest.fail("query must not run while indexing"),
+    )
+
+    assert lightrag_engine._lightrag_lock.acquire(timeout=1) is True
+    try:
+        assert lightrag_engine.query("t1", "kb1", "hello", 5) == []
+    finally:
+        lightrag_engine._lightrag_lock.release()
+
+
 def test_storage_names_follow_driver(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(lightrag_engine.settings, "lightrag_storage_driver", "file")
     assert lightrag_engine._storage_names() == (

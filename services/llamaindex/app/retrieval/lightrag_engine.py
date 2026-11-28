@@ -27,8 +27,12 @@ from app.retrieval.fusion import Chunk
 logger = logging.getLogger(__name__)
 
 _SCOPE = re.compile(r"[^a-zA-Z0-9_.-]+")
-_scope_locks: dict[str, threading.Lock] = {}
-_scope_locks_guard = threading.Lock()
+# LightRAG keeps one storage set per process and its PostgreSQL storages share
+# asyncpg pools. Every call below runs in its own asyncio event loop, so two
+# calls touching different workspaces at the same time can reuse a pool from a
+# closed loop (asyncpg raises "another operation is in progress" and may crash
+# the worker). Serialize all LightRAG I/O behind one process-wide lock.
+_lightrag_lock = threading.Lock()
 
 
 def enabled() -> bool:
@@ -49,15 +53,6 @@ def _working_dir(workspace: str) -> str:
     path = os.path.join(settings.lightrag_working_dir, workspace)
     os.makedirs(path, exist_ok=True)
     return path
-
-
-def _scope_lock(workspace: str) -> threading.Lock:
-    with _scope_locks_guard:
-        lock = _scope_locks.get(workspace)
-        if lock is None:
-            lock = threading.Lock()
-            _scope_locks[workspace] = lock
-        return lock
 
 
 async def _complete(
@@ -207,18 +202,26 @@ def query(
     if not enabled() or not query.strip():
         return []
     workspace = workspace_for(tenant_id, kb_id)
+    # Do not queue behind a long entity-extraction job: the graph route falls
+    # back to the in-house graph, which keeps answers available.
+    timeout = settings.lightrag_query_timeout_seconds
+    if not _lightrag_lock.acquire(timeout=timeout):
+        logger.warning("lightrag busy indexing, skipping graph query for %s", workspace)
+        return []
     try:
         return asyncio.run(
             asyncio.wait_for(
                 _query_async(
                     workspace, query, mode or settings.lightrag_query_mode, top_k
                 ),
-                timeout=settings.lightrag_query_timeout_seconds,
+                timeout=timeout,
             )
         )
     except Exception as exc:  # noqa: BLE001 - fall back to the in-house graph
         logger.warning("lightrag query failed for %s: %s", workspace, exc)
         return []
+    finally:
+        _lightrag_lock.release()
 
 
 async def _insert_async(
@@ -238,8 +241,7 @@ async def _insert_async(
 def _insert_worker(
     workspace: str, doc_id: str, file_name: str, markdown: str
 ) -> None:
-    lock = _scope_lock(workspace)
-    with lock:
+    with _lightrag_lock:
         try:
             asyncio.run(
                 asyncio.wait_for(
@@ -285,8 +287,7 @@ def delete_document(tenant_id: str, kb_id: str, doc_id: str) -> None:
     if not enabled() or not doc_id:
         return
     workspace = workspace_for(tenant_id, kb_id)
-    lock = _scope_lock(workspace)
-    with lock:
+    with _lightrag_lock:
         try:
             asyncio.run(_delete_async(workspace, doc_id))
         except Exception as exc:  # noqa: BLE001 - cascade delete is best-effort

@@ -1,0 +1,30 @@
+{
+  "dag": {
+    "name": "conditional-routing",
+    "nodes": [
+      {
+        "id": "intent",
+        "type": "set",
+        "config": { "key": "label", "value": "refund" }
+      },
+      {
+        "id": "route",
+        "type": "condition",
+        "config": {
+          "field": "${intent.label}",
+          "equals": "refund",
+          "then": "refund_stage",
+          "else": "default_stage"
+        }
+      },
+      { "id": "refund_stage", "type": "sandbox", "config": {} },
+      { "id": "default_stage", "type": "query", "config": {} }
+    ],
+    "edges": [
+      { "from": "intent", "to": "route" },
+      { "from": "route", "to": "refund_stage" },
+      { "from": "route", "to": "default_stage" }
+    ]
+  },
+  "input": {}
+}

@@ -1,0 +1,35 @@
+{
+  "dag": {
+    "name": "agent-intent-loop",
+    "nodes": [
+      {
+        "id": "classify",
+        "type": "loop",
+        "config": {
+          "items": [
+            "我要申请退款",
+            "帮我查一下订单物流",
+            "如何修改发票抬头"
+          ],
+          "max_concurrency": 2,
+          "sub_dag": {
+            "name": "classify-one",
+            "nodes": [
+              {
+                "id": "intent",
+                "type": "agent",
+                "config": {
+                  "capability": "intent.classify",
+                  "input": { "text": "${item}" }
+                }
+              }
+            ],
+            "edges": []
+          }
+        }
+      }
+    ],
+    "edges": []
+  },
+  "input": {}
+}

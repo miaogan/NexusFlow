@@ -5,7 +5,7 @@ COMPOSE_ENV := $(if $(wildcard .env),--env-file .env,)
 
 .PHONY: proto build test test-go test-py test-agents test-rag test-eval vet fmt web-install web-dev web-build \
 	run-dev-all run-gateway run-workflow run-auth-service run-user-service up down \
-	eval-rag eval-rag-chat judge-rag analyze-feedback
+	eval-rag eval-rag-chat judge-rag analyze-feedback seed-demo
 
 proto:
 	protoc -I proto \
@@ -65,6 +65,10 @@ up:
 
 down:
 	docker compose $(COMPOSE_ENV) -f deploy/docker-compose.yml down -v
+
+# Import demo knowledge, accounts and an API key (requires a running stack).
+seed-demo:
+	python3 scripts/seed_demo_data.py
 
 # Offline RAG evaluation (requires a running gateway + query service).
 eval-rag:

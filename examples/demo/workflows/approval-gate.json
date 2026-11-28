@@ -1,0 +1,11 @@
+{
+  "dag": {
+    "name": "approval-gate",
+    "nodes": [
+      { "id": "review", "type": "human_approval" },
+      { "id": "publish", "type": "index" }
+    ],
+    "edges": [{ "from": "review", "to": "publish" }]
+  },
+  "input": {}
+}
