@@ -53,9 +53,9 @@ Milestone 1–5 的 11 个任务已全部交付，无待做项。
 
 * **[x] Task 3.3: 将工作流运行、审批与审计状态接入 Postgres，支持多副本恢复**
   * 按 `docs/schema_enterprise_v1_1_to_1_5.sql` 落库 `workflow_executions` / `workflow_approvals` / `audit_logs`，以 `RunStore` / `ApprovalService` 接口替换内存实现；明确同一 run 的副本粘性或乐观锁，保证审批并发与幂等；审计按月分区并支持保留策略。
-  * 交付情况：Go 新增 `PostgresRunStore`（`WORKFLOW_RUN_STORE_DRIVER=postgres`），幂等建表并持久化挂起快照与审批单；审批通过 `SELECT ... FOR UPDATE` + 状态 CAS 原子抢占，跨副本并发只有一次决策生效，其余返回 409；运行快照额外记录 `approved_by` / `approval_reason`，审批单以 `(execution_id, node_id)` 稳定 ID 幂等 upsert，run 结束后自动置为 APPROVED / REJECTED。Hub 新增 `PostgresApprovalService`（`agent_approvals`）与 `PostgresAuditLog`（`audit_logs`），由 `AGENT_HUB_APPROVAL_DRIVER` / `AGENT_HUB_AUDIT_DRIVER` + `AGENT_HUB_STATE_DATABASE_URL` 开启；数据库不可用时回退内存并告警。
+  * 交付情况：Go 新增 `PostgresRunStore`（`WORKFLOW_RUN_STORE_DRIVER=postgres`），幂等建表并持久化挂起快照与审批单；审批通过 `SELECT ... FOR UPDATE` + 状态 CAS 原子抢占，跨副本并发只有一次决策生效，其余返回 409；运行快照额外记录 `approved_by` / `approval_reason`，审批单以 `(execution_id, node_id)` 稳定 ID 幂等 upsert，run 结束后自动置为 APPROVED / REJECTED。Hub 新增 `PostgresApprovalService`（`agent_approvals`）与 `PostgresAuditLog`（`audit_logs`），由 `AGENT_HUB_APPROVAL_DRIVER` / `AGENT_HUB_AUDIT_DRIVER` + `AGENT_HUB_STATE_DATABASE_URL` 开启；数据库不可用时回退内存并告警。`audit_logs` 新建为按 `created_at` 月分区，启动与每小时维护自动预建当月 + 次月分区，并按 `AGENT_HUB_AUDIT_RETENTION_DAYS`（默认 180，`0` 永久保留）整月 `DROP` 过期分区。
   * 验证：`go test ./internal/workflow`（含 `POSTGRES_TEST_DSN` 集成用例）与 `pytest tests/test_postgres_state.py`（`AGENT_HUB_TEST_DATABASE_URL`）均通过。
-  * 边界：`audit_logs` 仍为单表，按月分区与保留策略留给运维脚本；Hub 审计写入为尽力而为（失败只告警），不阻断业务请求。
+  * 边界：已存在的非分区 `audit_logs` 不会被自动改写，需手工迁移；迁移前保留策略退化为 `DELETE` 过期行。Hub 审计写入为尽力而为（失败只告警），不阻断业务请求。
 
 ---
 
@@ -64,7 +64,7 @@ Milestone 1–5 的 11 个任务已全部交付，无待做项。
 * **[x] Task 4.1: 实现 PII 敏感信息双向脱敏引擎与结构化合规审计日志中间件，支持安全追溯**
   * 入口对提示词与上传文本做 PII 识别与脱敏，出口对模型回复做还原或再次脱敏；审计日志记录操作者、资源、动作与脱敏命中项，支持按租户与时间检索。
   * 交付情况：新增 `core/pii.py`（邮箱 / 手机号 / 身份证 / 银行卡 / IPv4），按请求维护稳定占位符（`{{EMAIL_1}}` 等）与唯一命中计数；Chat 同步与 SSE 路径在模型边界脱敏提示词、历史、检索片段、摘要、记忆与纠正答案，检索仍使用原始 query；回复默认保持脱敏并二次扫描模型新生成的 PII，`RAG_PII_RESTORE_OUTPUT=true` 可还原。命中写入 `pii.mask` 审计事件（操作者、资源、`detail.types/count`），`GET /v1/audit` 新增 `since` / `until`（RFC3339 或 unix 秒）并支持 memory / Postgres 两种存储。
-  * 边界：上传文档与对话历史保持原文存储，脱敏发生在进入模型的边界；SSE 逐 token 事件为实时输出，最终 `done.answer` 与持久化内容采用脱敏结果；`audit_logs` 按月分区与保留策略仍由运维脚本负责。
+  * 边界：上传文档与对话历史保持原文存储，脱敏发生在进入模型的边界；SSE 逐 token 事件为实时输出，最终 `done.answer` 与持久化内容采用脱敏结果；`audit_logs` 的月分区与保留策略由 Agent Hub 自动维护（见 Task 3.3）。
 
 * **[x] Task 4.2: 建设多模型路由网关（主备自动故障转移）与租户级用量计量/配额管控（防 429 溢出）**
   * 统一 LLM 调用入口，按模型与租户路由至主/备通道，失败自动切换并熔断；复用并扩展已有计量能力，按租户累计 token 与调用量，超限前置拦截并避免上游 429 溢出。

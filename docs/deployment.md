@@ -225,7 +225,8 @@ OPENSANDBOX_TEST_IMAGE=opensandbox/code-interpreter:latest \
 | `AGENT_HUB_HITL_ENABLED` | false | 工具审批与 `POST /v1/approvals/{id}/decide` |
 | `HITL_ENABLED` | false | DAG `human_approval` 节点与 runs 持久化 |
 | `AGENT_HUB_APPROVAL_DRIVER` | memory | 工具审批存储：memory / postgres（`agent_approvals`） |
-| `AGENT_HUB_AUDIT_DRIVER` | memory | 审计存储：memory / postgres（`audit_logs`） |
+| `AGENT_HUB_AUDIT_DRIVER` | memory | 审计存储：memory / postgres（`audit_logs`，按月分区） |
+| `AGENT_HUB_AUDIT_RETENTION_DAYS` | 180 | 分区审计表保留天数，整月过期分区自动 `DROP`；0 永久保留 |
 | `WORKFLOW_RUN_STORE_DRIVER` | memory | 工作流运行与审批存储：memory / postgres |
 | `RAG_PII_ENABLED` | false | 提示词/上下文 PII 脱敏（邮箱、手机号、身份证、银行卡、IPv4） |
 | `RAG_PII_RESTORE_OUTPUT` | false | 回复还原原始 PII；默认保持脱敏 |
@@ -320,7 +321,7 @@ if not hmac.compare_digest(expected, request.headers["X-NexusFlow-Signature"]):
 - `GET /v1/audit?limit=100&action=tool.call&decision=denied&since=2026-11-01T00:00:00Z&until=2026-11-30T23:59:59Z`，按 `x-tenant-id` 过滤；`since` / `until` 支持 RFC3339 或 unix 秒；经 Gateway 时要求 `trace:read`。
 - PII 命中记录为 `pii.mask` 事件，`detail.types` 给出各类型数量；默认仅发送脱敏后的内容给模型，回复默认保持脱敏（`RAG_PII_RESTORE_OUTPUT=true` 可还原）。
 - `AGENT_HUB_AUDIT_DRIVER=postgres` 时事件写入 `audit_logs`（按租户、动作、时间可查）；未配置时退化为进程内环形缓冲（默认 2000 条），仅用于近期排障。
-- 合规留存：生产建议对 `audit_logs` 按月分区并配置保留策略；写入失败只记录告警，不阻断被审计的请求。
+- 合规留存：新建的 `audit_logs` 按 `created_at` 月分区（`audit_logs_pYYYYMM`），启动时与每小时维护自动预建当月 + 次月分区，并按 `AGENT_HUB_AUDIT_RETENTION_DAYS`（默认 180，`0` 永久保留）整月 `DROP` 过期分区。已存在的非分区表不会自动改写，在手工迁移前退化为 `DELETE` 过期行；写入失败只记录告警，不阻断被审计的请求。
 - 审计不保存工具入参全文，仅记录参数键、风险、决策、租户与 trace，避免凭据/代码泄漏。
 
 ## 9. 回滚与升级

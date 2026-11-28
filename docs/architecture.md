@@ -187,7 +187,7 @@ Agent Hub 是 intent / summary / memory 的中心节点，Hub 与 Agent 构成�
 
 - 运行、审批与审计状态：默认仍为进程内实现（`MemoryRunStore` / `ApprovalService` / `AuditLog`），重启即丢失；设置 `WORKFLOW_RUN_STORE_DRIVER=postgres`、`AGENT_HUB_APPROVAL_DRIVER=postgres`、`AGENT_HUB_AUDIT_DRIVER=postgres`（配合 `WORKFLOW_RUN_DATABASE_URL` / `AGENT_HUB_STATE_DATABASE_URL`）后分别落库 `workflow_executions` / `workflow_approvals`、`agent_approvals`、`audit_logs`，多副本共享。
 - 多副本：Postgres 模式下同一 run 的挂起与审批对所有副本可见；审批使用 `SELECT ... FOR UPDATE` + 状态 CAS，重复/并发决策返回 409。若继续使用内存模式，仍需粘性路由。
-- 审计留存：`audit_logs` 当前为单表，生产建议按月分区并配置保留策略；Hub 自身仍保留进程内环形缓冲作为降级路径。
+- 审计留存：新建 `audit_logs` 按 `created_at` 月分区（`audit_logs_pYYYYMM`），启动与每小时维护预建当月 + 次月分区，并按 `AGENT_HUB_AUDIT_RETENTION_DAYS`（默认 180，`0` 永久保留）整月 `DROP` 过期分区；已存在的非分区表需手工迁移，迁移前退化为 `DELETE` 过期行。Hub 自身仍保留进程内环形缓冲作为降级路径。
 - MCP：支持 Streamable HTTP（`POST/GET/DELETE /mcp` + `Mcp-Session-Id`）、旧版 HTTP+SSE 与 stdio，统一实现 `initialize`、`tools/list|call`、`resources/list|templates/list|read|subscribe|unsubscribe`、`prompts/list|get`；订阅变更通过 `GET /mcp` 轮询快照后推送 `notifications/resources/updated`。`resources/listChanged` 主动推送未实现；会话与订阅为进程内存储，多副本需粘性会话。
 - 推理输出：工具调用与结果逐条流式，生成轮按 token 增量下发（检测到工具调用的轮次会抑制内容）；工具在独立线程执行，受 `AGENT_HUB_REASONING_TOOL_TIMEOUT_SECONDS` 限制并按 `AGENT_HUB_REASONING_TOOL_PROGRESS_SECONDS` 发送 `tool_progress`，超时发送 `tool_timeout` 并将失败结果交回模型。预算耗尽或工具异常回退普通生成时，最终回答以单个 `token` 事件下发。
 - `/v1/call` 的 agent 分支始终可用，tool 分支需 `AGENT_HUB_TOOLS_ENABLED`；`/mcp`、`/v1/call`、`/v1/tools` 为 Hub 内部接口，外部经 Gateway `/v1/agents/{name}/call` 调用自定义 SubAgent。

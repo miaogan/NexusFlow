@@ -5,7 +5,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Any
 
@@ -129,10 +129,21 @@ class PostgresAuditLog(AuditLog):
 
     Writes are best-effort: an unavailable audit database must not fail the
     request being audited, so failures are logged and dropped.
+
+    New tables are created with monthly RANGE partitions on ``created_at``;
+    partitions are created ahead of time and old ones dropped once the whole
+    month falls outside ``retention_days`` (0 keeps everything). Legacy
+    non-partitioned tables keep working and fall back to deleting expired rows.
     """
 
-    def __init__(self, dsn: str) -> None:
+    MAINTENANCE_INTERVAL_SECONDS = 3600
+
+    def __init__(self, dsn: str, retention_days: int = 0) -> None:
         self._dsn = dsn
+        self._retention_days = max(0, retention_days)
+        self._partitioned = False
+        self._maintenance_lock = threading.Lock()
+        self._last_maintenance = time.monotonic()
         self._init_schema()
 
     def _connect(self):  # pragma: no cover - real database only
@@ -144,24 +155,35 @@ class PostgresAuditLog(AuditLog):
     def _init_schema(self) -> None:  # pragma: no cover - real database only
         with self._connect() as conn:
             conn.execute("SELECT pg_advisory_xact_lock(731003)")
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS audit_logs (
-                    id               VARCHAR(64) PRIMARY KEY,
-                    tenant_id        VARCHAR(64) NOT NULL,
-                    user_id          VARCHAR(64) NOT NULL,
-                    action           VARCHAR(64) NOT NULL,
-                    resource_type    VARCHAR(32) NOT NULL,
-                    resource_id      VARCHAR(64) DEFAULT '',
-                    client_ip        VARCHAR(64) DEFAULT '',
-                    trace_id         VARCHAR(64) DEFAULT '',
-                    pii_masked_count INT DEFAULT 0,
-                    status_code      INT NOT NULL,
-                    metadata         JSONB DEFAULT '{}'::jsonb,
-                    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            relkind = _table_relkind(conn, "audit_logs")
+            if relkind is None:
+                conn.execute(
+                    """
+                    CREATE TABLE audit_logs (
+                        id               VARCHAR(64) NOT NULL,
+                        tenant_id        VARCHAR(64) NOT NULL,
+                        user_id          VARCHAR(64) NOT NULL,
+                        action           VARCHAR(64) NOT NULL,
+                        resource_type    VARCHAR(32) NOT NULL,
+                        resource_id      VARCHAR(64) DEFAULT '',
+                        client_ip        VARCHAR(64) DEFAULT '',
+                        trace_id         VARCHAR(64) DEFAULT '',
+                        pii_masked_count INT DEFAULT 0,
+                        status_code      INT NOT NULL,
+                        metadata         JSONB DEFAULT '{}'::jsonb,
+                        created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        PRIMARY KEY (id, created_at)
+                    ) PARTITION BY RANGE (created_at)
+                    """
                 )
-                """
-            )
+                self._partitioned = True
+            else:
+                self._partitioned = relkind == "p"
+                if not self._partitioned:
+                    logger.warning(
+                        "audit_logs is not partitioned; monthly retention falls "
+                        "back to DELETE and needs a manual migration"
+                    )
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_time
@@ -174,8 +196,61 @@ class PostgresAuditLog(AuditLog):
                 ON audit_logs (tenant_id, action)
                 """
             )
+            self._maintain(conn)
+
+    def _maintain(self, conn) -> None:  # pragma: no cover - real database only
+        cutoff = None
+        if self._retention_days > 0:
+            cutoff = datetime.now(UTC) - timedelta(days=self._retention_days)
+        if self._partitioned:
+            month = _month_start(datetime.now(UTC))
+            _ensure_partition(conn, month)
+            _ensure_partition(conn, _next_month(month))
+            if cutoff is None:
+                return
+            for name in _partition_names(conn):
+                part_month = _partition_month(name)
+                if part_month is not None and _next_month(part_month) <= cutoff:
+                    conn.execute(f'DROP TABLE IF EXISTS "{name}"')
+                    logger.info("audit partition dropped name=%s", name)
+        elif cutoff is not None:
+            conn.execute("DELETE FROM audit_logs WHERE created_at < %s", (cutoff,))
+
+    def _maybe_maintain(self) -> None:
+        if time.monotonic() - self._last_maintenance < self.MAINTENANCE_INTERVAL_SECONDS:
+            return
+        self._run_maintenance()
+
+    def _run_maintenance(self, *, force: bool = False) -> None:
+        with self._maintenance_lock:
+            if (
+                not force
+                and time.monotonic() - self._last_maintenance
+                < self.MAINTENANCE_INTERVAL_SECONDS
+            ):
+                return
+            try:
+                with self._connect() as conn:
+                    self._maintain(conn)
+                self._last_maintenance = time.monotonic()
+            except Exception as exc:  # noqa: BLE001 - best-effort housekeeping
+                logger.warning("audit maintenance failed: %s", exc)
 
     def _write(self, event: AuditEvent) -> None:
+        self._maybe_maintain()
+        try:
+            self._insert(event)
+        except Exception as exc:  # noqa: BLE001 - retry once after refreshing
+            logger.debug("audit insert failed, refreshing partitions: %s", exc)
+            # Crossing a month boundary may miss the partition for the new
+            # month; refresh partitions once and retry before dropping the event.
+            self._run_maintenance(force=True)
+            try:
+                self._insert(event)
+            except Exception as exc:  # noqa: BLE001 - auditing must not break requests
+                logger.warning("audit persistence failed: %s", exc)
+
+    def _insert(self, event: AuditEvent) -> None:  # pragma: no cover - real database only
         from psycopg.types.json import Jsonb
 
         metadata = {
@@ -184,32 +259,29 @@ class PostgresAuditLog(AuditLog):
             "status": event.status,
             "detail": event.detail,
         }
-        try:
-            with self._connect() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO audit_logs (
-                        id, tenant_id, user_id, action, resource_type,
-                        resource_id, trace_id, pii_masked_count, status_code,
-                        metadata, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        event.id,
-                        event.tenant_id or "default",
-                        event.user_id or "anonymous",
-                        event.action,
-                        _resource_type(event.action),
-                        event.resource,
-                        event.trace_id,
-                        _pii_masked_count(event.detail),
-                        _status_code(event.decision, event.status),
-                        Jsonb(metadata),
-                        datetime.fromtimestamp(event.ts, tz=UTC),
-                    ),
-                )
-        except Exception as exc:  # noqa: BLE001 - auditing must not break requests
-            logger.warning("audit persistence failed: %s", exc)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO audit_logs (
+                    id, tenant_id, user_id, action, resource_type,
+                    resource_id, trace_id, pii_masked_count, status_code,
+                    metadata, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    event.id,
+                    event.tenant_id or "default",
+                    event.user_id or "anonymous",
+                    event.action,
+                    _resource_type(event.action),
+                    event.resource,
+                    event.trace_id,
+                    _pii_masked_count(event.detail),
+                    _status_code(event.decision, event.status),
+                    Jsonb(metadata),
+                    datetime.fromtimestamp(event.ts, tz=UTC),
+                ),
+            )
 
     def list(
         self,
@@ -260,6 +332,70 @@ class PostgresAuditLog(AuditLog):
             conn.execute("DELETE FROM audit_logs")
 
 
+PARTITION_PREFIX = "audit_logs_p"
+
+
+def _table_relkind(conn, name: str) -> str | None:  # pragma: no cover - real database only
+    """Return ``'p'`` for partitioned, ``'r'`` for regular, ``None`` if absent."""
+    row = conn.execute(
+        """
+        SELECT c.relkind::text AS relkind
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = current_schema() AND c.relname = %s
+        """,
+        (name,),
+    ).fetchone()
+    return str(row["relkind"]) if row else None
+
+
+def _month_start(ts: datetime) -> datetime:
+    return ts.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def _next_month(ts: datetime) -> datetime:
+    return _month_start(ts.replace(day=28) + timedelta(days=4))
+
+
+def _partition_name(month: datetime) -> str:
+    return f"{PARTITION_PREFIX}{month.year:04d}{month.month:02d}"
+
+
+def _partition_month(name: str) -> datetime | None:
+    if not name.startswith(PARTITION_PREFIX):
+        return None
+    digits = name[len(PARTITION_PREFIX) :]
+    if len(digits) != 6 or not digits.isdigit():
+        return None
+    try:
+        return datetime(int(digits[:4]), int(digits[4:]), 1, tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def _ensure_partition(conn, month: datetime) -> None:  # pragma: no cover - real database only
+    start = month.astimezone(UTC).isoformat()
+    end = _next_month(month).astimezone(UTC).isoformat()
+    conn.execute(
+        f'CREATE TABLE IF NOT EXISTS "{_partition_name(month)}" '
+        f"PARTITION OF audit_logs FOR VALUES FROM ('{start}') TO ('{end}')"
+    )
+
+
+def _partition_names(conn) -> list[str]:  # pragma: no cover - real database only
+    rows = conn.execute(
+        """
+        SELECT child.relname AS name
+        FROM pg_inherits i
+        JOIN pg_class parent ON parent.oid = i.inhparent
+        JOIN pg_namespace pn ON pn.oid = parent.relnamespace
+        JOIN pg_class child ON child.oid = i.inhrelid
+        WHERE parent.relname = 'audit_logs' AND pn.nspname = current_schema()
+        """
+    ).fetchall()
+    return [str(row["name"]) for row in rows]
+
+
 def _resource_type(action: str) -> str:
     prefix = action.split(".", 1)[0]
     if prefix in {"tool", "approval", "agent", "workflow"}:
@@ -305,7 +441,10 @@ def get_audit() -> AuditLog:
     settings = get_hub_settings()
     if settings.audit_driver == "postgres" and settings.state_database_url:
         try:
-            return PostgresAuditLog(settings.state_database_url)
+            return PostgresAuditLog(
+                settings.state_database_url,
+                retention_days=settings.audit_retention_days,
+            )
         except Exception as exc:  # noqa: BLE001 - keep the hub available
             logger.warning("audit database unavailable, using memory: %s", exc)
     return AuditLog()

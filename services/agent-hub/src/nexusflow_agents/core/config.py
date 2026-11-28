@@ -37,6 +37,9 @@ class HubSettings(BaseSettings):
     # decisions shared across replicas; state_database_url is required for it.
     approval_driver: Literal["memory", "postgres"] = "memory"
     audit_driver: Literal["memory", "postgres"] = "memory"
+    # Whole months older than this are dropped from partitioned audit_logs;
+    # 0 keeps everything. Defaults to the 6-month compliance baseline.
+    audit_retention_days: int = 180
     state_database_url: str = ""
     background_workers: int = 8
     # P0/P2–P5 capability switches. All default off for safe rollout.

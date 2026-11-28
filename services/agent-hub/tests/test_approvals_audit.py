@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from nexusflow_agents.agents.rag.services.approvals import (
@@ -7,7 +9,14 @@ from nexusflow_agents.agents.rag.services.approvals import (
     ApprovalNotFound,
     ApprovalService,
 )
-from nexusflow_agents.core.audit import AuditLog, get_audit
+from nexusflow_agents.core.audit import (
+    AuditLog,
+    _month_start,
+    _next_month,
+    _partition_month,
+    _partition_name,
+    get_audit,
+)
 from nexusflow_agents.core.tooling import ToolRegistry, ToolService, ToolSpec
 
 
@@ -76,3 +85,18 @@ def test_audit_epoch_accepts_unix_and_rfc3339() -> None:
     assert _epoch("") == 0.0
     assert _epoch("100") == 100.0
     assert _epoch("2026-01-01T00:00:00Z") == 1767225600.0
+
+
+def test_audit_partition_month_boundaries() -> None:
+    december = datetime(2026, 12, 31, 23, 59, 59, tzinfo=UTC)
+
+    assert _month_start(december) == datetime(2026, 12, 1, tzinfo=UTC)
+    assert _next_month(december) == datetime(2027, 1, 1, tzinfo=UTC)
+    assert _partition_name(december) == "audit_logs_p202612"
+
+
+def test_audit_partition_name_roundtrip_and_rejects_noise() -> None:
+    assert _partition_month("audit_logs_p202601") == datetime(2026, 1, 1, tzinfo=UTC)
+    assert _partition_month("audit_logs_p202613") is None
+    assert _partition_month("audit_logs_old") is None
+    assert _partition_month("other_p202601") is None

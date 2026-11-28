@@ -86,6 +86,7 @@ data:
   # HITL approval tickets and the audit trail are shared across replicas.
   AGENT_HUB_APPROVAL_DRIVER: "postgres"
   AGENT_HUB_AUDIT_DRIVER: "postgres"
+  AGENT_HUB_AUDIT_RETENTION_DAYS: "180"
   AGENT_HUB_STATE_DATABASE_URL: "postgresql://nexusflow:change-me@postgres.nexusflow.svc:5432/nexusflow"
   # Tools / reasoning / MCP / HITL switches (roll out in order).
   AGENT_HUB_TOOLS_ENABLED: "false"

@@ -20,6 +20,8 @@
 --     状态 CAS 保证只有一次决策生效。Run 状态取值为 RUNNING / WAITING_APPROVAL /
 --     COMPLETED / FAILED / REJECTED。
 --   * audit_logs 已落地：Agent Hub 在 AGENT_HUB_AUDIT_DRIVER=postgres 时启动幂等建表，
+--     新表按 created_at 月分区（audit_logs_pYYYYMM），启动与每小时维护会预建当月与次月
+--     分区，并按 AGENT_HUB_AUDIT_RETENTION_DAYS（默认 180，0 表示永久保留）整月 DROP；
 --     记录工具调用与审批事件；Agent Hub 的 HITL 工具审批使用本文件末尾的
 --     agent_approvals（工作流审批仍走 workflow_approvals），两者不要混用。
 --   * data_connectors 已落地：ingestion 在 CONNECTOR_DRIVER=postgres 时启动幂等建表，
@@ -27,7 +29,8 @@
 --     以 plain: 前缀存明文，仅限开发），sync_cursor 保存增量水位线。
 --   * document_media_assets 等其余表仍为规划草案，代码中尚未建表。
 --   * 所有状态/枚举字段以字符串存储，应用层常量必须与本文件的取值保持一致。
---   * audit_logs 在生产环境建议按月分区（本文件只保留基表定义）并配置保留策略。
+--   * 已存在的非分区 audit_logs 不会被自动改写：需手工迁移为分区表后，保留策略才会
+--     按整月 DROP；在此之前退化为 DELETE 过期行。
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
@@ -169,7 +172,7 @@ CREATE INDEX IF NOT EXISTS idx_wf_approvals_pending
 
 -- 7. 企业级合规审计日志表 (建议生产环境按月做分区)
 CREATE TABLE IF NOT EXISTS audit_logs (
-    id               VARCHAR(64) PRIMARY KEY,
+    id               VARCHAR(64) NOT NULL,
     tenant_id        VARCHAR(64) NOT NULL,
     user_id          VARCHAR(64) NOT NULL,
     action           VARCHAR(64) NOT NULL, -- 如 'file.delete', 'kb.permission.update', 'chat.query'
@@ -180,8 +183,13 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     pii_masked_count INT DEFAULT 0,        -- 本次请求触发的 PII 脱敏命中次数
     status_code      INT NOT NULL,
     metadata         JSONB DEFAULT '{}'::jsonb,
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (id, created_at)           -- 分区表主键必须包含分区键
+) PARTITION BY RANGE (created_at);
+
+-- 分区由 Agent Hub 启动/维护时自动创建（以下为当前月示例，YYYYMM 按需替换）
+-- CREATE TABLE IF NOT EXISTS audit_logs_p202611 PARTITION OF audit_logs
+--     FOR VALUES FROM ('2026-11-01T00:00:00Z') TO ('2026-12-01T00:00:00Z');
 
 CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_time
     ON audit_logs (tenant_id, created_at DESC);
